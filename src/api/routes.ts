@@ -8,6 +8,18 @@ const VALID_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
   'decision', 'discovery', 'preference', 'pattern', 'feedback',
 ])
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
+
+function isLoopbackOrigin(origin: string | undefined): boolean {
+  if (!origin) return true
+  try {
+    const host = new URL(origin).hostname
+    return LOOPBACK_HOSTS.has(host)
+  } catch {
+    return false
+  }
+}
+
 function memorySource(m: Memory): string {
   if (m.sessionId && m.messageId) return `${m.sessionId}:msg:${m.messageId}`
   if (m.sessionId) return `${m.sessionId}:session`
@@ -121,6 +133,10 @@ export function createRequestHandler(db: Database) {
 
     // POST /memory/save
     if (req.method === 'POST' && path === '/memory/save') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
       const bodyText = await readBody(req)
       let parsed: unknown
       try {

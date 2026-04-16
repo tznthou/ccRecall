@@ -140,6 +140,33 @@ describe('E2E: index → search → HTTP', () => {
     expect(b.memories).toEqual([])
   })
 
+  it('POST /memory/save rejects cross-origin request', async () => {
+    const result = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const data = JSON.stringify({ content: 'x', type: 'decision' })
+      const req = http.request({
+        hostname: '127.0.0.1', port, path: '/memory/save', method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(data),
+          'Origin': 'https://evil.example.com',
+        },
+      }, (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => resolve({
+          status: res.statusCode!,
+          body: JSON.parse(Buffer.concat(chunks).toString()),
+        }))
+        res.on('error', reject)
+      })
+      req.on('error', reject)
+      req.write(data)
+      req.end()
+    })
+    expect(result.status).toBe(403)
+    expect((result.body as { error: string }).error).toMatch(/cross-origin/)
+  })
+
   it('POST /memory/save rejects invalid type', async () => {
     const { status, body } = await postJson(`http://127.0.0.1:${port}/memory/save`, {
       content: 'x', type: 'invalid-type',

@@ -1333,7 +1333,8 @@ export class Database {
         confidence: r.confidence,
         createdAt: r.created_at,
       }))
-    } catch {
+    } catch (err) {
+      console.warn('[memories] queryMemories error:', (err as Error).message)
       return []
     }
   }
