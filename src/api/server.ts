@@ -6,17 +6,6 @@ export function createServer(db: Database): http.Server {
   const handleRequest = createRequestHandler(db)
 
   return http.createServer(async (req, res) => {
-    // CORS for local dev
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204)
-      res.end()
-      return
-    }
-
     try {
       await handleRequest(req, res)
     } catch (err) {

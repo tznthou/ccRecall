@@ -33,7 +33,8 @@ export function createRequestHandler(db: Database) {
     // GET /memory/query?q=...&limit=...
     if (req.method === 'GET' && path === '/memory/query') {
       const q = url.searchParams.get('q') ?? ''
-      const limit = parseInt(url.searchParams.get('limit') ?? '5', 10)
+      const rawLimit = parseInt(url.searchParams.get('limit') ?? '5', 10)
+      const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 5 : rawLimit
 
       if (!q) {
         sendJson(res, 200, { memories: [], totalTokenEstimate: 0, query: q, limit })

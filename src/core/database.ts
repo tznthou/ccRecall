@@ -969,14 +969,11 @@ export class Database {
     return v && Database.VALID_OUTCOMES.has(v) ? v as OutcomeStatus : null
   }
 
-  /** FTS5 安全引號包裹：對每個 token 獨立判斷，含分詞符號的 token 包引號 */
+  /** FTS5 安全引號包裹：所有 token 無條件包引號，防止 operator injection */
   private static fts5QuoteIfNeeded(query: string): string {
-    return query.split(/\s+/).filter(Boolean).map(token => {
-      if (/[/.\\-]/.test(token) && !token.startsWith('"')) {
-        return `"${token.replace(/"/g, '""')}"`
-      }
-      return token
-    }).join(' ')
+    return query.split(/\s+/).filter(Boolean).map(token =>
+      `"${token.replace(/"/g, '""')}"`,
+    ).join(' ')
   }
 
   search(query: string, projectId?: string | null, offset = 0, limit = Database.SEARCH_PAGE_SIZE, options?: SearchOptions): SearchPage {
