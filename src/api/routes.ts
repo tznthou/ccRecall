@@ -16,7 +16,7 @@ export function createRequestHandler(db: Database) {
 
     // GET /health
     if (req.method === 'GET' && path === '/health') {
-      const sessionCount = (db.rawAll<{ c: number }>("SELECT COUNT(*) AS c FROM sessions WHERE id NOT IN (SELECT id FROM subagent_sessions)")[0]).c
+      const sessionCount = db.getMainSessionCount()
       const result: HealthResult = {
         status: 'ok',
         version: '0.1.0',

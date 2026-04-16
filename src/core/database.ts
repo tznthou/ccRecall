@@ -588,6 +588,13 @@ export class Database {
     `).run(id, displayName)
   }
 
+  getMainSessionCount(): number {
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS c FROM sessions WHERE id ${Database.EXCLUDE_SUBAGENTS}`,
+    ).get() as { c: number }
+    return row.c
+  }
+
   updateProjectStats(projectId: string): void {
     this.db.prepare(`
       UPDATE projects SET
