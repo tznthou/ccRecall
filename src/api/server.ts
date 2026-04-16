@@ -20,11 +20,26 @@ export function sendJson(res: http.ServerResponse, status: number, data: unknown
   res.end(JSON.stringify(data))
 }
 
+const MAX_BODY_BYTES = 1 * 1024 * 1024 // 1 MB
+
 export function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', (chunk: Buffer) => chunks.push(chunk))
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()))
+    let size = 0
+    let exceeded = false
+    req.on('data', (chunk: Buffer) => {
+      if (exceeded) return
+      size += chunk.length
+      if (size > MAX_BODY_BYTES) {
+        exceeded = true
+        reject(new Error('body too large'))
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (!exceeded) resolve(Buffer.concat(chunks).toString())
+    })
     req.on('error', reject)
   })
 }

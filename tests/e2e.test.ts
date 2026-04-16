@@ -166,6 +166,23 @@ describe('E2E: index → search → HTTP', () => {
     expect((body as { error: string }).error).toMatch(/type must be one of/)
   })
 
+  it('POST /memory/save rejects body over size limit (413)', async () => {
+    const huge = 'x'.repeat(2 * 1024 * 1024) // 2 MB > 1 MB cap
+    const { status, body } = await postJson(`http://127.0.0.1:${port}/memory/save`, {
+      content: huge, type: 'decision',
+    })
+    expect(status).toBe(413)
+    expect((body as { error: string }).error).toBe('body too large')
+  })
+
+  it('GET unknown path returns generic 404 without reflecting input', async () => {
+    const { status, body } = await fetch(`http://127.0.0.1:${port}/does-not-exist`)
+    expect(status).toBe(404)
+    const err = (body as { error: string }).error
+    expect(err).toBe('Not found')
+    expect(err).not.toContain('does-not-exist')
+  })
+
   it('GET /health reports memoryCount after save', async () => {
     await postJson(`http://127.0.0.1:${port}/memory/save`, { content: 'a', type: 'decision' })
     await postJson(`http://127.0.0.1:${port}/memory/save`, { content: 'b', type: 'pattern' })

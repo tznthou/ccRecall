@@ -152,7 +152,17 @@ export function createRequestHandler(db: Database) {
         sendJson(res, 403, { error: 'cross-origin requests forbidden' })
         return
       }
-      const bodyText = await readBody(req)
+      let bodyText: string
+      try {
+        bodyText = await readBody(req)
+      } catch (err) {
+        const msg = (err as Error).message
+        if (msg === 'body too large') {
+          sendJson(res, 413, { error: msg })
+          return
+        }
+        throw err
+      }
       let parsed: unknown
       try {
         parsed = bodyText ? JSON.parse(bodyText) : {}
@@ -185,6 +195,6 @@ export function createRequestHandler(db: Database) {
     }
 
     // 404
-    sendJson(res, 404, { error: `Not found: ${req.method} ${path}` })
+    sendJson(res, 404, { error: 'Not found' })
   }
 }
