@@ -1,0 +1,37 @@
+{
+  "name": "ccrecall",
+  "version": "0.1.0",
+  "description": "AI memory service for Claude Code — on-demand context injection with metacognition",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "lint": "eslint . --fix",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20.0.0,<23.0.0"
+  },
+  "keywords": [
+    "claude-code",
+    "ai-memory",
+    "context-management",
+    "metacognition"
+  ],
+  "author": "tznthou",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.9.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.3",
+    "eslint": "^9.26.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}

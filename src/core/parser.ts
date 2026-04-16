@@ -1,0 +1,240 @@
+import { readFile } from 'node:fs/promises'
+import type { ParsedLine, ParsedSession } from './types.js'
+
+interface ContentResult {
+  contentText: string | null
+  hasToolUse: boolean
+  hasToolResult: boolean
+  toolNames: string[]
+}
+
+/** 完全移除的系統標籤（標籤+內容一起刪）*/
+const STRIP_TAGS = ['local-command-caveat', 'task-notification', 'ide_opened_file', 'system-reminder']
+/** 只移除標籤殼、保留內文的系統標籤 */
+const UNWRAP_TAGS = ['command-name', 'command-message', 'command-args', 'local-command-stdout']
+
+const STRIP_RE = new RegExp(
+  STRIP_TAGS.map(t => `<${t}>[\\s\\S]*?</${t}>`).join('|'), 'g',
+)
+const UNWRAP_RE = new RegExp(
+  `<(${UNWRAP_TAGS.join('|')})>([\\s\\S]*?)</\\1>`, 'g',
+)
+
+/** 移除系統注入的 XML 標籤，保留使用者原始文字。白名單制，不認識的標籤不動 */
+export function stripSystemXml(text: string): string {
+  return text.replace(STRIP_RE, '').replace(UNWRAP_RE, (_, _tag: string, content: string) => content).trim()
+}
+
+/** 解析 message.content 欄位，處理 string 和 array 兩種格式 */
+export function parseContent(content: unknown): ContentResult {
+  if (content == null) {
+    return { contentText: null, hasToolUse: false, hasToolResult: false, toolNames: [] }
+  }
+
+  if (typeof content === 'string') {
+    const cleaned = stripSystemXml(content)
+    return { contentText: cleaned || null, hasToolUse: false, hasToolResult: false, toolNames: [] }
+  }
+
+  if (!Array.isArray(content)) {
+    return { contentText: null, hasToolUse: false, hasToolResult: false, toolNames: [] }
+  }
+
+  const textParts: string[] = []
+  let hasToolUse = false
+  let hasToolResult = false
+  const toolNames: string[] = []
+
+  for (const block of content) {
+    if (block == null || typeof block !== 'object') continue
+    const b = block as Record<string, unknown>
+
+    switch (b.type) {
+      case 'text':
+        if (typeof b.text === 'string') {
+          const cleaned = stripSystemXml(b.text)
+          if (cleaned) textParts.push(cleaned)
+        }
+        break
+      case 'tool_use':
+        hasToolUse = true
+        if (typeof b.name === 'string') toolNames.push(b.name)
+        break
+      case 'tool_result':
+        hasToolResult = true
+        break
+      // thinking, server_tool_use 等 → 跳過
+    }
+  }
+
+  return {
+    contentText: textParts.length > 0 ? textParts.join('\n') : null,
+    hasToolUse,
+    hasToolResult,
+    toolNames,
+  }
+}
+
+/** 安全轉換為整數，非數字回傳 null */
+function toInt(v: unknown): number | null {
+  return typeof v === 'number' ? Math.floor(v) : null
+}
+
+/** 從 message.usage 抽取 token 資料 */
+function parseUsage(message: Record<string, unknown>): {
+  inputTokens: number | null
+  outputTokens: number | null
+  cacheReadTokens: number | null
+  cacheCreationTokens: number | null
+} {
+  const usage = message.usage as Record<string, unknown> | undefined
+  if (!usage || typeof usage !== 'object') {
+    return { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheCreationTokens: null }
+  }
+  const base = toInt(usage.input_tokens) ?? 0
+  const cacheRead = toInt(usage.cache_read_input_tokens) ?? 0
+  const cacheCreation = toInt(usage.cache_creation_input_tokens) ?? 0
+  return {
+    inputTokens: base + cacheRead + cacheCreation,
+    outputTokens: toInt(usage.output_tokens) ?? 0,
+    cacheReadTokens: cacheRead,
+    cacheCreationTokens: cacheCreation,
+  }
+}
+
+/** 解析單行 JSONL，失敗回傳 null */
+export function parseLine(line: string): ParsedLine | null {
+  if (!line.trim()) return null
+
+  let obj: Record<string, unknown>
+  try {
+    obj = JSON.parse(line)
+  } catch {
+    return null
+  }
+
+  if (typeof obj !== 'object' || obj === null) return null
+
+  const type = typeof obj.type === 'string' ? obj.type : 'unknown'
+  const rawUuid = typeof obj.uuid === 'string' ? obj.uuid.trim() : null
+  const uuid = rawUuid && rawUuid.length <= 128 ? rawUuid : null
+  const parentUuid = typeof obj.parentUuid === 'string' ? obj.parentUuid : null
+  const sessionId = typeof obj.sessionId === 'string' ? obj.sessionId : null
+  const timestamp = typeof obj.timestamp === 'string' ? obj.timestamp : null
+  const rawRequestId = typeof obj.requestId === 'string' ? obj.requestId : null
+  const requestId = rawRequestId && rawRequestId.length <= 128 ? rawRequestId : null
+
+  let role: 'user' | 'assistant' | null = null
+  let contentText: string | null = null
+  let contentJson: string | null = null
+  let hasToolUse = false
+  let hasToolResult = false
+  let toolNames: string[] = []
+  let inputTokens: number | null = null
+  let outputTokens: number | null = null
+  let cacheReadTokens: number | null = null
+  let cacheCreationTokens: number | null = null
+  let model: string | null = null
+
+  const message = obj.message as Record<string, unknown> | undefined
+  if (message && typeof message === 'object') {
+    if (message.role === 'user' || message.role === 'assistant') {
+      role = message.role
+    }
+    const result = parseContent(message.content)
+    contentText = result.contentText
+    hasToolUse = result.hasToolUse
+    hasToolResult = result.hasToolResult
+    toolNames = result.toolNames
+    contentJson = message.content != null ? JSON.stringify(message.content) : null
+
+    // Token usage（僅 assistant 訊息有值）
+    const tokenData = parseUsage(message)
+    inputTokens = tokenData.inputTokens
+    outputTokens = tokenData.outputTokens
+    cacheReadTokens = tokenData.cacheReadTokens
+    cacheCreationTokens = tokenData.cacheCreationTokens
+    model = typeof message.model === 'string' ? message.model : null
+  } else if (typeof obj.content === 'string') {
+    // queue-operation 等 type 的 prompt 存在頂層 content 欄位
+    const cleaned = stripSystemXml(obj.content as string)
+    contentText = cleaned || null
+  }
+
+  return {
+    type,
+    uuid,
+    parentUuid,
+    sessionId,
+    timestamp,
+    role,
+    contentText,
+    contentJson,
+    hasToolUse,
+    hasToolResult,
+    toolNames,
+    rawJson: line,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    model,
+    requestId,
+  }
+}
+
+const TITLE_MAX_LENGTH = 80
+
+/** 解析整個 JSONL 檔案為結構化 session */
+export async function parseSession(filePath: string, sessionId: string): Promise<ParsedSession> {
+  const raw = await readFile(filePath, 'utf-8')
+  const lines = raw.split('\n')
+
+  const messages: ParsedLine[] = []
+  let skippedLines = 0
+  let totalLines = 0
+  let title: string | null = null
+  let startedAt: string | null = null
+  let endedAt: string | null = null
+
+  for (const line of lines) {
+    if (!line.trim()) continue
+    totalLines++
+
+    const parsed = parseLine(line)
+    if (!parsed) {
+      skippedLines++
+      continue
+    }
+
+    parsed.sessionId ??= sessionId
+    messages.push(parsed)
+
+    // 追蹤時間範圍
+    if (parsed.timestamp) {
+      if (!startedAt) startedAt = parsed.timestamp
+      endedAt = parsed.timestamp
+    }
+
+    // Title 推導：queue-operation prompt 優先，其次第一筆 user 訊息
+    if (!title && parsed.contentText) {
+      const isQueuePrompt = parsed.type === 'queue-operation'
+      const isFirstUser = parsed.role === 'user'
+      if (isQueuePrompt || isFirstUser) {
+        title = parsed.contentText.length > TITLE_MAX_LENGTH
+          ? parsed.contentText.slice(0, TITLE_MAX_LENGTH) + '…'
+          : parsed.contentText
+      }
+    }
+  }
+
+  return {
+    sessionId,
+    title: title ?? sessionId,
+    messages,
+    startedAt,
+    endedAt,
+    skippedLines,
+    totalLines,
+  }
+}
