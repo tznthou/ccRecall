@@ -21,14 +21,22 @@ function fetch(url: string): Promise<{ status: number; body: unknown }> {
   })
 }
 
-function postJson(url: string, payload: unknown): Promise<{ status: number; body: unknown }> {
+function postJson(
+  url: string,
+  payload: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const u = new URL(url)
     const data = JSON.stringify(payload)
     const req = http.request({
       hostname: u.hostname, port: u.port, path: u.pathname + u.search,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data),
+        ...extraHeaders,
+      },
     }, (res) => {
       const chunks: Buffer[] = []
       res.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -141,30 +149,13 @@ describe('E2E: index → search → HTTP', () => {
   })
 
   it('POST /memory/save rejects cross-origin request', async () => {
-    const result = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
-      const data = JSON.stringify({ content: 'x', type: 'decision' })
-      const req = http.request({
-        hostname: '127.0.0.1', port, path: '/memory/save', method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(data),
-          'Origin': 'https://evil.example.com',
-        },
-      }, (res) => {
-        const chunks: Buffer[] = []
-        res.on('data', (c: Buffer) => chunks.push(c))
-        res.on('end', () => resolve({
-          status: res.statusCode!,
-          body: JSON.parse(Buffer.concat(chunks).toString()),
-        }))
-        res.on('error', reject)
-      })
-      req.on('error', reject)
-      req.write(data)
-      req.end()
-    })
-    expect(result.status).toBe(403)
-    expect((result.body as { error: string }).error).toMatch(/cross-origin/)
+    const { status, body } = await postJson(
+      `http://127.0.0.1:${port}/memory/save`,
+      { content: 'x', type: 'decision' },
+      { Origin: 'https://evil.example.com' },
+    )
+    expect(status).toBe(403)
+    expect((body as { error: string }).error).toMatch(/cross-origin/)
   })
 
   it('POST /memory/save rejects invalid type', async () => {

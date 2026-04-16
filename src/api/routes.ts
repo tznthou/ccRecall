@@ -34,6 +34,15 @@ type SaveBody = {
   confidence?: unknown
 }
 
+function optionalString(
+  value: unknown,
+  field: string,
+): { value: string | null } | { error: string } {
+  if (value == null) return { value: null }
+  if (typeof value === 'string') return { value }
+  return { error: `${field} must be string or null` }
+}
+
 function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
   if (!raw || typeof raw !== 'object') return { error: 'body must be JSON object' }
   const b = raw as SaveBody
@@ -43,10 +52,10 @@ function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
   if (typeof b.type !== 'string' || !VALID_MEMORY_TYPES.has(b.type as MemoryType)) {
     return { error: `type must be one of: ${[...VALID_MEMORY_TYPES].join(', ')}` }
   }
-  const sessionId = b.sessionId == null ? null : typeof b.sessionId === 'string' ? b.sessionId : undefined
-  if (sessionId === undefined) return { error: 'sessionId must be string or null' }
-  const messageId = b.messageId == null ? null : typeof b.messageId === 'string' ? b.messageId : undefined
-  if (messageId === undefined) return { error: 'messageId must be string or null' }
+  const sessionIdResult = optionalString(b.sessionId, 'sessionId')
+  if ('error' in sessionIdResult) return sessionIdResult
+  const messageIdResult = optionalString(b.messageId, 'messageId')
+  if ('error' in messageIdResult) return messageIdResult
   let confidence: number | undefined
   if (b.confidence != null) {
     if (typeof b.confidence !== 'number' || b.confidence < 0 || b.confidence > 1) {
@@ -54,7 +63,13 @@ function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
     }
     confidence = b.confidence
   }
-  return { content: b.content, type: b.type as MemoryType, sessionId, messageId, confidence }
+  return {
+    content: b.content,
+    type: b.type as MemoryType,
+    sessionId: sessionIdResult.value,
+    messageId: messageIdResult.value,
+    confidence,
+  }
 }
 
 const startTime = Date.now()
