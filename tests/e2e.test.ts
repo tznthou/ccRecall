@@ -21,6 +21,29 @@ function fetch(url: string): Promise<{ status: number; body: unknown }> {
   })
 }
 
+function postJson(url: string, payload: unknown): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url)
+    const data = JSON.stringify(payload)
+    const req = http.request({
+      hostname: u.hostname, port: u.port, path: u.pathname + u.search,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+    }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString())
+        resolve({ status: res.statusCode!, body })
+      })
+      res.on('error', reject)
+    })
+    req.on('error', reject)
+    req.write(data)
+    req.end()
+  })
+}
+
 describe('E2E: index → search → HTTP', () => {
   let tmpDir: string
   let db: Database
@@ -90,11 +113,23 @@ describe('E2E: index → search → HTTP', () => {
     expect(b.sessionCount).toBeGreaterThan(0)
   })
 
-  it('GET /memory/query returns search results', async () => {
-    const { status, body } = await fetch(`http://127.0.0.1:${port}/memory/query?q=authentication&limit=5`)
+  it('POST /memory/save → GET /memory/query round-trip', async () => {
+    const save = await postJson(`http://127.0.0.1:${port}/memory/save`, {
+      content: 'prefer pnpm over npm for monorepos',
+      type: 'preference',
+      confidence: 0.9,
+    })
+    expect(save.status).toBe(200)
+    const saveBody = save.body as { ok: boolean; id: number }
+    expect(saveBody.ok).toBe(true)
+    expect(saveBody.id).toBeGreaterThan(0)
+
+    const { status, body } = await fetch(`http://127.0.0.1:${port}/memory/query?q=pnpm&limit=5`)
     expect(status).toBe(200)
-    const b = body as { memories: unknown[]; totalTokenEstimate: number }
-    expect(b.memories.length).toBeGreaterThan(0)
+    const b = body as { memories: Array<{ content: string; confidence: number }>; totalTokenEstimate: number }
+    expect(b.memories.length).toBe(1)
+    expect(b.memories[0].content).toContain('pnpm')
+    expect(b.memories[0].confidence).toBe(0.9)
     expect(b.totalTokenEstimate).toBeGreaterThan(0)
   })
 
@@ -103,5 +138,20 @@ describe('E2E: index → search → HTTP', () => {
     expect(status).toBe(200)
     const b = body as { memories: unknown[] }
     expect(b.memories).toEqual([])
+  })
+
+  it('POST /memory/save rejects invalid type', async () => {
+    const { status, body } = await postJson(`http://127.0.0.1:${port}/memory/save`, {
+      content: 'x', type: 'invalid-type',
+    })
+    expect(status).toBe(400)
+    expect((body as { error: string }).error).toMatch(/type must be one of/)
+  })
+
+  it('GET /health reports memoryCount after save', async () => {
+    await postJson(`http://127.0.0.1:${port}/memory/save`, { content: 'a', type: 'decision' })
+    await postJson(`http://127.0.0.1:${port}/memory/save`, { content: 'b', type: 'pattern' })
+    const { body } = await fetch(`http://127.0.0.1:${port}/health`)
+    expect((body as { memoryCount: number }).memoryCount).toBe(2)
   })
 })

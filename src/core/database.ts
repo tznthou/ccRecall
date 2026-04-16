@@ -1,7 +1,16 @@
 import BetterSqlite3 from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import type { Project, SessionMeta, Message, MessageContext, SearchPage, SearchOptions, SessionSearchPage, SessionTokenStats, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput } from './types.js'
+import type { Project, SessionMeta, Message, MessageContext, SearchPage, SearchOptions, SessionSearchPage, SessionTokenStats, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType } from './types.js'
+
+/** 寫入 memories 時使用的參數型別 */
+export interface MemoryInput {
+  sessionId: string | null
+  messageId: string | null
+  content: string
+  type: MemoryType
+  confidence?: number
+}
 
 /** 寫入 messages 時使用的參數型別 */
 export interface MessageInput {
@@ -365,6 +374,38 @@ const migrations: Migration[] = [
     up: (db) => {
       db.exec("UPDATE sessions SET file_mtime = NULL")
       db.exec("UPDATE subagent_sessions SET file_mtime = NULL")
+    },
+  },
+  {
+    version: 16,
+    description: 'add memories table + memories_fts for Phase 2 memory layer',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT,
+          message_id TEXT,
+          content TEXT NOT NULL,
+          type TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0.8,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE VIRTUAL TABLE memories_fts USING fts5(
+          content,
+          content='memories',
+          content_rowid='id',
+          tokenize='unicode61'
+        );
+
+        CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
+          INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+
+        CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
+          INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.id, old.content);
+        END;
+      `)
     },
   },
 ]
@@ -1245,5 +1286,60 @@ export class Database {
       firstSeenSeq: r.first_seen_seq,
       lastSeenSeq: r.last_seen_seq,
     }))
+  }
+
+  // ── Memories ──
+
+  saveMemory(input: MemoryInput): number {
+    const info = this.db.prepare(`
+      INSERT INTO memories (session_id, message_id, content, type, confidence)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      input.sessionId,
+      input.messageId,
+      input.content,
+      input.type,
+      input.confidence ?? 0.8,
+    )
+    return Number(info.lastInsertRowid)
+  }
+
+  queryMemories(query: string, limit: number): Memory[] {
+    const q = Database.fts5QuoteIfNeeded(query)
+    if (!q) return []
+    try {
+      const rows = this.db.prepare(`
+        SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+        FROM memories_fts
+        JOIN memories m ON m.id = memories_fts.rowid
+        WHERE memories_fts MATCH ?
+        ORDER BY rank, m.confidence DESC, m.id DESC
+        LIMIT ?
+      `).all(q, Math.min(limit, 100)) as Array<{
+        id: number
+        session_id: string | null
+        message_id: string | null
+        content: string
+        type: string
+        confidence: number
+        created_at: string
+      }>
+      return rows.map(r => ({
+        id: r.id,
+        sessionId: r.session_id,
+        messageId: r.message_id,
+        content: r.content,
+        type: r.type as MemoryType,
+        confidence: r.confidence,
+        createdAt: r.created_at,
+      }))
+    } catch {
+      return []
+    }
+  }
+
+  getMemoryCount(): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS c FROM memories').get() as { c: number }
+    return row.c
   }
 }

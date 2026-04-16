@@ -1,8 +1,49 @@
 import http from 'node:http'
 import { URL } from 'node:url'
-import { sendJson } from './server.js'
-import type { Database } from '../core/database.js'
-import type { HealthResult } from '../core/types.js'
+import { sendJson, readBody } from './server.js'
+import type { Database, MemoryInput } from '../core/database.js'
+import type { HealthResult, Memory, MemoryType } from '../core/types.js'
+
+const VALID_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
+  'decision', 'discovery', 'preference', 'pattern', 'feedback',
+])
+
+function memorySource(m: Memory): string {
+  if (m.sessionId && m.messageId) return `${m.sessionId}:msg:${m.messageId}`
+  if (m.sessionId) return `${m.sessionId}:session`
+  return `memory:${m.id}`
+}
+
+type SaveBody = {
+  content?: unknown
+  type?: unknown
+  sessionId?: unknown
+  messageId?: unknown
+  confidence?: unknown
+}
+
+function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
+  if (!raw || typeof raw !== 'object') return { error: 'body must be JSON object' }
+  const b = raw as SaveBody
+  if (typeof b.content !== 'string' || b.content.trim() === '') {
+    return { error: 'content must be non-empty string' }
+  }
+  if (typeof b.type !== 'string' || !VALID_MEMORY_TYPES.has(b.type as MemoryType)) {
+    return { error: `type must be one of: ${[...VALID_MEMORY_TYPES].join(', ')}` }
+  }
+  const sessionId = b.sessionId == null ? null : typeof b.sessionId === 'string' ? b.sessionId : undefined
+  if (sessionId === undefined) return { error: 'sessionId must be string or null' }
+  const messageId = b.messageId == null ? null : typeof b.messageId === 'string' ? b.messageId : undefined
+  if (messageId === undefined) return { error: 'messageId must be string or null' }
+  let confidence: number | undefined
+  if (b.confidence != null) {
+    if (typeof b.confidence !== 'number' || b.confidence < 0 || b.confidence > 1) {
+      return { error: 'confidence must be number in [0, 1]' }
+    }
+    confidence = b.confidence
+  }
+  return { content: b.content, type: b.type as MemoryType, sessionId, messageId, confidence }
+}
 
 const startTime = Date.now()
 
@@ -16,13 +57,12 @@ export function createRequestHandler(db: Database) {
 
     // GET /health
     if (req.method === 'GET' && path === '/health') {
-      const sessionCount = db.getMainSessionCount()
       const result: HealthResult = {
         status: 'ok',
         version: '0.1.0',
         dbPath: '', // TODO: expose from Database
-        sessionCount,
-        memoryCount: 0, // Phase 2
+        sessionCount: db.getMainSessionCount(),
+        memoryCount: db.getMemoryCount(),
         topicCount: 0, // Phase 3
         uptime: Math.floor((Date.now() - startTime) / 1000),
       }
@@ -41,27 +81,13 @@ export function createRequestHandler(db: Database) {
         return
       }
 
-      // Search messages via FTS5
-      const messagePage = db.search(q, null, 0, limit)
-      // Search sessions via FTS5
-      const sessionPage = db.searchSessions(q, null, 0, limit)
-
-      // Map to memory query result format
-      const memories = [
-        ...messagePage.results.map((r, i) => ({
-          content: r.snippet,
-          source: `${r.sessionId}:msg:${r.messageId}`,
-          confidence: Math.max(0.1, 1 - i * 0.15),
-          depth: null,
-        })),
-        ...sessionPage.results.map((r, i) => ({
-          content: r.snippet,
-          source: `${r.sessionId}:session`,
-          confidence: Math.max(0.1, 0.8 - i * 0.15),
-          depth: null,
-        })),
-      ].slice(0, limit)
-
+      const rows = db.queryMemories(q, limit)
+      const memories = rows.map(m => ({
+        content: m.content,
+        source: memorySource(m),
+        confidence: m.confidence,
+        depth: null,
+      }))
       const totalTokenEstimate = Math.ceil(
         memories.reduce((sum, m) => sum + m.content.length, 0) / 4,
       )
@@ -95,8 +121,21 @@ export function createRequestHandler(db: Database) {
 
     // POST /memory/save
     if (req.method === 'POST' && path === '/memory/save') {
-      // TODO: integrate with memory store (Phase 2)
-      sendJson(res, 200, { ok: true })
+      const bodyText = await readBody(req)
+      let parsed: unknown
+      try {
+        parsed = bodyText ? JSON.parse(bodyText) : {}
+      } catch {
+        sendJson(res, 400, { error: 'invalid JSON body' })
+        return
+      }
+      const v = validateSaveBody(parsed)
+      if ('error' in v) {
+        sendJson(res, 400, v)
+        return
+      }
+      const id = db.saveMemory(v)
+      sendJson(res, 200, { ok: true, id })
       return
     }
 

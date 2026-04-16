@@ -277,9 +277,6 @@ export interface SessionSummary {
 /** 記憶類型 */
 export type MemoryType = 'decision' | 'discovery' | 'preference' | 'pattern' | 'feedback'
 
-/** 壓縮層級（遺忘曲線） */
-export type CompressionLevel = 0 | 1 | 2
-
 /** 記憶條目 */
 export interface Memory {
   id: number
@@ -289,10 +286,6 @@ export interface Memory {
   type: MemoryType
   confidence: number
   createdAt: string
-  lastAccessed: string | null
-  accessCount: number
-  compressedAt: string | null
-  compressionLevel: CompressionLevel
 }
 
 // ── ccRecall 新增：元認知型別 ──
