@@ -4,6 +4,7 @@ import type { Stats } from 'node:fs'
 import chokidar, { type FSWatcher } from 'chokidar'
 import type { Database } from './database.js'
 import { runIndexer } from './indexer.js'
+import { scrubErrorMessage } from './log-safe.js'
 
 /**
  * Phase 4e: JSONL watch mode.
@@ -85,9 +86,7 @@ export class JsonlWatcher {
     watcher.on('change', onEvent)
     watcher.on('unlink', onEvent)
     watcher.on('error', (err) => {
-      // eslint-disable-next-line no-control-regex
-      const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
-      console.warn('[watcher] chokidar error:', safeMsg)
+      console.warn('[watcher] chokidar error:', scrubErrorMessage(err))
     })
 
     // Await ready so callers (daemon bootstrap) can be sure ignoreInitial has
@@ -144,11 +143,7 @@ export class JsonlWatcher {
     try {
       await this.runIndexerFn(this.db)
     } catch (err) {
-      // Mirror MaintenanceCoordinator: DB errors can embed memory content in
-      // .message, so strip control chars before logging.
-      // eslint-disable-next-line no-control-regex
-      const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
-      console.warn('[watcher] incremental scan error:', safeMsg)
+      console.warn('[watcher] incremental scan error:', scrubErrorMessage(err))
     } finally {
       this.inflight = false
       if (this.dirty) {

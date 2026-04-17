@@ -1,6 +1,7 @@
 import type { Database } from './database.js'
 import type { MemoryService } from './memory-service.js'
 import { CompressionPipeline, type CompressionStats } from './compression.js'
+import { scrubErrorMessage } from './log-safe.js'
 
 /**
  * Phase 4d: background maintenance orchestrator.
@@ -72,11 +73,8 @@ export class MaintenanceCoordinator {
       await Promise.resolve()
       return this.compression.runOnce({ batchSize: this.batchSize })
     } catch (err) {
-      // Strip control chars — underlying DB errors can carry memory content
-      // (and therefore user-influenced bytes) in .message; do not pollute log.
-      // eslint-disable-next-line no-control-regex
-      const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
-      console.warn('[maintenance] tick error:', safeMsg)
+      // DB errors can carry memory content in .message; scrub before logging.
+      console.warn('[maintenance] tick error:', scrubErrorMessage(err))
       return null
     } finally {
       this.inflight = false

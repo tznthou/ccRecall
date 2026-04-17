@@ -20,7 +20,7 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
   const envPort = process.env.CCRECALL_PORT
   const parsedPort = envPort ? parseInt(envPort, 10) : NaN
   const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : undefined
-  const dbPath = process.env.CCRECALL_DB_PATH ?? undefined
+  const dbPath = process.env.CCRECALL_DB_PATH
   const action = subcommand === 'install-daemon'
     ? () => installDaemon({ dryRun, port, dbPath })
     : () => uninstallDaemon()

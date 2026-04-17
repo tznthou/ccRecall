@@ -4,6 +4,7 @@ import { sendJson, readBody } from './server.js'
 import type { Database, MemoryInput } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
 import { runLint } from '../core/lint.js'
+import { scrubErrorMessage } from '../core/log-safe.js'
 import type {
   HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
@@ -308,9 +309,7 @@ export function createRequestHandler(
         try {
           await opts.rescueReindex()
         } catch (err) {
-          // eslint-disable-next-line no-control-regex
-          const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
-          console.warn('[session-end] rescue reindex failed:', safeMsg)
+          console.warn('[session-end] rescue reindex failed:', scrubErrorMessage(err))
         }
         session = db.getSessionById(v.sessionId)
       }

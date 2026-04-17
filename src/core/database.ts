@@ -2,6 +2,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Project, SessionMeta, Message, MessageContext, SearchPage, SearchOptions, SessionSearchPage, SessionTokenStats, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint } from './types.js'
+import { scrubErrorMessage } from './log-safe.js'
 
 /** 寫入 memories 時使用的參數型別 */
 export interface MemoryInput {
@@ -1566,12 +1567,9 @@ export class Database {
           `).all(q, cappedLimit)
       return (rows as MemoryRow[]).map(mapMemoryRow)
     } catch (err) {
-      // Strip control chars from SQLite error message to prevent log injection —
-      // FTS5 errors embed the user-supplied query verbatim, which may contain
-      // newlines or ANSI escapes if the caller is malicious.
-      // eslint-disable-next-line no-control-regex
-      const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
-      console.warn('[memories] queryMemories error:', safeMsg)
+      // FTS5 errors echo the user-supplied query verbatim; scrub to avoid
+      // log injection via control chars.
+      console.warn('[memories] queryMemories error:', scrubErrorMessage(err))
       return []
     }
   }
