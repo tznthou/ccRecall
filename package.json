@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "mcp": "tsx src/mcp/server.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -24,7 +25,9 @@
   "author": "tznthou",
   "license": "Apache-2.0",
   "dependencies": {
-    "better-sqlite3": "^11.9.1"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^11.9.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,0 +1,98 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+import { Database } from '../src/core/database.js'
+import type { Memory } from '../src/core/types.js'
+import { recallQueryHandler, formatMemories } from '../src/mcp/tools.js'
+
+describe('MCP recall_query handler', () => {
+  let tmpDir: string
+  let db: Database
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-mcp-test-'))
+    db = new Database(path.join(tmpDir, 'test.db'))
+  })
+
+  afterEach(() => {
+    db.close()
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('returns empty-result message when no memories match', () => {
+    const result = recallQueryHandler(db, { query: 'nonexistent' })
+    expect(result.isError).toBeUndefined()
+    expect(result.content[0].text).toContain('No memories found')
+  })
+
+  it('returns formatted memory on hit', () => {
+    db.saveMemory({
+      sessionId: null,
+      messageId: null,
+      content: 'Use Apache-2.0 license for ccRecall',
+      type: 'decision',
+      confidence: 0.9,
+    })
+    const result = recallQueryHandler(db, { query: 'Apache' })
+    expect(result.content[0].text).toContain('[decision]')
+    expect(result.content[0].text).toContain('Apache-2.0')
+    expect(result.content[0].text).toContain('conf 0.90')
+  })
+
+  it('honors limit parameter', () => {
+    for (let i = 0; i < 5; i++) {
+      db.saveMemory({
+        sessionId: null,
+        messageId: null,
+        content: `test memory ${i} apache`,
+        type: 'discovery',
+        confidence: 1,
+      })
+    }
+    const result = recallQueryHandler(db, { query: 'apache', limit: 2 })
+    const lines = result.content[0].text.split('\n').filter(Boolean)
+    expect(lines.length).toBe(2)
+  })
+
+  it('defaults limit to 10 when not provided', () => {
+    for (let i = 0; i < 15; i++) {
+      db.saveMemory({
+        sessionId: null,
+        messageId: null,
+        content: `memory ${i} keyword`,
+        type: 'pattern',
+        confidence: 1,
+      })
+    }
+    const result = recallQueryHandler(db, { query: 'keyword' })
+    const lines = result.content[0].text.split('\n').filter(Boolean)
+    expect(lines.length).toBe(10)
+  })
+})
+
+describe('formatMemories', () => {
+  const baseMemory: Memory = {
+    id: 1,
+    sessionId: null,
+    messageId: null,
+    content: 'sample content',
+    type: 'decision',
+    confidence: 1,
+    createdAt: '2026-04-17T00:00:00Z',
+  }
+
+  it('shows confidence when not 1', () => {
+    const text = formatMemories([{ ...baseMemory, confidence: 0.85 }], 'q')
+    expect(text).toBe('- [decision] (conf 0.85) sample content')
+  })
+
+  it('omits confidence when equal to 1', () => {
+    const text = formatMemories([{ ...baseMemory, type: 'pattern' }], 'q')
+    expect(text).toBe('- [pattern] sample content')
+  })
+
+  it('returns empty-result message for empty array', () => {
+    expect(formatMemories([], 'missing')).toBe('No memories found for: missing')
+  })
+})
