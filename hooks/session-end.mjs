@@ -13,6 +13,13 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8')
 }
 
+// Strip CR/LF and other control chars so attacker-controlled response bodies
+// can't forge log entries when interpolated into console.error.
+function sanitizeForLog(s) {
+  // eslint-disable-next-line no-control-regex
+  return String(s).replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
+}
+
 function postSessionEnd(sessionId) {
   return new Promise((resolve) => {
     const payload = JSON.stringify({ sessionId })
@@ -31,14 +38,14 @@ function postSessionEnd(sessionId) {
       res.on('data', (c) => { body += c })
       res.on('end', () => {
         if (res.statusCode !== 200) {
-          console.error(`[ccRecall] harvest failed ${res.statusCode}: ${body.slice(0, 200)}`)
+          console.error(`[ccRecall] harvest failed ${res.statusCode}: ${sanitizeForLog(body.slice(0, 200))}`)
           resolve()
           return
         }
         try {
           const parsed = JSON.parse(body)
           if (Array.isArray(parsed.memoriesSaved) && parsed.memoriesSaved.length === 0) {
-            const reason = parsed.reason ?? 'unknown'
+            const reason = sanitizeForLog(String(parsed.reason ?? 'unknown'))
             console.error(`[ccRecall] harvest yielded 0 memories (reason: ${reason}). Fresh sessions may not be indexed yet; Phase 4 watch mode will address this.`)
           }
         } catch {

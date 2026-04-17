@@ -229,6 +229,10 @@ export function createRequestHandler(db: Database) {
 
     // POST /session/checkpoint
     if (req.method === 'POST' && path === '/session/checkpoint') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
       // TODO: integrate with checkpoint pipeline (Phase 2)
       sendJson(res, 200, { ok: true, memoriesSaved: 0, topicsUpdated: 0 })
       return
