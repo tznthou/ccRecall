@@ -2,7 +2,10 @@ import http from 'node:http'
 import { URL } from 'node:url'
 import { sendJson, readBody } from './server.js'
 import type { Database, MemoryInput } from '../core/database.js'
-import type { HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus } from '../core/types.js'
+import type {
+  HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
+  KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
+} from '../core/types.js'
 
 const VALID_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
   'decision', 'discovery', 'preference', 'pattern', 'feedback',
@@ -118,6 +121,36 @@ function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
   }
 }
 
+function deriveDepth(mentionCount: number): KnowledgeDepth {
+  if (mentionCount >= 5) return 'deep'
+  if (mentionCount >= 2) return 'medium'
+  if (mentionCount >= 1) return 'shallow'
+  return 'none'
+}
+
+function topicWithDepth(t: Topic): Topic & { depth: KnowledgeDepth } {
+  return { ...t, depth: deriveDepth(t.mentionCount) }
+}
+
+type CheckpointBody = {
+  sessionId?: unknown
+  snapshot?: unknown
+}
+
+function validateCheckpointBody(
+  raw: unknown,
+): { sessionId: string; snapshot: string } | { error: string } {
+  if (!raw || typeof raw !== 'object') return { error: 'body must be JSON object' }
+  const b = raw as CheckpointBody
+  if (typeof b.sessionId !== 'string' || b.sessionId.trim() === '') {
+    return { error: 'sessionId must be non-empty string' }
+  }
+  if (typeof b.snapshot !== 'string' || b.snapshot.trim() === '') {
+    return { error: 'snapshot must be non-empty string' }
+  }
+  return { sessionId: b.sessionId, snapshot: b.snapshot }
+}
+
 const startTime = Date.now()
 
 export function createRequestHandler(db: Database) {
@@ -136,7 +169,7 @@ export function createRequestHandler(db: Database) {
         dbPath: '', // TODO: expose from Database
         sessionCount: db.getMainSessionCount(),
         memoryCount: db.getMemoryCount(),
-        topicCount: 0, // Phase 3d
+        topicCount: db.getTopicCount(),
         uptime: Math.floor((Date.now() - startTime) / 1000),
       }
       sendJson(res, 200, result)
@@ -289,6 +322,95 @@ export function createRequestHandler(db: Database) {
         dryRun: v.dryRun,
         candidate: v.dryRun ? candidate : undefined,
       })
+      return
+    }
+
+    // GET /metacognition/check?projectId=X[&topic=Y][&limit=N]
+    if (req.method === 'GET' && path === '/metacognition/check') {
+      const projectId = url.searchParams.get('projectId')
+      if (!projectId) {
+        sendJson(res, 400, { error: 'projectId query param required' })
+        return
+      }
+      const topicParam = url.searchParams.get('topic')
+      const rawLimit = parseInt(url.searchParams.get('limit') ?? '10', 10)
+      const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 10 : Math.min(rawLimit, 50)
+
+      if (topicParam) {
+        // Detail mode
+        const topic = db.getTopic(topicParam, projectId)
+        if (!topic) {
+          sendJson(res, 404, { error: 'topic not found' })
+          return
+        }
+        const related = db.getRelatedTopics(topicParam, projectId, 10)
+        const memories = db.getMemoriesByTopics(projectId, [topicParam], limit)
+        const detail: TopicDetail = {
+          topicKey: topic.topicKey,
+          projectId: topic.projectId,
+          mentionCount: topic.mentionCount,
+          lastTouched: topic.lastTouched,
+          depth: deriveDepth(topic.mentionCount),
+          memories,
+          relatedTopics: related,
+        }
+        sendJson(res, 200, detail)
+        return
+      }
+
+      // Summary mode
+      const top = db.getKnowledgeMap(projectId, { limit, sortBy: 'mention' }).map(topicWithDepth)
+      const recent = db.getKnowledgeMap(projectId, { limit, sortBy: 'recent' }).map(topicWithDepth)
+      const stale = db.getKnowledgeMap(projectId, { limit, sortBy: 'stale' }).map(topicWithDepth)
+      const counts = db.getKnowledgeMapCounts(projectId)
+      const summary: MetacognitionSummary = {
+        projectId,
+        topTopics: top,
+        recentTopics: recent,
+        staleTopics: stale,
+        counts,
+      }
+      sendJson(res, 200, summary)
+      return
+    }
+
+    // POST /session/checkpoint
+    if (req.method === 'POST' && path === '/session/checkpoint') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      let bodyText: string
+      try {
+        bodyText = await readBody(req)
+      } catch (err) {
+        const msg = (err as Error).message
+        if (msg === 'body too large') {
+          sendJson(res, 413, { error: msg })
+          return
+        }
+        throw err
+      }
+      let parsed: unknown
+      try {
+        parsed = bodyText ? JSON.parse(bodyText) : {}
+      } catch {
+        sendJson(res, 400, { error: 'invalid JSON body' })
+        return
+      }
+      const v = validateCheckpointBody(parsed)
+      if ('error' in v) {
+        sendJson(res, 400, v)
+        return
+      }
+      const session = db.getSessionById(v.sessionId)
+      if (!session) {
+        sendJson(res, 404, { error: 'session not found' })
+        return
+      }
+      const checkpointId = db.saveCheckpoint(session.id, session.projectId, v.snapshot)
+      const result: CheckpointResult = { ok: true, checkpointId }
+      sendJson(res, 200, result)
       return
     }
 
