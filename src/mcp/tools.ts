@@ -54,6 +54,9 @@ const recallSaveInput = {
   sessionId: z.string().nullable().optional().describe('Origin session ID (optional)'),
   messageId: z.string().nullable().optional().describe('Origin message ID (optional)'),
   confidence: z.number().min(0).max(1).optional().describe('Confidence 0-1 (default 1)'),
+  projectId: z.string().nullable().optional().describe(
+    'Project ID for scoped queries. Session-backed memories derive this from sessions.project_id automatically; manual memories should set this to avoid cross-project leakage.',
+  ),
 }
 
 interface TopicCluster {
@@ -161,6 +164,7 @@ export function recallSaveHandler(
     sessionId?: string | null
     messageId?: string | null
     confidence?: number
+    projectId?: string | null
   },
 ): McpTextResult {
   try {
@@ -170,6 +174,7 @@ export function recallSaveHandler(
       content: args.content,
       type: args.type,
       confidence: args.confidence ?? 1,
+      projectId: args.projectId ?? null,
     })
     return textResult(`Saved memory #${id} (type: ${args.type})`)
   } catch (err) {

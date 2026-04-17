@@ -36,6 +36,7 @@ type SaveBody = {
   sessionId?: unknown
   messageId?: unknown
   confidence?: unknown
+  projectId?: unknown
 }
 
 function optionalString(
@@ -106,6 +107,8 @@ function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
   if ('error' in sessionIdResult) return sessionIdResult
   const messageIdResult = optionalString(b.messageId, 'messageId')
   if ('error' in messageIdResult) return messageIdResult
+  const projectIdResult = optionalString(b.projectId, 'projectId')
+  if ('error' in projectIdResult) return projectIdResult
   let confidence: number | undefined
   if (b.confidence != null) {
     if (typeof b.confidence !== 'number' || b.confidence < 0 || b.confidence > 1) {
@@ -119,6 +122,7 @@ function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
     sessionId: sessionIdResult.value,
     messageId: messageIdResult.value,
     confidence,
+    projectId: projectIdResult.value,
   }
 }
 

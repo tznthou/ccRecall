@@ -10,6 +10,10 @@ export interface MemoryInput {
   content: string
   type: MemoryType
   confidence?: number
+  /** Phase 4b: denormalized project scope. Session-backed memories auto-derive
+   *  this from sessions.project_id if omitted. Manual memories should set this
+   *  to avoid cross-project leakage. */
+  projectId?: string | null
 }
 
 /** 寫入 messages 時使用的參數型別 */
@@ -639,6 +643,20 @@ export class Database {
   /** Subagent 排除子查詢：用於所有面向使用者的 query，只顯示主 session */
   private static readonly EXCLUDE_SUBAGENTS = 'NOT IN (SELECT id FROM subagent_sessions)'
 
+  /** Phase 4b: SQL snippet for effective confidence with exponential decay and
+   *  access-extended half-life. Assumes `m` is the memories alias.
+   *    age_days   = julianday(now) − julianday(COALESCE(last_accessed, created_at))
+   *    half_life  = 7 + 7 · min(access_count, 4)  days
+   *    effective  = confidence · exp(−ln 2 · age_days / half_life)
+   *  Use in ORDER BY; requires exp() user function registered in the constructor. */
+  private static readonly EFFECTIVE_CONFIDENCE = `(
+    m.confidence * exp(
+      -0.6931471805599453 *
+      (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) /
+      (7.0 + 7.0 * MIN(m.access_count, 4))
+    )
+  )`
+
   constructor(dbPath: string) {
     // :memory: 不需要建目錄
     if (dbPath !== ':memory:') {
@@ -647,6 +665,12 @@ export class Database {
     this.db = new BetterSqlite3(dbPath)
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
+    // Phase 4b: register exp() as a user function for effective-confidence decay
+    // in ORDER BY. SQLite's built-in math functions require a special compile flag
+    // that better-sqlite3 does not enable by default.
+    this.db.function('exp', { deterministic: true }, (x: unknown): number => {
+      return typeof x === 'number' ? Math.exp(x) : NaN
+    })
     this.initSchema()
     this.runMigrations()
   }
@@ -1447,15 +1471,26 @@ export class Database {
   // ── Memories ──
 
   saveMemory(input: MemoryInput): number {
+    // Phase 4b: denormalize project_id. Session-backed memories auto-derive from
+    // sessions.project_id when caller did not supply. Manual memories rely on
+    // the caller providing projectId, otherwise they end up globally queryable only.
+    let projectId: string | null = input.projectId ?? null
+    if (input.sessionId && !projectId) {
+      const row = this.db.prepare(
+        'SELECT project_id FROM sessions WHERE id = ?',
+      ).get(input.sessionId) as { project_id: string } | undefined
+      projectId = row?.project_id ?? null
+    }
     const info = this.db.prepare(`
-      INSERT INTO memories (session_id, message_id, content, type, confidence)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO memories (session_id, message_id, content, type, confidence, project_id)
+      VALUES (?, ?, ?, ?, ?, ?)
     `).run(
       input.sessionId,
       input.messageId,
       input.content,
       input.type,
       input.confidence ?? 0.8,
+      projectId,
     )
     return Number(info.lastInsertRowid)
   }
@@ -1470,10 +1505,10 @@ export class Database {
             SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
             FROM memories_fts
             JOIN memories m ON m.id = memories_fts.rowid
-            JOIN sessions s ON m.session_id = s.id
+            LEFT JOIN sessions s ON m.session_id = s.id
             WHERE memories_fts MATCH ?
-              AND s.project_id = ?
-            ORDER BY rank, m.confidence DESC, m.id DESC
+              AND COALESCE(s.project_id, m.project_id) = ?
+            ORDER BY rank, ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
             LIMIT ?
           `).all(q, projectId, cappedLimit)
         : this.db.prepare(`
@@ -1481,7 +1516,7 @@ export class Database {
             FROM memories_fts
             JOIN memories m ON m.id = memories_fts.rowid
             WHERE memories_fts MATCH ?
-            ORDER BY rank, m.confidence DESC, m.id DESC
+            ORDER BY rank, ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
             LIMIT ?
           `).all(q, cappedLimit)
       return (rows as MemoryRow[]).map(mapMemoryRow)
@@ -1489,6 +1524,40 @@ export class Database {
       console.warn('[memories] queryMemories error:', (err as Error).message)
       return []
     }
+  }
+
+  /** Phase 4b: Increment access_count + stamp last_accessed for each id.
+   *  Caller is responsible for dedup (use MemoryService.touch for that). Runs
+   *  inside a transaction so partial failure does not leave half-applied state. */
+  touchMemory(ids: number[]): void {
+    if (ids.length === 0) return
+    const stmt = this.db.prepare(`
+      UPDATE memories
+      SET access_count = access_count + 1,
+          last_accessed = datetime('now')
+      WHERE id = ?
+    `)
+    const run = this.db.transaction((memIds: number[]) => {
+      for (const id of memIds) stmt.run(id)
+    })
+    run(ids)
+  }
+
+  /** Phase 4b: Delete a memory by id. memories_ad trigger syncs memories_fts. */
+  deleteMemory(id: number): boolean {
+    const info = this.db.prepare('DELETE FROM memories WHERE id = ?').run(id)
+    return info.changes > 0
+  }
+
+  /** Phase 4b: Update memory content and stamp compression metadata atomically.
+   *  memories_au trigger syncs memories_fts. Used by the compression pipeline. */
+  updateMemoryContent(id: number, content: string, level: number, compressedAt: string): boolean {
+    const info = this.db.prepare(`
+      UPDATE memories
+      SET content = ?, compression_level = ?, compressed_at = ?
+      WHERE id = ?
+    `).run(content, level, compressedAt, id)
+    return info.changes > 0
   }
 
   getMemoriesBySessionId(sessionId: string): Memory[] {
@@ -1597,7 +1666,7 @@ export class Database {
       WHERE s.project_id = ?
         AND s.id ${Database.EXCLUDE_SUBAGENTS}
         AND mt.topic_key IN (${placeholders})
-      ORDER BY m.confidence DESC, m.id DESC
+      ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
       LIMIT ?
     `).all(projectId, ...topicKeys, cappedLimit) as MemoryRow[]
     return rows.map(mapMemoryRow)
