@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { Database } from '../src/core/database.js'
 import type { Memory } from '../src/core/types.js'
-import { recallQueryHandler, formatMemories } from '../src/mcp/tools.js'
+import { recallQueryHandler, recallSaveHandler, formatMemories } from '../src/mcp/tools.js'
 
 describe('MCP recall_query handler', () => {
   let tmpDir: string
@@ -94,5 +94,54 @@ describe('formatMemories', () => {
 
   it('returns empty-result message for empty array', () => {
     expect(formatMemories([], 'missing')).toBe('No memories found for: missing')
+  })
+})
+
+describe('MCP recall_save handler', () => {
+  let tmpDir: string
+  let db: Database
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-mcp-save-'))
+    db = new Database(path.join(tmpDir, 'test.db'))
+  })
+
+  afterEach(() => {
+    db.close()
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('saves a memory and returns confirmation with id', () => {
+    const result = recallSaveHandler(db, {
+      content: 'ccRecall uses Apache-2.0 license',
+      type: 'decision',
+      confidence: 0.95,
+    })
+    expect(result.isError).toBeUndefined()
+    expect(result.content[0].text).toMatch(/Saved memory #\d+ \(type: decision\)/)
+  })
+
+  it('defaults confidence to 1 when not provided', () => {
+    recallSaveHandler(db, { content: 'default conf test content', type: 'pattern' })
+    const memories = db.queryMemories('default', 10)
+    expect(memories).toHaveLength(1)
+    expect(memories[0].confidence).toBe(1)
+  })
+
+  it('accepts null sessionId and messageId', () => {
+    const result = recallSaveHandler(db, {
+      content: 'orphan memory without origin',
+      type: 'discovery',
+      sessionId: null,
+      messageId: null,
+    })
+    expect(result.isError).toBeUndefined()
+  })
+
+  it('persists memory queryable via recallQueryHandler', () => {
+    recallSaveHandler(db, { content: 'searchable via mcp tool', type: 'discovery' })
+    const result = recallQueryHandler(db, { query: 'searchable' })
+    expect(result.content[0].text).toContain('searchable via mcp tool')
+    expect(result.content[0].text).toContain('[discovery]')
   })
 })
