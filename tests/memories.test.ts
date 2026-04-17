@@ -37,6 +37,7 @@ describe('memories schema', () => {
     expect(names).toContain('memories_fts')
     expect(names).toContain('memories_ai')
     expect(names).toContain('memories_ad')
+    expect(names).toContain('memories_au')
   })
 
   it('memories table has expected columns', () => {
@@ -44,6 +45,7 @@ describe('memories schema', () => {
     const names = cols.map(c => c.name)
     expect(names).toEqual([
       'id', 'session_id', 'message_id', 'content', 'type', 'confidence', 'created_at',
+      'last_accessed', 'access_count', 'compressed_at', 'compression_level', 'project_id',
     ])
   })
 })

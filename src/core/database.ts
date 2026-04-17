@@ -557,6 +557,38 @@ const migrations: Migration[] = [
       db.exec("UPDATE sessions SET file_mtime = NULL")
     },
   },
+  {
+    version: 18,
+    description: 'Phase 4 — memories lifecycle: access tracking + compression metadata + project_id denormalize + FTS update trigger',
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE memories ADD COLUMN last_accessed TEXT;
+        ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE memories ADD COLUMN compressed_at TEXT;
+        ALTER TABLE memories ADD COLUMN compression_level INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE memories ADD COLUMN project_id TEXT;
+      `)
+      // Backfill session-backed memories' project_id from sessions table.
+      // Manual memories (session_id IS NULL) remain NULL until Phase 4b wires the MCP param.
+      db.exec(`
+        UPDATE memories
+        SET project_id = (
+          SELECT project_id FROM sessions WHERE sessions.id = memories.session_id
+        )
+        WHERE session_id IS NOT NULL
+      `)
+      // AFTER UPDATE trigger: when memory.content is rewritten (e.g. compression),
+      // keep memories_fts in sync. Existing _ai / _ad triggers only cover insert/delete.
+      db.exec(`
+        CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN
+          INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.id, old.content);
+          INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+        CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id);
+        CREATE INDEX IF NOT EXISTS idx_memories_access ON memories(last_accessed, access_count);
+      `)
+    },
+  },
 ]
 
 /** DB SELECT messages 的原始行型別 */
