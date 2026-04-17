@@ -19,7 +19,11 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
   // the next login, which looks like memory loss or a port mismatch.
   const envPort = process.env.CCRECALL_PORT
   const parsedPort = envPort ? parseInt(envPort, 10) : NaN
-  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : undefined
+  // Cap at 65535 so a typo like CCRECALL_PORT=70000 doesn't get baked into
+  // the plist and crash-loop launchd (ERR_SOCKET_BAD_PORT on every restart).
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 && parsedPort <= 65535
+    ? parsedPort
+    : undefined
   const dbPath = process.env.CCRECALL_DB_PATH
   const action = subcommand === 'install-daemon'
     ? () => installDaemon({ dryRun, port, dbPath })
@@ -56,7 +60,8 @@ See docs/launchd.md for manual install and troubleshooting.`)
 }
 
 async function startDaemon(): Promise<void> {
-  const PORT = parseInt(process.env.CCRECALL_PORT ?? '7749', 10)
+  const rawPort = parseInt(process.env.CCRECALL_PORT ?? '7749', 10)
+  const PORT = Number.isFinite(rawPort) && rawPort > 0 && rawPort <= 65535 ? rawPort : 7749
   const DB_PATH = process.env.CCRECALL_DB_PATH ?? path.join(os.homedir(), '.ccrecall', 'ccrecall.db')
 
   const db = new Database(DB_PATH)

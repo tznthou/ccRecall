@@ -1,4 +1,5 @@
 import type { Database } from './database.js'
+import { scrubErrorMessage } from './log-safe.js'
 
 /**
  * Phase 4b: thin abstraction on top of Database for memory lifecycle operations
@@ -26,7 +27,7 @@ export class MemoryService {
     try {
       this.db.touchMemory(unique)
     } catch (err) {
-      console.warn('[memory-service] touch failed:', (err as Error).message)
+      console.warn('[memory-service] touch failed:', scrubErrorMessage(err))
     }
   }
 
