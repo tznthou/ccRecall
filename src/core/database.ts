@@ -121,6 +121,32 @@ interface MemoryRow {
   created_at: string
 }
 
+/** Phase 4d compression candidate row — LEFT JOIN sessions for summary/intent. */
+interface CompressionCandidateRow {
+  id: number
+  session_id: string | null
+  content: string
+  compression_level: number
+  access_count: number
+  age_days: number
+  effective_confidence: number | null
+  summary_text: string | null
+  intent_text: string | null
+}
+
+/** Phase 4d: normalised shape consumed by the compression pipeline. */
+export interface CompressionCandidate {
+  id: number
+  sessionId: string | null
+  content: string
+  compressionLevel: number
+  accessCount: number
+  ageDays: number
+  effectiveConfidence: number
+  summaryText: string | null
+  intentText: string | null
+}
+
 function mapMemoryRow(r: MemoryRow): Memory {
   return {
     id: r.id,
@@ -1592,6 +1618,90 @@ export class Database {
   getMemoryCount(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS c FROM memories').get() as { c: number }
     return row.c
+  }
+
+  /** Phase 4d lint: memories whose session_id references a session row that no
+   *  longer exists (user scrubbed ~/.claude/projects, or pre-index race). Manual
+   *  memories (session_id IS NULL) are not orphan candidates by definition. */
+  getOrphanMemoryIds(): Array<{ memoryId: number; sessionId: string }> {
+    const rows = this.db.prepare(`
+      SELECT m.id AS memory_id, m.session_id
+      FROM memories m
+      WHERE m.session_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = m.session_id)
+      ORDER BY m.id ASC
+    `).all() as Array<{ memory_id: number; session_id: string }>
+    return rows.map(r => ({ memoryId: r.memory_id, sessionId: r.session_id }))
+  }
+
+  /** Phase 4d lint: memories that have fully decayed — effective confidence under
+   *  threshold AND never accessed AND older than `ageDays`. Strict `>` on age so
+   *  callers can use 90 as "more than 90 days" without fencepost ambiguity. */
+  getStaleMemoryIds(opts: { effectiveConfidence: number; ageDays: number }): Array<{
+    memoryId: number
+    ageDays: number
+    effectiveConfidence: number
+  }> {
+    const rows = this.db.prepare(`
+      SELECT memory_id, age_days, effective_confidence
+      FROM (
+        SELECT
+          m.id AS memory_id,
+          m.access_count,
+          (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) AS age_days,
+          ${Database.EFFECTIVE_CONFIDENCE} AS effective_confidence
+        FROM memories m
+      )
+      WHERE access_count = 0 AND age_days > ? AND effective_confidence < ?
+      ORDER BY memory_id ASC
+    `).all(opts.ageDays, opts.effectiveConfidence) as Array<{
+      memory_id: number; age_days: number; effective_confidence: number
+    }>
+    return rows.map(r => ({
+      memoryId: r.memory_id,
+      ageDays: r.age_days,
+      effectiveConfidence: r.effective_confidence,
+    }))
+  }
+
+  /** Phase 4d: fetch a batch of memories with everything the compression pipeline
+   *  needs to plan a transition — current level / access / age / effective confidence
+   *  plus the owning session's summary_text / intent_text for content rewrite.
+   *
+   *  LEFT JOIN sessions so session-backed memories whose session row was deleted
+   *  (manual scrub of ~/.claude) still surface; the pipeline detects the NULL
+   *  summary and falls back to syntactic truncation, matching manual memories. */
+  getCompressionCandidates(limit: number): CompressionCandidate[] {
+    // Pre-filter by age >= 7d (the earliest L0→L1 gate). Anything younger cannot
+    // possibly transition, so scanning it wastes I/O. The Javascript policy in
+    // planTransition() stays authoritative over the per-level gates.
+    const rows = this.db.prepare(`
+      SELECT
+        m.id, m.session_id, m.content, m.compression_level, m.access_count,
+        (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) AS age_days,
+        (m.confidence * exp(
+          -0.6931471805599453 *
+          (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) /
+          (7.0 + 7.0 * MIN(m.access_count, 4))
+        )) AS effective_confidence,
+        s.summary_text, s.intent_text
+      FROM memories m
+      LEFT JOIN sessions s ON m.session_id = s.id
+      WHERE (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) >= 7
+      ORDER BY m.id ASC
+      LIMIT ?
+    `).all(limit) as CompressionCandidateRow[]
+    return rows.map(r => ({
+      id: r.id,
+      sessionId: r.session_id,
+      content: r.content,
+      compressionLevel: r.compression_level,
+      accessCount: r.access_count,
+      ageDays: r.age_days,
+      effectiveConfidence: r.effective_confidence ?? 0,
+      summaryText: r.summary_text,
+      intentText: r.intent_text,
+    }))
   }
 
   // ── Knowledge Map / Topics (Phase 3a) ──
