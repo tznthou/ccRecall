@@ -5,6 +5,7 @@ import { Database } from './database.js'
 import { scanProjects, scanSubagents } from './scanner.js'
 import { parseSession } from './parser.js'
 import { summarizeSession } from './summarizer.js'
+import { extractFromSession } from './topic-extractor.js'
 
 export type ProgressCallback = (status: IndexerStatus) => void
 
@@ -175,6 +176,13 @@ export async function runIndexer(
       sessionFiles,
       messages: toMessageInputs(messages),
     })
+
+    // Phase 3c: 抽 topics 寫入 session_topics（main session only，subagent 後段處理不動）
+    const session = db.getSessionById(s.sessionId)
+    if (session) {
+      const topics = extractFromSession(session)
+      db.saveSessionTopics(s.sessionId, s.projectId, topics)
+    }
   }
 
   // 4. SUBAGENT SCANNING — 對有變動的 session，掃描 subagents/
@@ -248,6 +256,7 @@ export async function runIndexer(
   // 5. FINALIZE — 更新所有 project 統計（stale cleanup 可能影響任何 project）
   for (const project of projects) {
     db.updateProjectStats(project.projectId)
+    db.rebuildKnowledgeMap(project.projectId)
   }
 
   onProgress?.({ phase: 'done', progress: 100, total, current: total })

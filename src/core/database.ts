@@ -1,7 +1,7 @@
 import BetterSqlite3 from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import type { Project, SessionMeta, Message, MessageContext, SearchPage, SearchOptions, SessionSearchPage, SessionTokenStats, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType } from './types.js'
+import type { Project, SessionMeta, Message, MessageContext, SearchPage, SearchOptions, SessionSearchPage, SessionTokenStats, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint } from './types.js'
 
 /** 寫入 memories 時使用的參數型別 */
 export interface MemoryInput {
@@ -479,6 +479,48 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 17,
+    description: 'Phase 3a — knowledge_map + session_topics + memory_topics + session_checkpoints',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_map (
+          topic_key     TEXT NOT NULL,
+          project_id    TEXT NOT NULL REFERENCES projects(id),
+          mention_count INTEGER DEFAULT 0,
+          last_touched  TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (topic_key, project_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS session_topics (
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          topic_key  TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          PRIMARY KEY (session_id, topic_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_topics (
+          memory_id  INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+          topic_key  TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          PRIMARY KEY (memory_id, topic_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS session_checkpoints (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          project_id    TEXT NOT NULL,
+          snapshot_text TEXT NOT NULL,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_map_project ON knowledge_map(project_id, last_touched DESC);
+        CREATE INDEX IF NOT EXISTS idx_session_topics_topic  ON session_topics(topic_key, project_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_topics_topic   ON memory_topics(topic_key, project_id);
+        CREATE INDEX IF NOT EXISTS idx_checkpoints_session   ON session_checkpoints(session_id, created_at DESC);
+      `)
+    },
+  },
 ]
 
 /** DB SELECT messages 的原始行型別 */
@@ -548,6 +590,11 @@ export class Database {
   /** ⚠️ 測試專用：接受任意 SQL，禁止接到 IPC handler */
   rawAll<T>(sql: string): T[] {
     return this.db.prepare(sql).all() as T[]
+  }
+
+  /** ⚠️ 測試專用：執行 DDL/DML，禁止接到 IPC handler */
+  rawExec(sql: string): void {
+    this.db.exec(sql)
   }
 
   private initSchema(): void {
@@ -1389,5 +1436,213 @@ export class Database {
   getMemoryCount(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS c FROM memories').get() as { c: number }
     return row.c
+  }
+
+  // ── Knowledge Map / Topics (Phase 3a) ──
+
+  saveSessionTopics(sessionId: string, projectId: string, topicKeys: string[]): void {
+    const run = this.db.transaction((keys: string[]) => {
+      this.db.prepare('DELETE FROM session_topics WHERE session_id = ?').run(sessionId)
+      if (keys.length === 0) return
+      const stmt = this.db.prepare(
+        'INSERT INTO session_topics (session_id, topic_key, project_id) VALUES (?, ?, ?)',
+      )
+      for (const k of keys) stmt.run(sessionId, k, projectId)
+    })
+    run(topicKeys)
+  }
+
+  saveMemoryTopics(memoryId: number, projectId: string, topicKeys: string[]): void {
+    const run = this.db.transaction((keys: string[]) => {
+      this.db.prepare('DELETE FROM memory_topics WHERE memory_id = ?').run(memoryId)
+      if (keys.length === 0) return
+      const stmt = this.db.prepare(
+        'INSERT INTO memory_topics (memory_id, topic_key, project_id) VALUES (?, ?, ?)',
+      )
+      for (const k of keys) stmt.run(memoryId, k, projectId)
+    })
+    run(topicKeys)
+  }
+
+  /** Full rebuild of knowledge_map for a project (aggregate from session_topics + memory_topics, exclude subagents) */
+  rebuildKnowledgeMap(projectId: string): void {
+    const run = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM knowledge_map WHERE project_id = ?').run(projectId)
+      this.db.prepare(`
+        INSERT INTO knowledge_map (topic_key, project_id, mention_count, last_touched)
+        SELECT topic_key, project_id, COUNT(*) AS mention_count, MAX(touched_at) AS last_touched
+        FROM (
+          SELECT st.topic_key, st.project_id,
+                 COALESCE(s.ended_at, s.started_at, datetime('now')) AS touched_at
+          FROM session_topics st
+          JOIN sessions s ON s.id = st.session_id
+          WHERE st.project_id = ?
+            AND s.id ${Database.EXCLUDE_SUBAGENTS}
+          UNION ALL
+          SELECT mt.topic_key, mt.project_id,
+                 COALESCE(m.created_at, datetime('now')) AS touched_at
+          FROM memory_topics mt
+          JOIN memories m ON m.id = mt.memory_id
+          WHERE mt.project_id = ?
+            AND (m.session_id IS NULL OR m.session_id ${Database.EXCLUDE_SUBAGENTS})
+        )
+        GROUP BY topic_key, project_id
+      `).run(projectId, projectId)
+    })
+    run()
+  }
+
+  getKnowledgeMap(
+    projectId: string,
+    opts: { limit?: number; sortBy?: 'mention' | 'recent' | 'stale' } = {},
+  ): Topic[] {
+    const { limit = 50, sortBy = 'mention' } = opts
+    const cappedLimit = Math.min(limit, 500)
+    const order = sortBy === 'mention'
+      ? 'mention_count DESC, last_touched DESC'
+      : sortBy === 'recent'
+        ? 'last_touched DESC'
+        : 'last_touched ASC'
+    const rows = this.db.prepare(`
+      SELECT topic_key, project_id, mention_count, last_touched
+      FROM knowledge_map
+      WHERE project_id = ?
+      ORDER BY ${order}
+      LIMIT ?
+    `).all(projectId, cappedLimit) as Array<{
+      topic_key: string; project_id: string; mention_count: number; last_touched: string
+    }>
+    return rows.map(r => ({
+      topicKey: r.topic_key,
+      projectId: r.project_id,
+      mentionCount: r.mention_count,
+      lastTouched: r.last_touched,
+    }))
+  }
+
+  getMemoriesByTopics(projectId: string, topicKeys: string[], limit: number): Memory[] {
+    if (topicKeys.length === 0) return []
+    const cappedLimit = Math.min(limit, 100)
+    const placeholders = topicKeys.map(() => '?').join(',')
+    const rows = this.db.prepare(`
+      SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+      FROM memory_topics mt
+      JOIN memories m ON m.id = mt.memory_id
+      WHERE mt.project_id = ?
+        AND mt.topic_key IN (${placeholders})
+      ORDER BY m.confidence DESC, m.id DESC
+      LIMIT ?
+    `).all(projectId, ...topicKeys, cappedLimit) as MemoryRow[]
+    return rows.map(mapMemoryRow)
+  }
+
+  getTopicCount(projectId?: string): number {
+    const row = projectId
+      ? this.db.prepare('SELECT COUNT(*) AS c FROM knowledge_map WHERE project_id = ?').get(projectId) as { c: number }
+      : this.db.prepare('SELECT COUNT(*) AS c FROM knowledge_map').get() as { c: number }
+    return row.c
+  }
+
+  getSessionTopicKeys(sessionId: string): string[] {
+    const rows = this.db.prepare(
+      'SELECT topic_key FROM session_topics WHERE session_id = ? ORDER BY topic_key',
+    ).all(sessionId) as Array<{ topic_key: string }>
+    return rows.map(r => r.topic_key)
+  }
+
+  getTopic(topicKey: string, projectId: string): Topic | null {
+    const row = this.db.prepare(`
+      SELECT topic_key, project_id, mention_count, last_touched
+      FROM knowledge_map
+      WHERE topic_key = ? AND project_id = ?
+    `).get(topicKey, projectId) as
+      | { topic_key: string; project_id: string; mention_count: number; last_touched: string }
+      | undefined
+    if (!row) return null
+    return {
+      topicKey: row.topic_key,
+      projectId: row.project_id,
+      mentionCount: row.mention_count,
+      lastTouched: row.last_touched,
+    }
+  }
+
+  /** 共現 topics（與目標共享 session 或 memory），按共現次數排序 */
+  getRelatedTopics(topicKey: string, projectId: string, limit: number): string[] {
+    const cappedLimit = Math.min(limit, 50)
+    const rows = this.db.prepare(`
+      SELECT k, COUNT(*) AS c FROM (
+        SELECT st2.topic_key AS k
+        FROM session_topics st1
+        JOIN session_topics st2 ON st1.session_id = st2.session_id AND st2.topic_key != st1.topic_key
+        WHERE st1.topic_key = ? AND st1.project_id = ? AND st2.project_id = ?
+        UNION ALL
+        SELECT mt2.topic_key AS k
+        FROM memory_topics mt1
+        JOIN memory_topics mt2 ON mt1.memory_id = mt2.memory_id AND mt2.topic_key != mt1.topic_key
+        WHERE mt1.topic_key = ? AND mt1.project_id = ? AND mt2.project_id = ?
+      )
+      GROUP BY k ORDER BY c DESC, k ASC LIMIT ?
+    `).all(topicKey, projectId, projectId, topicKey, projectId, projectId, cappedLimit) as Array<{ k: string; c: number }>
+    return rows.map(r => r.k)
+  }
+
+  getKnowledgeMapCounts(projectId: string): {
+    totalTopics: number; totalMemories: number; totalSessions: number
+  } {
+    const topics = this.db.prepare('SELECT COUNT(*) AS c FROM knowledge_map WHERE project_id = ?').get(projectId) as { c: number }
+    const mems = this.db.prepare(`
+      SELECT COUNT(*) AS c FROM memories m
+      JOIN sessions s ON s.id = m.session_id
+      WHERE s.project_id = ? AND s.id ${Database.EXCLUDE_SUBAGENTS}
+    `).get(projectId) as { c: number }
+    const sess = this.db.prepare(`
+      SELECT COUNT(*) AS c FROM sessions WHERE project_id = ? AND id ${Database.EXCLUDE_SUBAGENTS}
+    `).get(projectId) as { c: number }
+    return { totalTopics: topics.c, totalMemories: mems.c, totalSessions: sess.c }
+  }
+
+  // ── Session Checkpoints (Phase 3d) ──
+
+  saveCheckpoint(sessionId: string, projectId: string, snapshotText: string): number {
+    const info = this.db.prepare(`
+      INSERT INTO session_checkpoints (session_id, project_id, snapshot_text)
+      VALUES (?, ?, ?)
+    `).run(sessionId, projectId, snapshotText)
+    return Number(info.lastInsertRowid)
+  }
+
+  getCheckpointById(id: number): SessionCheckpoint | null {
+    const row = this.db.prepare(`
+      SELECT id, session_id, project_id, snapshot_text, created_at
+      FROM session_checkpoints WHERE id = ?
+    `).get(id) as
+      | { id: number; session_id: string; project_id: string; snapshot_text: string; created_at: string }
+      | undefined
+    if (!row) return null
+    return {
+      id: row.id,
+      sessionId: row.session_id,
+      projectId: row.project_id,
+      snapshotText: row.snapshot_text,
+      createdAt: row.created_at,
+    }
+  }
+
+  getCheckpointsBySessionId(sessionId: string): SessionCheckpoint[] {
+    const rows = this.db.prepare(`
+      SELECT id, session_id, project_id, snapshot_text, created_at
+      FROM session_checkpoints WHERE session_id = ?
+      ORDER BY created_at DESC, id DESC
+    `).all(sessionId) as Array<{
+      id: number; session_id: string; project_id: string; snapshot_text: string; created_at: string
+    }>
+    return rows.map(r => ({
+      id: r.id,
+      sessionId: r.session_id,
+      projectId: r.project_id,
+      snapshotText: r.snapshot_text,
+      createdAt: r.created_at,
+    }))
   }
 }

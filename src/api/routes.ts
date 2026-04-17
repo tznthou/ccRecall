@@ -136,7 +136,7 @@ export function createRequestHandler(db: Database) {
         dbPath: '', // TODO: expose from Database
         sessionCount: db.getMainSessionCount(),
         memoryCount: db.getMemoryCount(),
-        topicCount: 0, // Phase 3
+        topicCount: 0, // Phase 3d
         uptime: Math.floor((Date.now() - startTime) / 1000),
       }
       sendJson(res, 200, result)
@@ -178,21 +178,6 @@ export function createRequestHandler(db: Database) {
       return
     }
 
-    // GET /metacognition/check?topic=...
-    if (req.method === 'GET' && path === '/metacognition/check') {
-      const topic = url.searchParams.get('topic') ?? ''
-      // TODO: integrate with knowledge_map
-      sendJson(res, 200, {
-        topic,
-        depth: 'none',
-        confidence: 0,
-        sessionCount: 0,
-        lastTouched: null,
-        summary: null,
-      })
-      return
-    }
-
     // POST /memory/save
     if (req.method === 'POST' && path === '/memory/save') {
       if (!isLoopbackOrigin(req.headers.origin)) {
@@ -224,17 +209,6 @@ export function createRequestHandler(db: Database) {
       }
       const id = db.saveMemory(v)
       sendJson(res, 200, { ok: true, id })
-      return
-    }
-
-    // POST /session/checkpoint
-    if (req.method === 'POST' && path === '/session/checkpoint') {
-      if (!isLoopbackOrigin(req.headers.origin)) {
-        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
-        return
-      }
-      // TODO: integrate with checkpoint pipeline (Phase 2)
-      sendJson(res, 200, { ok: true, memoriesSaved: 0, topicsUpdated: 0 })
       return
     }
 
@@ -299,7 +273,14 @@ export function createRequestHandler(db: Database) {
 
       const savedIds: number[] = []
       if (!v.dryRun) {
-        savedIds.push(db.saveMemory(candidate))
+        const memoryId = db.saveMemory(candidate)
+        savedIds.push(memoryId)
+        // Phase 3c: 新 memory 繼承 session topics，然後 rebuild knowledge_map
+        const sessionTopics = db.getSessionTopicKeys(session.id)
+        if (sessionTopics.length > 0) {
+          db.saveMemoryTopics(memoryId, session.projectId, sessionTopics)
+        }
+        db.rebuildKnowledgeMap(session.projectId)
       }
       sendJson(res, 200, {
         ok: true,

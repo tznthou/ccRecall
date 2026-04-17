@@ -288,21 +288,31 @@ export interface Memory {
   createdAt: string
 }
 
-// ── ccRecall 新增：元認知型別 ──
+// ── ccRecall 新增：元認知型別（Phase 3） ──
 
-/** 知識深度 */
+/** 知識深度（由 mention_count 衍生：>=5 deep, >=2 medium, else shallow） */
 export type KnowledgeDepth = 'deep' | 'medium' | 'shallow' | 'none'
 
-/** 知識地圖條目 */
-export interface KnowledgeEntry {
-  topic: string
+/** knowledge_map 條目（DB row） */
+export interface Topic {
+  topicKey: string
+  projectId: string
+  mentionCount: number
+  lastTouched: string
+}
+
+/** knowledge_map 查詢用（含衍生 depth） */
+export interface TopicWithDepth extends Topic {
   depth: KnowledgeDepth
-  confidence: number
-  sessionCount: number
-  lastSessionId: string | null
-  lastTouched: string | null
-  summary: string | null
-  relatedTopics: string[]
+}
+
+/** session 中途快照 */
+export interface SessionCheckpoint {
+  id: number
+  sessionId: string
+  projectId: string
+  snapshotText: string
+  createdAt: string
 }
 
 // ── ccRecall 新增：API 回應型別 ──
@@ -325,21 +335,34 @@ export interface SessionContextResult {
   filesTouched: string[]
 }
 
-/** /metacognition/check 回應 */
-export interface MetacognitionResult {
-  topic: string
+/** /metacognition/check summary 模式回應 */
+export interface MetacognitionSummary {
+  projectId: string
+  topTopics: TopicWithDepth[]
+  recentTopics: TopicWithDepth[]
+  staleTopics: TopicWithDepth[]
+  counts: {
+    totalTopics: number
+    totalMemories: number
+    totalSessions: number
+  }
+}
+
+/** /metacognition/check detail 模式回應 */
+export interface TopicDetail {
+  topicKey: string
+  projectId: string
+  mentionCount: number
+  lastTouched: string
   depth: KnowledgeDepth
-  confidence: number
-  sessionCount: number
-  lastTouched: string | null
-  summary: string | null
+  memories: Memory[]
+  relatedTopics: string[]
 }
 
 /** /session/checkpoint 回應 */
 export interface CheckpointResult {
   ok: boolean
-  memoriesSaved: number
-  topicsUpdated: number
+  checkpointId: number
 }
 
 /** /health 回應 */

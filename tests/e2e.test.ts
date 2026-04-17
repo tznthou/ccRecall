@@ -189,4 +189,34 @@ describe('E2E: index → search → HTTP', () => {
     const { body } = await fetch(`http://127.0.0.1:${port}/health`)
     expect((body as { memoryCount: number }).memoryCount).toBe(2)
   })
+
+  it('Phase 3c: indexer populates knowledge_map from session topics', () => {
+    const topics = db.rawAll<{ topic_key: string; mention_count: number }>(
+      'SELECT topic_key, mention_count FROM knowledge_map ORDER BY topic_key',
+    )
+    expect(topics.length).toBeGreaterThan(0)
+    // sample session edits /src/login.ts → basename login.ts → stem "login"
+    const loginTopic = topics.find(t => t.topic_key === 'login')
+    expect(loginTopic).toBeTruthy()
+  })
+
+  it('Phase 3c: POST /session/end harvest inherits session topics into memory_topics', async () => {
+    const sessions = db.rawAll<{ id: string }>('SELECT id FROM sessions LIMIT 1')
+    const sessionId = sessions[0].id
+    const sessionTopicsBefore = db.getSessionTopicKeys(sessionId)
+    expect(sessionTopicsBefore.length).toBeGreaterThan(0)
+
+    const { status, body } = await postJson(
+      `http://127.0.0.1:${port}/session/end`,
+      { sessionId },
+    )
+    expect(status).toBe(200)
+    const savedIds = (body as { memoriesSaved: number[] }).memoriesSaved
+    expect(savedIds.length).toBe(1)
+
+    const memTopics = db.rawAll<{ topic_key: string }>(
+      `SELECT topic_key FROM memory_topics WHERE memory_id = ${savedIds[0]} ORDER BY topic_key`,
+    ).map(r => r.topic_key)
+    expect(memTopics).toEqual(sessionTopicsBefore)
+  })
 })
