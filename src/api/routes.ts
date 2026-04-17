@@ -202,8 +202,9 @@ export function createRequestHandler(db: Database) {
 
       const rows = db.queryMemories(q, limit, project)
       // Phase 4c: touch surfaced memories so their access_count and last_accessed
-      // feed into the decay formula at next query time.
-      if (rows.length > 0) memoryService.touch(rows.map(m => m.id))
+      // feed into the decay formula at next query time. MemoryService.touch
+      // noops on empty input, no need to guard here.
+      memoryService.touch(rows.map(m => m.id))
       const memories = rows.map(m => ({
         content: m.content,
         source: memorySource(m),

@@ -45,8 +45,8 @@ export function recallQueryHandler(
   try {
     const memories = db.queryMemories(args.query, args.limit ?? 10)
     // Phase 4c: touch returned memories so access_count reflects real usage,
-    // extending their half-life under the decay formula.
-    if (memories.length > 0) memoryService.touch(memories.map(m => m.id))
+    // extending their half-life under the decay formula. touch noops on [].
+    memoryService.touch(memories.map(m => m.id))
     return textResult(formatMemories(memories, args.query))
   } catch (err) {
     return textError('Error querying memories', err)
@@ -159,10 +159,9 @@ export function recallContextHandler(
     // Phase 4c: gather all memory ids surfaced (clusters + fallback) and touch once.
     // MemoryService.touch dedupes internally, so a memory appearing in multiple
     // clusters still only bumps access_count by 1 per request.
-    const surfacedIds: number[] = []
-    for (const c of clusters) for (const m of c.memories) surfacedIds.push(m.id)
-    if (fallback) for (const m of fallback) surfacedIds.push(m.id)
-    if (surfacedIds.length > 0) memoryService.touch(surfacedIds)
+    const clusterIds = clusters.flatMap(c => c.memories.map(m => m.id))
+    const fallbackIds = fallback?.map(m => m.id) ?? []
+    memoryService.touch([...clusterIds, ...fallbackIds])
 
     return textResult(formatContextResult(clusters, unmatched, fallback, args.keywords))
   } catch (err) {

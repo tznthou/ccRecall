@@ -94,7 +94,7 @@ describe('saveMemory — project_id denormalize', () => {
   })
 })
 
-describe('queryMemories — COALESCE(s.project_id, m.project_id) scope', () => {
+describe('queryMemories — explicit scope predicate (session-backed vs manual)', () => {
   beforeEach(() => {
     db.upsertProject('proj-A', 'A')
     db.upsertProject('proj-B', 'B')
