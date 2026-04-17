@@ -131,6 +131,8 @@ type CheckpointBody = {
   snapshot?: unknown
 }
 
+const SNAPSHOT_MAX_BYTES = 64 * 1024
+
 function validateCheckpointBody(
   raw: unknown,
 ): { sessionId: string; snapshot: string } | { error: string } {
@@ -141,6 +143,9 @@ function validateCheckpointBody(
   }
   if (typeof b.snapshot !== 'string' || b.snapshot.trim() === '') {
     return { error: 'snapshot must be non-empty string' }
+  }
+  if (Buffer.byteLength(b.snapshot, 'utf8') > SNAPSHOT_MAX_BYTES) {
+    return { error: `snapshot must be <= ${SNAPSHOT_MAX_BYTES} bytes` }
   }
   return { sessionId: b.sessionId, snapshot: b.snapshot }
 }
@@ -324,6 +329,11 @@ export function createRequestHandler(db: Database) {
 
     // GET /metacognition/check?projectId=X[&topic=Y][&limit=N]
     if (req.method === 'GET' && path === '/metacognition/check') {
+      // detail mode returns memory content; loopback gate matches POST mutation endpoints
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
       const projectId = url.searchParams.get('projectId')
       if (!projectId) {
         sendJson(res, 400, { error: 'projectId query param required' })

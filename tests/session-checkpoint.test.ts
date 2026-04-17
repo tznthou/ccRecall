@@ -99,6 +99,16 @@ describe('POST /session/checkpoint', () => {
     expect(status).toBe(403)
   })
 
+  it('rejects snapshot larger than 64 KB', async () => {
+    const huge = 'x'.repeat(65 * 1024) // 65 KB > 64 KB cap
+    const { status, body } = await postJson(
+      `http://127.0.0.1:${port}/session/checkpoint`,
+      { sessionId: 'sess-1', snapshot: huge },
+    )
+    expect(status).toBe(400)
+    expect((body as { error: string }).error).toMatch(/snapshot must be <= 65536 bytes/)
+  })
+
   it('rejects invalid JSON', async () => {
     const u = new URL(`http://127.0.0.1:${port}/session/checkpoint`)
     const response = await new Promise<{ status: number }>((resolve, reject) => {

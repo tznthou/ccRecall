@@ -130,4 +130,19 @@ describe('GET /metacognition/check', () => {
     const { body } = await fetch(`http://127.0.0.1:${port}/metacognition/check?projectId=proj-b`)
     expect((body as { topTopics: unknown[] }).topTopics).toEqual([])
   })
+
+  it('rejects cross-origin requests with 403', async () => {
+    const response = await new Promise<{ status: number }>((resolve, reject) => {
+      const req = http.request({
+        hostname: '127.0.0.1', port, path: '/metacognition/check?projectId=proj-a',
+        method: 'GET', headers: { Origin: 'https://evil.example.com' },
+      }, (res) => {
+        res.on('data', () => {})
+        res.on('end', () => resolve({ status: res.statusCode! }))
+        res.on('error', reject)
+      })
+      req.end()
+    })
+    expect(response.status).toBe(403)
+  })
 })
