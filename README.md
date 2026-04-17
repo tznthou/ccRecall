@@ -1,6 +1,6 @@
 # ccRecall
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8+-3178C6.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933.svg)](https://nodejs.org/)
 [![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57.svg)](https://www.sqlite.org/)
@@ -193,7 +193,9 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 
 ## License
 
-This project is licensed under [MIT](LICENSE).
+Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE).
+
+Copyright 2026 tznthou
 
 ---
 
