@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import path from 'node:path'
 import os from 'node:os'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'

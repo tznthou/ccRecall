@@ -1,9 +1,9 @@
 import http from 'node:http'
 import type { Database } from '../core/database.js'
-import { createRequestHandler } from './routes.js'
+import { createRequestHandler, type RequestHandlerOptions } from './routes.js'
 
-export function createServer(db: Database): http.Server {
-  const handleRequest = createRequestHandler(db)
+export function createServer(db: Database, opts: RequestHandlerOptions = {}): http.Server {
+  const handleRequest = createRequestHandler(db, opts)
 
   return http.createServer(async (req, res) => {
     try {

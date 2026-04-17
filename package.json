@@ -4,10 +4,21 @@
   "description": "AI memory service for Claude Code — on-demand context injection with metacognition",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "ccrecall": "./dist/index.js",
+    "ccrecall-mcp": "./dist/mcp/server.js"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "README.md",
+    "README_ZH.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "mcp": "tsx src/mcp/server.ts",
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js dist/mcp/server.js",
     "start": "node dist/index.js",
     "test": "vitest run",
     "lint": "eslint . --fix",
@@ -27,6 +38,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^11.9.1",
+    "chokidar": "^5.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

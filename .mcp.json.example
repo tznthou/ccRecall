@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ccrecall": {
+      "command": "ccrecall-mcp",
+      "env": {
+        "CCRECALL_DB_PATH": "$HOME/.ccrecall/ccrecall.db"
+      }
+    }
+  }
+}

@@ -158,7 +158,16 @@ function validateCheckpointBody(
 
 const startTime = Date.now()
 
-export function createRequestHandler(db: Database) {
+export interface RequestHandlerOptions {
+  /** Called when /session/end sees a missing session — typically `() => runIndexer(db)`
+   *  — so a fresh-session hook can harvest after a forced reindex retry. */
+  rescueReindex?: () => Promise<void>
+}
+
+export function createRequestHandler(
+  db: Database,
+  opts: RequestHandlerOptions = {},
+) {
   const memoryService = new MemoryService(db)
   return async function handleRequest(
     req: http.IncomingMessage,
@@ -291,7 +300,20 @@ export function createRequestHandler(db: Database) {
         sendJson(res, 400, v)
         return
       }
-      const session = db.getSessionById(v.sessionId)
+      let session = db.getSessionById(v.sessionId)
+      if (!session && opts.rescueReindex) {
+        // Fresh-session race: hook fires before the daemon has indexed the
+        // JSONL. Run one reindex and retry — watcher will catch subsequent
+        // changes but this first harvest can't wait for the next debounce.
+        try {
+          await opts.rescueReindex()
+        } catch (err) {
+          // eslint-disable-next-line no-control-regex
+          const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
+          console.warn('[session-end] rescue reindex failed:', safeMsg)
+        }
+        session = db.getSessionById(v.sessionId)
+      }
       if (!session) {
         sendJson(res, 404, { error: 'session not found' })
         return

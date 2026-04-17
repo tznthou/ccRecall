@@ -46,7 +46,7 @@ function postSessionEnd(sessionId) {
           const parsed = JSON.parse(body)
           if (Array.isArray(parsed.memoriesSaved) && parsed.memoriesSaved.length === 0) {
             const reason = sanitizeForLog(String(parsed.reason ?? 'unknown'))
-            console.error(`[ccRecall] harvest yielded 0 memories (reason: ${reason}). Fresh sessions may not be indexed yet; Phase 4 watch mode will address this.`)
+            console.error(`[ccRecall] harvest yielded 0 memories (reason: ${reason}).`)
           }
         } catch {
           // response wasn't JSON; already 200 so treat as success

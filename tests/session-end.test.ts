@@ -163,6 +163,90 @@ describe('POST /session/end', () => {
 
 })
 
+describe('POST /session/end — rescue reindex (fresh session race)', () => {
+  let tmpDir: string
+  let db: Database
+  let server: http.Server
+  let port: number
+  const freshSessionId = 'fresh-session-rescue-001'
+
+  const sampleSession = [
+    { type: 'user', uuid: 'r1', timestamp: '2026-04-17T10:00:00Z', message: { role: 'user', content: 'Deploy to staging' } },
+    { type: 'assistant', uuid: 'r2', timestamp: '2026-04-17T10:01:00Z', message: { role: 'assistant', content: 'Deploy complete.' } },
+  ]
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-rescue-'))
+    const projectsDir = path.join(tmpDir, 'projects')
+    const projectDir = path.join(projectsDir, '-test-rescue')
+    await mkdir(projectDir, { recursive: true })
+    await writeFile(
+      path.join(projectDir, `${freshSessionId}.jsonl`),
+      sampleSession.map(l => JSON.stringify(l)).join('\n'),
+    )
+
+    db = new Database(path.join(tmpDir, 'test.db'))
+    // Intentionally skip runIndexer here — simulate the race where the hook
+    // fires before the daemon has indexed the fresh JSONL.
+
+    server = createServer(db, {
+      rescueReindex: () => runIndexer(db, undefined, projectsDir),
+    })
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        port = (server.address() as { port: number }).port
+        resolve()
+      })
+    })
+  })
+
+  afterEach(async () => {
+    server.close()
+    db.close()
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('rescues a fresh session: reindexes on miss then harvests', async () => {
+    expect(db.getSessionById(freshSessionId)).toBeNull()
+
+    const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId: freshSessionId,
+    })
+    expect(status).toBe(200)
+    const b = body as { ok: boolean; memoriesSaved: number[] }
+    expect(b.ok).toBe(true)
+    expect(b.memoriesSaved).toHaveLength(1)
+    expect(db.getSessionById(freshSessionId)).not.toBeNull()
+  })
+
+  it('still returns 404 if rescue cannot locate the session', async () => {
+    const { status } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId: 'does-not-exist-anywhere',
+    })
+    expect(status).toBe(404)
+  })
+
+  it('rescue failure does not crash: returns 404 if session still missing', async () => {
+    server.close()
+    await new Promise(resolve => server.on('close', resolve))
+    // Replace server with one whose rescue throws — mimics indexer error.
+    server = createServer(db, {
+      rescueReindex: async () => { throw new Error('indexer failed') },
+    })
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        port = (server.address() as { port: number }).port
+        resolve()
+      })
+    })
+
+    const { status } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId: freshSessionId,
+    })
+    expect(status).toBe(404)
+  })
+})
+
 describe('session-end helpers (unit)', () => {
   const baseSession: SessionMeta = {
     id: 's1',
