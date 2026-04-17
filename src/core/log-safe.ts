@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** Strip control chars from an error message before logging.
  *  DB/indexer/FTS5/chokidar errors can embed memory content or user-supplied
  *  paths verbatim; newlines or ANSI escapes in those strings would corrupt log

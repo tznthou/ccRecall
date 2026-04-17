@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import * as z from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Database } from '../core/database.js'

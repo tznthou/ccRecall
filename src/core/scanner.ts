@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { readdir, stat, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'

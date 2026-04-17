@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { Database } from './database.js'
 import { scrubErrorMessage } from './log-safe.js'
 

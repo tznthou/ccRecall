@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import http from 'node:http'
 import { spawn } from 'node:child_process'

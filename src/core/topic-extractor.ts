@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** tag/filesTouched 欄位支援：SessionMeta 或 SessionSummary 都能傳入（結構化型別） */
 interface TopicSource {
   tags: string | null

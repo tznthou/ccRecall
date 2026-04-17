@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { Database, CompressionCandidate } from './database.js'
 import type { MemoryService } from './memory-service.js'
 import { scrubErrorMessage } from './log-safe.js'

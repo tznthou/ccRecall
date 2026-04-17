@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import http from 'node:http'
 import type { IndexSessionParams } from '../../src/core/database.js'
 

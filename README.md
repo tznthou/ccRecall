@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8+-3178C6.svg)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-22+-339933.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20--22-339933.svg)](https://nodejs.org/)
 [![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57.svg)](https://www.sqlite.org/)
 
 [中文版](README_ZH.md)
@@ -17,7 +17,7 @@ Every time you start a new Claude Code session, the AI forgets everything. The a
 
 CLAUDE.md and RESUME.md help, but they're static files you maintain by hand. ccRecall automates this: it reads your JSONL conversation logs, builds a searchable index, and serves relevant memories back to Claude Code through hooks and MCP tools. The AI remembers what it learned — you don't have to remind it.
 
-ccRecall is the "memory" counterpart to [ccRewind](https://github.com/user/ccRewind) (a conversation replay GUI). ccRewind lets humans look back at what happened; ccRecall lets the AI remember what happened.
+ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/ccRewind) (a conversation replay GUI). ccRewind lets humans look back at what happened; ccRecall lets the AI remember what happened.
 
 ---
 
@@ -29,7 +29,10 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/user/ccRew
 | **FTS5 full-text search** | Sub-100ms keyword search across all conversation history, fast enough for hook injection |
 | **Incremental indexing** | Only re-indexes sessions that changed (mtime diffing), handles resumed sessions via UUID dedup |
 | **Metacognition** | `knowledge_map` aggregates topic mentions from sessions + memories. Depth derived from mention count (shallow / medium / deep). Exposed via `/metacognition/check` and MCP `recall_context` |
-| **Forgetting curve** | Memories compress over time: raw → summary → one-liner → deleted. Confidence decays on unused memories |
+| **Forgetting curve** | Memories compress over time: raw → summary → one-liner → deleted. Confidence decays on unused memories. Background maintenance tick runs every 5 min |
+| **Watch mode** | chokidar-based JSONL watcher picks up new sessions within 2 s; periodic 10 min full-resync covers missed filesystem events |
+| **Rescue reindex** | `/session/end` retries a reindex on cache miss — no fresh-session race between the hook and the daemon |
+| **Auto-start (macOS)** | `ccrecall install-daemon` registers a LaunchAgent so the service stays up across reboots |
 | **Read-only** | Never modifies `~/.claude/` — only reads JSONL logs |
 
 ---
@@ -67,11 +70,12 @@ flowchart TB
 
 | Technology | Purpose | Notes |
 |------------|---------|-------|
-| Node.js 22 + TypeScript | Runtime | ES modules, strict mode |
+| Node.js 20–22 + TypeScript | Runtime | ES modules, strict mode |
 | better-sqlite3 | Database | Synchronous API, zero external deps |
 | FTS5 | Full-text search | Built into SQLite, unicode61 tokenizer |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
-| vitest | Testing | 273 tests across 15 files, integration-style |
+| chokidar | Filesystem watcher | Cross-platform JSONL change detection with 2 s debounce + single-flight |
+| vitest | Testing | 396 tests across 26 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
@@ -80,18 +84,18 @@ flowchart TB
 
 ### Prerequisites
 
-- Node.js 20+ (recommended: 22)
+- Node.js `>=20.0.0,<23.0.0`
 - pnpm
 
 ### Installation
 
 ```bash
-git clone https://github.com/user/ccRecall.git
+git clone https://github.com/tznthou/ccRecall.git
 cd ccRecall
 
 pnpm install
 
-# Start development server (auto-indexes on startup)
+# Start development server (auto-indexes on startup, watches ~/.claude/projects)
 pnpm dev
 ```
 
@@ -120,6 +124,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `/memory/context?session_id=...` | GET | Session context lookup | Stub |
 | `/metacognition/check?projectId=...[&topic=...]` | GET | Knowledge map: summary (top/recent/stale topics + counts) or topic detail (memories + related topics) | Live |
 | `/session/checkpoint` | POST | Mid-session snapshot into dedicated `session_checkpoints` table (not harvested as memory) | Live |
+| `/lint/warnings` | GET | Lint report: orphan (session deleted) + stale (low-confidence, long-idle) memory warnings | Live |
 
 ## MCP Tools
 
@@ -129,13 +134,54 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
 | `recall_save` | Store a new memory (type: decision / discovery / preference / pattern / feedback) |
 
-Expose them to Claude Code:
+Expose them to Claude Code. After `pnpm build`, the `ccrecall-mcp` bin is on
+the repo's `node_modules/.bin` path — point `claude mcp add` at it or at a
+global install:
 
 ```bash
+# Using the built bin (after pnpm build)
+claude mcp add ccrecall --scope user -- /absolute/path/to/ccRecall/dist/mcp/server.js
+
+# Or using tsx for development (no build step)
 claude mcp add ccrecall --scope user -- /absolute/path/to/ccRecall/node_modules/.bin/tsx /absolute/path/to/ccRecall/src/mcp/server.ts
 ```
 
+A ready-to-copy example lives at [.mcp.json.example](.mcp.json.example).
+
 See [hooks/README.md](hooks/README.md) for SessionStart / SessionEnd hook installation.
+
+---
+
+## Running as a service (macOS)
+
+ccRecall runs as a local HTTP daemon. To keep it up across reboots, register
+a per-user LaunchAgent:
+
+```bash
+pnpm build
+node dist/index.js install-daemon        # or `ccrecall install-daemon` if globally linked
+node dist/index.js install-daemon --dry-run   # preview plist without writing
+
+# verify
+launchctl list | grep ccrecall
+curl http://127.0.0.1:7749/health
+
+# remove
+node dist/index.js uninstall-daemon
+```
+
+The installer:
+- writes `~/Library/LaunchAgents/com.tznthou.ccrecall.plist`
+- routes logs to `~/Library/Logs/ccrecall/ccrecall.{out,err}.log`
+- propagates `CCRECALL_PORT` / `CCRECALL_DB_PATH` from the current shell into
+  the plist, so the LaunchAgent uses the same settings as your interactive run
+- refuses to touch a plist whose `Label` isn't ccRecall's (safety check)
+
+Full manual-install, troubleshooting, and uninstall docs:
+[docs/launchd.md](docs/launchd.md).
+
+Linux/Windows equivalents (systemd unit, Windows service) are planned for
+Phase 5. For now, run under `nohup` or your process manager of choice.
 
 ---
 
@@ -145,34 +191,48 @@ See [hooks/README.md](hooks/README.md) for SessionStart / SessionEnd hook instal
 ccRecall/
 ├── src/
 │   ├── core/
-│   │   ├── types.ts          # All type definitions
-│   │   ├── parser.ts          # JSONL conversation parser
-│   │   ├── scanner.ts         # File system scanner
-│   │   ├── summarizer.ts      # Rule-based session summarizer
-│   │   ├── database.ts        # SQLite + FTS5 (trimmed from ccRewind)
-│   │   ├── indexer.ts         # Indexing pipeline orchestrator
-│   │   └── index.ts           # Barrel exports
+│   │   ├── types.ts              # All type definitions
+│   │   ├── parser.ts             # JSONL conversation parser
+│   │   ├── scanner.ts            # File system scanner
+│   │   ├── summarizer.ts         # Rule-based session summarizer
+│   │   ├── topic-extractor.ts    # Rule-based topic extraction
+│   │   ├── database.ts           # SQLite + FTS5 (trimmed from ccRewind)
+│   │   ├── indexer.ts            # Indexing pipeline orchestrator
+│   │   ├── memory-service.ts     # Memory lifecycle (touch / delete / update)
+│   │   ├── compression.ts        # L0→L1→L2→delete state machine
+│   │   ├── lint.ts               # Orphan / stale memory detection
+│   │   ├── maintenance-coordinator.ts  # Background compression tick
+│   │   ├── watcher.ts            # chokidar JSONL watcher (Phase 4e)
+│   │   └── log-safe.ts           # scrubErrorMessage — log-injection defence
 │   ├── api/
-│   │   ├── server.ts          # HTTP server
-│   │   └── routes.ts          # Request routing + harvest flow
+│   │   ├── server.ts             # HTTP server
+│   │   └── routes.ts             # Request routing + rescue reindex
 │   ├── mcp/
-│   │   ├── server.ts          # MCP stdio server entry
-│   │   └── tools.ts           # recall_query + recall_context + recall_save
-│   ├── core/topic-extractor.ts # Rule-based topic extraction from session tags/files
-│   └── index.ts               # HTTP entry point
+│   │   ├── server.ts             # MCP stdio server entry (shebang bin)
+│   │   └── tools.ts              # recall_query + recall_context + recall_save
+│   ├── cli/
+│   │   └── daemon.ts             # install-daemon / uninstall-daemon (macOS)
+│   └── index.ts                  # HTTP entry point + subcommand dispatch
 ├── hooks/
-│   ├── session-start.mjs      # Inject memories on SessionStart (stdout)
-│   ├── session-end.mjs        # POST /session/end on SessionEnd
-│   └── README.md              # Hook installation guide
-├── tests/                     # 273 tests across parser / scanner /
-│   │                          # summarizer / database / indexer / e2e /
-│   │                          # memories / mcp / session-end /
-│   │                          # hooks-session-start / hooks-session-end /
-│   │                          # knowledge-map / topic-extractor /
-│   │                          # metacognition / session-checkpoint
-│   └── fixtures/              # Sample JSONL + shared test helpers
+│   ├── session-start.mjs         # Inject memories on SessionStart (stdout)
+│   ├── session-end.mjs           # POST /session/end on SessionEnd
+│   └── README.md                 # Hook installation guide
+├── docs/
+│   └── launchd.md                # macOS LaunchAgent install/troubleshoot
+├── tests/                        # 396 tests across 26 files (parser / scanner /
+│   │                             # summarizer / database / indexer / e2e /
+│   │                             # memories / mcp / session-end / compression /
+│   │                             # lint / watcher / bin-smoke / cli-daemon /
+│   │                             # migration-v18 / decay / maintenance-coordinator /
+│   │                             # memory-service / memory-project-scope / touch /
+│   │                             # hooks-session-start / hooks-session-end /
+│   │                             # knowledge-map / topic-extractor / metacognition /
+│   │                             # session-checkpoint)
+│   └── fixtures/                 # Sample JSONL + shared test helpers
+├── .mcp.json.example             # MCP client config template
+├── NOTICE / SECURITY.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
 └── .claude/
-    └── pi-research/           # Architecture research documents
+    └── pi-research/              # Architecture research documents
 ```
 
 ---

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Core module barrel exports
 export { parseSession, parseLine, parseContent, stripSystemXml } from './parser.js'
 export { scanProjects, scanSubagents, decodeProjectPath } from './scanner.js'

@@ -1,9 +1,15 @@
 node_modules/
 dist/
+coverage/
 *.db
 *.db-journal
 *.db-wal
 *.tsbuildinfo
+*.log
 .DS_Store
 .claude/
 .mcp.json
+.env
+.env.*
+*.key
+*.pem

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { ParsedLine, SessionSummary, OutcomeSignals, OutcomeStatus, FileOperation, SessionFileInput } from './types.js'
 
 /** 摘要引擎版本（每次規則改動時遞增，讓 backfill 可追蹤） */

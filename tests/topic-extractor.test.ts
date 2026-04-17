@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, it, expect } from 'vitest'
 import { extractFromSession, normalizeTopicKey } from '../src/core/topic-extractor'
 import type { SessionMeta } from '../src/core/types'

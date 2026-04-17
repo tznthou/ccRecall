@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFile, mkdtemp, rm, stat, access } from 'node:fs/promises'

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, it, expect } from 'vitest'
 import { summarizeSession, SUMMARY_VERSION, computeActiveTime } from '../src/core/summarizer'
 import type { ParsedLine } from '../src/core/types'

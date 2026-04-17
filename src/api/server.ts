@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import http from 'node:http'
 import type { Database } from '../core/database.js'
 import { createRequestHandler, type RequestHandlerOptions } from './routes.js'
