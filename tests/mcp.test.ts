@@ -4,7 +4,8 @@ import path from 'node:path'
 import os from 'node:os'
 import { Database } from '../src/core/database.js'
 import type { Memory } from '../src/core/types.js'
-import { recallQueryHandler, recallSaveHandler, formatMemories } from '../src/mcp/tools.js'
+import { recallQueryHandler, recallSaveHandler, formatMemories, recallContextHandler } from '../src/mcp/tools.js'
+import type { IndexSessionParams } from '../src/core/database.js'
 
 describe('MCP recall_query handler', () => {
   let tmpDir: string
@@ -143,5 +144,101 @@ describe('MCP recall_save handler', () => {
     const result = recallQueryHandler(db, { query: 'searchable' })
     expect(result.content[0].text).toContain('searchable via mcp tool')
     expect(result.content[0].text).toContain('[discovery]')
+  })
+})
+
+function sessionParams(o: Partial<IndexSessionParams> & { sessionId: string; projectId: string }): IndexSessionParams {
+  return {
+    projectDisplayName: 'test',
+    title: null,
+    messageCount: 0,
+    filePath: `/tmp/${o.sessionId}.jsonl`,
+    fileSize: 0,
+    fileMtime: '2026-04-17T00:00:00Z',
+    startedAt: '2026-04-17T00:00:00Z',
+    endedAt: '2026-04-17T01:00:00Z',
+    messages: [],
+    ...o,
+  }
+}
+
+describe('MCP recall_context handler', () => {
+  let tmpDir: string
+  let db: Database
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-mcp-ctx-'))
+    db = new Database(path.join(tmpDir, 'test.db'))
+    db.upsertProject('proj-a', 'Project A')
+    db.indexSession(sessionParams({ sessionId: 'sess-1', projectId: 'proj-a' }))
+    db.saveSessionTopics('sess-1', 'proj-a', ['typescript', 'mcp', 'sqlite'])
+    const m1 = db.saveMemory({ sessionId: 'sess-1', messageId: null, content: 'use vitest', type: 'decision', confidence: 0.9 })
+    const m2 = db.saveMemory({ sessionId: 'sess-1', messageId: null, content: 'prefer FTS5', type: 'pattern' })
+    db.saveMemoryTopics(m1, 'proj-a', ['typescript'])
+    db.saveMemoryTopics(m2, 'proj-a', ['sqlite'])
+    db.rebuildKnowledgeMap('proj-a')
+  })
+
+  afterEach(() => {
+    db.close()
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('returns clusters for matched topics', () => {
+    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['typescript', 'sqlite'] })
+    expect(r.isError).toBeUndefined()
+    expect(r.content[0].text).toContain('## Topic: typescript')
+    expect(r.content[0].text).toContain('## Topic: sqlite')
+    expect(r.content[0].text).toContain('use vitest')
+    expect(r.content[0].text).toContain('prefer FTS5')
+  })
+
+  it('shows depth label based on mention count', () => {
+    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['typescript'] })
+    // typescript: 1 session mention + 1 memory mention = 2 → medium
+    expect(r.content[0].text).toContain('medium,')
+  })
+
+  it('reports unmatched keywords', () => {
+    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['typescript', 'unknownxyz'] })
+    expect(r.content[0].text).toContain('## Topic: typescript')
+    expect(r.content[0].text).toContain('No topic match for: unknownxyz')
+  })
+
+  it('falls back to FTS when no topic matches', () => {
+    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['vitest'] })
+    // vitest 不是 topic，但 memory content 包含 "vitest"
+    expect(r.content[0].text).toContain('FTS fallback')
+    expect(r.content[0].text).toContain('use vitest')
+  })
+
+  it('returns empty-result message when nothing matches at all', () => {
+    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['absolutelyzzzzz'] })
+    expect(r.content[0].text).toContain('No relevant memories')
+  })
+
+  it('respects project isolation', () => {
+    db.upsertProject('proj-b', 'Project B')
+    const r = recallContextHandler(db, { projectId: 'proj-b', keywords: ['typescript'] })
+    // proj-b has no topics at all, no memories → should be empty or fallback empty
+    expect(r.content[0].text).toContain('No relevant memories')
+  })
+
+  it('normalizes keywords (e.g. TypeScript → typescript)', () => {
+    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['TypeScript'] })
+    expect(r.content[0].text).toContain('## Topic: typescript')
+  })
+
+  it('respects memoryLimit', () => {
+    // 先清掉原本的 memories 與 topics，避免干擾
+    db.rawExec("DELETE FROM memories; DELETE FROM memory_topics")
+    for (let i = 0; i < 10; i++) {
+      const mid = db.saveMemory({ sessionId: 'sess-1', messageId: null, content: `mem ${i} content`, type: 'decision' })
+      db.saveMemoryTopics(mid, 'proj-a', ['typescript'])
+    }
+    db.rebuildKnowledgeMap('proj-a')
+    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['typescript'], memoryLimit: 3 })
+    const memLines = r.content[0].text.split('\n').filter(l => l.startsWith('- ['))
+    expect(memLines.length).toBe(3)
   })
 })

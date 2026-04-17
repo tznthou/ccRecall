@@ -1,7 +1,8 @@
 import * as z from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Database } from '../core/database.js'
-import type { Memory, MemoryType } from '../core/types.js'
+import type { Memory, MemoryType, KnowledgeDepth } from '../core/types.js'
+import { normalizeTopicKey } from '../core/topic-extractor.js'
 
 const MEMORY_TYPES = ['decision', 'discovery', 'preference', 'pattern', 'feedback'] as const
 
@@ -54,6 +55,103 @@ const recallSaveInput = {
   confidence: z.number().min(0).max(1).optional().describe('Confidence 0-1 (default 1)'),
 }
 
+function depthLabel(mentionCount: number): KnowledgeDepth {
+  if (mentionCount >= 5) return 'deep'
+  if (mentionCount >= 2) return 'medium'
+  if (mentionCount >= 1) return 'shallow'
+  return 'none'
+}
+
+interface TopicCluster {
+  topic: string
+  depth: KnowledgeDepth
+  mentionCount: number
+  memories: Memory[]
+}
+
+export function formatContextResult(
+  clusters: TopicCluster[],
+  unmatchedKeywords: string[],
+  fallbackMemories: Memory[] | null,
+  keywords: string[],
+): string {
+  if (clusters.length === 0 && (!fallbackMemories || fallbackMemories.length === 0)) {
+    return `No relevant memories for: ${keywords.join(', ')}`
+  }
+  const parts: string[] = [`# Relevant memories for: ${keywords.join(', ')}`, '']
+  for (const c of clusters) {
+    parts.push(`## Topic: ${c.topic} (${c.depth}, ${c.mentionCount} mentions)`)
+    if (c.memories.length === 0) {
+      parts.push('(no memories linked yet)')
+    } else {
+      for (const m of c.memories) {
+        const conf = m.confidence !== 1 ? ` (conf ${m.confidence.toFixed(2)})` : ''
+        parts.push(`- [${m.type}]${conf} ${m.content}`)
+      }
+    }
+    parts.push('')
+  }
+  if (fallbackMemories && fallbackMemories.length > 0) {
+    parts.push('## FTS fallback (no topic match)')
+    for (const m of fallbackMemories) {
+      const conf = m.confidence !== 1 ? ` (conf ${m.confidence.toFixed(2)})` : ''
+      parts.push(`- [${m.type}]${conf} ${m.content}`)
+    }
+    parts.push('')
+  }
+  if (unmatchedKeywords.length > 0) {
+    parts.push(`(No topic match for: ${unmatchedKeywords.join(', ')})`)
+  }
+  return parts.join('\n').trimEnd()
+}
+
+const recallContextInput = {
+  projectId: z.string().min(1).describe('Project ID (derived from cwd, e.g. "-Users-foo-my-project")'),
+  keywords: z.array(z.string().min(1)).min(1).describe('Candidate topic keywords (e.g. ["typescript", "mcp"])'),
+  memoryLimit: z.number().int().positive().max(20).optional().describe('Max memories per topic (default 5)'),
+}
+
+export function recallContextHandler(
+  db: Database,
+  args: { projectId: string; keywords: string[]; memoryLimit?: number },
+): McpTextResult {
+  try {
+    const memoryLimit = args.memoryLimit ?? 5
+    const normalized = args.keywords
+      .map(k => ({ raw: k, key: normalizeTopicKey(k) }))
+      .filter((x): x is { raw: string; key: string } => x.key !== null)
+
+    const clusters: TopicCluster[] = []
+    const unmatched: string[] = []
+
+    for (const { raw, key } of normalized) {
+      const topic = db.getTopic(key, args.projectId)
+      if (!topic) {
+        unmatched.push(raw)
+        continue
+      }
+      const memories = db.getMemoriesByTopics(args.projectId, [key], memoryLimit)
+      clusters.push({
+        topic: key,
+        depth: depthLabel(topic.mentionCount),
+        mentionCount: topic.mentionCount,
+        memories,
+      })
+    }
+
+    // FTS fallback if no topic matched
+    let fallback: Memory[] | null = null
+    if (clusters.length === 0 && args.keywords.length > 0) {
+      const ftsQuery = args.keywords.join(' OR ')
+      fallback = db.queryMemories(ftsQuery, memoryLimit, args.projectId)
+    }
+
+    return textResult(formatContextResult(clusters, unmatched, fallback, args.keywords))
+  } catch (err) {
+    return textError('Error building context', err)
+  }
+}
+
 export function recallSaveHandler(
   db: Database,
   args: {
@@ -97,6 +195,30 @@ export function registerTools(server: McpServer, db: Database): void {
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     async (args) => recallQueryHandler(db, args),
+  )
+
+  server.registerTool(
+    'recall_context',
+    {
+      title: 'Get Topic-Clustered Memories',
+      description: [
+        'Retrieve memories clustered by topic (uses knowledge_map, not plain FTS).',
+        '',
+        'USE THIS WHEN:',
+        '- Starting work on a topic and want to see what you already know about it',
+        '- User asks "what do we know about X" / "what\'s our take on Y"',
+        '- You want memories grouped by theme, with knowledge depth signals',
+        '',
+        'vs recall_query:',
+        '- recall_query: raw FTS search, returns flat list',
+        '- recall_context: topic-aware, groups results, shows mention count + depth',
+        '',
+        'Returns: markdown with memory clusters by topic, plus FTS fallback if no topic match.',
+      ].join('\n'),
+      inputSchema: recallContextInput,
+      annotations: { readOnlyHint: true, idempotentHint: true },
+    },
+    async (args) => recallContextHandler(db, args),
   )
 
   server.registerTool(
