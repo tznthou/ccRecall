@@ -2,6 +2,7 @@ import * as z from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Database } from '../core/database.js'
 import type { Memory, MemoryType, KnowledgeDepth } from '../core/types.js'
+import { deriveDepth } from '../core/types.js'
 import { normalizeTopicKey } from '../core/topic-extractor.js'
 
 const MEMORY_TYPES = ['decision', 'discovery', 'preference', 'pattern', 'feedback'] as const
@@ -25,14 +26,14 @@ const recallQueryInput = {
   limit: z.number().int().positive().max(50).optional().describe('Max results (default 10, max 50)'),
 }
 
+function formatMemoryLine(m: Memory): string {
+  const conf = m.confidence !== 1 ? ` (conf ${m.confidence.toFixed(2)})` : ''
+  return `- [${m.type}]${conf} ${m.content}`
+}
+
 export function formatMemories(memories: Memory[], query: string): string {
   if (memories.length === 0) return `No memories found for: ${query}`
-  return memories
-    .map((m) => {
-      const conf = m.confidence !== 1 ? ` (conf ${m.confidence.toFixed(2)})` : ''
-      return `- [${m.type}]${conf} ${m.content}`
-    })
-    .join('\n')
+  return memories.map(formatMemoryLine).join('\n')
 }
 
 export function recallQueryHandler(
@@ -53,13 +54,6 @@ const recallSaveInput = {
   sessionId: z.string().nullable().optional().describe('Origin session ID (optional)'),
   messageId: z.string().nullable().optional().describe('Origin message ID (optional)'),
   confidence: z.number().min(0).max(1).optional().describe('Confidence 0-1 (default 1)'),
-}
-
-function depthLabel(mentionCount: number): KnowledgeDepth {
-  if (mentionCount >= 5) return 'deep'
-  if (mentionCount >= 2) return 'medium'
-  if (mentionCount >= 1) return 'shallow'
-  return 'none'
 }
 
 interface TopicCluster {
@@ -84,19 +78,13 @@ export function formatContextResult(
     if (c.memories.length === 0) {
       parts.push('(no memories linked yet)')
     } else {
-      for (const m of c.memories) {
-        const conf = m.confidence !== 1 ? ` (conf ${m.confidence.toFixed(2)})` : ''
-        parts.push(`- [${m.type}]${conf} ${m.content}`)
-      }
+      for (const m of c.memories) parts.push(formatMemoryLine(m))
     }
     parts.push('')
   }
   if (fallbackMemories && fallbackMemories.length > 0) {
     parts.push('## FTS fallback (no topic match)')
-    for (const m of fallbackMemories) {
-      const conf = m.confidence !== 1 ? ` (conf ${m.confidence.toFixed(2)})` : ''
-      parts.push(`- [${m.type}]${conf} ${m.content}`)
-    }
+    for (const m of fallbackMemories) parts.push(formatMemoryLine(m))
     parts.push('')
   }
   if (unmatchedKeywords.length > 0) {
@@ -133,7 +121,7 @@ export function recallContextHandler(
       const memories = db.getMemoriesByTopics(args.projectId, [key], memoryLimit)
       clusters.push({
         topic: key,
-        depth: depthLabel(topic.mentionCount),
+        depth: deriveDepth(topic.mentionCount),
         mentionCount: topic.mentionCount,
         memories,
       })

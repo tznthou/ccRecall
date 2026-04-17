@@ -3,25 +3,10 @@ import path from 'node:path'
 import os from 'node:os'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { Database } from '../src/core/database'
-import type { IndexSessionParams } from '../src/core/database'
+import { sessionParams } from './fixtures/helpers.js'
 
 let tmpDir: string
 let db: Database
-
-function sessionParams(overrides: Partial<IndexSessionParams> & { sessionId: string; projectId: string }): IndexSessionParams {
-  return {
-    projectDisplayName: 'test',
-    title: null,
-    messageCount: 0,
-    filePath: `/tmp/${overrides.sessionId}.jsonl`,
-    fileSize: 0,
-    fileMtime: '2026-04-17T00:00:00Z',
-    startedAt: '2026-04-17T00:00:00Z',
-    endedAt: '2026-04-17T01:00:00Z',
-    messages: [],
-    ...overrides,
-  }
-}
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-km-'))

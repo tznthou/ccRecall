@@ -153,6 +153,7 @@ export async function runIndexer(
 
     // DB 寫入 + topic 抽取在同一 transaction，避免 session row 已更新但 session_topics 未寫
     // 導致 file_mtime 匹配下次 indexer 會跳過此 session（sticky 空 topic 狀態）
+    const topics = extractFromSession({ tags: summary.tags, filesTouched: summary.filesTouched })
     db.runTransaction(() => {
       db.indexSession({
         sessionId: s.sessionId,
@@ -178,11 +179,7 @@ export async function runIndexer(
         sessionFiles,
         messages: toMessageInputs(messages),
       })
-      const session = db.getSessionById(s.sessionId)
-      if (session) {
-        const topics = extractFromSession(session)
-        db.saveSessionTopics(s.sessionId, s.projectId, topics)
-      }
+      db.saveSessionTopics(s.sessionId, s.projectId, topics)
     })
   }
 

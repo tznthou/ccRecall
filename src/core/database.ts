@@ -129,6 +129,40 @@ function mapMemoryRow(r: MemoryRow): Memory {
   }
 }
 
+interface TopicRow {
+  topic_key: string
+  project_id: string
+  mention_count: number
+  last_touched: string
+}
+
+function mapTopicRow(r: TopicRow): Topic {
+  return {
+    topicKey: r.topic_key,
+    projectId: r.project_id,
+    mentionCount: r.mention_count,
+    lastTouched: r.last_touched,
+  }
+}
+
+interface CheckpointRow {
+  id: number
+  session_id: string
+  project_id: string
+  snapshot_text: string
+  created_at: string
+}
+
+function mapCheckpointRow(r: CheckpointRow): SessionCheckpoint {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    projectId: r.project_id,
+    snapshotText: r.snapshot_text,
+    createdAt: r.created_at,
+  }
+}
+
 /** Migration 定義 */
 interface Migration {
   version: number
@@ -1497,32 +1531,26 @@ export class Database {
     run()
   }
 
+  private static readonly TOPIC_ORDER_BY: Record<'mention' | 'recent' | 'stale', string> = {
+    mention: 'mention_count DESC, last_touched DESC',
+    recent: 'last_touched DESC',
+    stale: 'last_touched ASC',
+  }
+
   getKnowledgeMap(
     projectId: string,
     opts: { limit?: number; sortBy?: 'mention' | 'recent' | 'stale' } = {},
   ): Topic[] {
     const { limit = 50, sortBy = 'mention' } = opts
     const cappedLimit = Math.min(limit, 500)
-    const order = sortBy === 'mention'
-      ? 'mention_count DESC, last_touched DESC'
-      : sortBy === 'recent'
-        ? 'last_touched DESC'
-        : 'last_touched ASC'
     const rows = this.db.prepare(`
       SELECT topic_key, project_id, mention_count, last_touched
       FROM knowledge_map
       WHERE project_id = ?
-      ORDER BY ${order}
+      ORDER BY ${Database.TOPIC_ORDER_BY[sortBy]}
       LIMIT ?
-    `).all(projectId, cappedLimit) as Array<{
-      topic_key: string; project_id: string; mention_count: number; last_touched: string
-    }>
-    return rows.map(r => ({
-      topicKey: r.topic_key,
-      projectId: r.project_id,
-      mentionCount: r.mention_count,
-      lastTouched: r.last_touched,
-    }))
+    `).all(projectId, cappedLimit) as TopicRow[]
+    return rows.map(mapTopicRow)
   }
 
   getMemoriesByTopics(projectId: string, topicKeys: string[], limit: number): Memory[] {
@@ -1562,16 +1590,8 @@ export class Database {
       SELECT topic_key, project_id, mention_count, last_touched
       FROM knowledge_map
       WHERE topic_key = ? AND project_id = ?
-    `).get(topicKey, projectId) as
-      | { topic_key: string; project_id: string; mention_count: number; last_touched: string }
-      | undefined
-    if (!row) return null
-    return {
-      topicKey: row.topic_key,
-      projectId: row.project_id,
-      mentionCount: row.mention_count,
-      lastTouched: row.last_touched,
-    }
+    `).get(topicKey, projectId) as TopicRow | undefined
+    return row ? mapTopicRow(row) : null
   }
 
   /** 共現 topics（與目標共享 session 或 memory），按共現次數排序。
@@ -1627,17 +1647,8 @@ export class Database {
     const row = this.db.prepare(`
       SELECT id, session_id, project_id, snapshot_text, created_at
       FROM session_checkpoints WHERE id = ?
-    `).get(id) as
-      | { id: number; session_id: string; project_id: string; snapshot_text: string; created_at: string }
-      | undefined
-    if (!row) return null
-    return {
-      id: row.id,
-      sessionId: row.session_id,
-      projectId: row.project_id,
-      snapshotText: row.snapshot_text,
-      createdAt: row.created_at,
-    }
+    `).get(id) as CheckpointRow | undefined
+    return row ? mapCheckpointRow(row) : null
   }
 
   getCheckpointsBySessionId(sessionId: string): SessionCheckpoint[] {
@@ -1645,15 +1656,7 @@ export class Database {
       SELECT id, session_id, project_id, snapshot_text, created_at
       FROM session_checkpoints WHERE session_id = ?
       ORDER BY created_at DESC, id DESC
-    `).all(sessionId) as Array<{
-      id: number; session_id: string; project_id: string; snapshot_text: string; created_at: string
-    }>
-    return rows.map(r => ({
-      id: r.id,
-      sessionId: r.session_id,
-      projectId: r.project_id,
-      snapshotText: r.snapshot_text,
-      createdAt: r.created_at,
-    }))
+    `).all(sessionId) as CheckpointRow[]
+    return rows.map(mapCheckpointRow)
   }
 }

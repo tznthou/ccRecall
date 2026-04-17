@@ -1,4 +1,8 @@
-import type { SessionMeta } from './types.js'
+/** tag/filesTouched 欄位支援：SessionMeta 或 SessionSummary 都能傳入（結構化型別） */
+interface TopicSource {
+  tags: string | null
+  filesTouched: string | null
+}
 
 const MIN_TOPIC_LENGTH = 3
 
@@ -32,19 +36,19 @@ function extractTopicsFromFile(filePath: string): string[] {
   return k ? [k] : []
 }
 
-/** 從 session 的結構化欄位（tags, filesTouched）抽出 topic keys，已 normalize + dedup + sort */
-export function extractFromSession(session: SessionMeta): string[] {
+/** 從結構化欄位（tags, filesTouched）抽出 topic keys，已 normalize + dedup + sort */
+export function extractFromSession(source: TopicSource): string[] {
   const topics = new Set<string>()
 
-  if (session.tags) {
-    for (const raw of session.tags.split(',')) {
+  if (source.tags) {
+    for (const raw of source.tags.split(',')) {
       const k = normalizeTopicKey(raw)
       if (k) topics.add(k)
     }
   }
 
-  if (session.filesTouched) {
-    for (const filePath of session.filesTouched.split(',')) {
+  if (source.filesTouched) {
+    for (const filePath of source.filesTouched.split(',')) {
       for (const t of extractTopicsFromFile(filePath)) {
         topics.add(t)
       }

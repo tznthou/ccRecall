@@ -6,6 +6,7 @@ import type {
   HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
 } from '../core/types.js'
+import { deriveDepth } from '../core/types.js'
 
 const VALID_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
   'decision', 'discovery', 'preference', 'pattern', 'feedback',
@@ -119,13 +120,6 @@ function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
     messageId: messageIdResult.value,
     confidence,
   }
-}
-
-function deriveDepth(mentionCount: number): KnowledgeDepth {
-  if (mentionCount >= 5) return 'deep'
-  if (mentionCount >= 2) return 'medium'
-  if (mentionCount >= 1) return 'shallow'
-  return 'none'
 }
 
 function topicWithDepth(t: Topic): Topic & { depth: KnowledgeDepth } {

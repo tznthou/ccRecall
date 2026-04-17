@@ -290,8 +290,15 @@ export interface Memory {
 
 // ── ccRecall 新增：元認知型別（Phase 3） ──
 
-/** 知識深度（由 mention_count 衍生：>=5 deep, >=2 medium, else shallow） */
+/** 知識深度（由 mention_count 衍生：>=5 deep, >=2 medium, >=1 shallow, else none） */
 export type KnowledgeDepth = 'deep' | 'medium' | 'shallow' | 'none'
+
+export function deriveDepth(mentionCount: number): KnowledgeDepth {
+  if (mentionCount >= 5) return 'deep'
+  if (mentionCount >= 2) return 'medium'
+  if (mentionCount >= 1) return 'shallow'
+  return 'none'
+}
 
 /** knowledge_map 條目（DB row） */
 export interface Topic {

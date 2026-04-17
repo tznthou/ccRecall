@@ -4,37 +4,8 @@ import path from 'node:path'
 import os from 'node:os'
 import http from 'node:http'
 import { Database } from '../src/core/database.js'
-import type { IndexSessionParams } from '../src/core/database.js'
 import { createServer } from '../src/api/server.js'
-
-function fetch(url: string): Promise<{ status: number; body: unknown }> {
-  return new Promise((resolve, reject) => {
-    http.get(url, (res) => {
-      const chunks: Buffer[] = []
-      res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString())
-        resolve({ status: res.statusCode!, body })
-      })
-      res.on('error', reject)
-    }).on('error', reject)
-  })
-}
-
-function sessionParams(o: Partial<IndexSessionParams> & { sessionId: string; projectId: string }): IndexSessionParams {
-  return {
-    projectDisplayName: 'test',
-    title: null,
-    messageCount: 0,
-    filePath: `/tmp/${o.sessionId}.jsonl`,
-    fileSize: 0,
-    fileMtime: '2026-04-17T00:00:00Z',
-    startedAt: '2026-04-17T00:00:00Z',
-    endedAt: '2026-04-17T01:00:00Z',
-    messages: [],
-    ...o,
-  }
-}
+import { sessionParams, fetchJson as fetch } from './fixtures/helpers.js'
 
 describe('GET /metacognition/check', () => {
   let tmpDir: string

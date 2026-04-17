@@ -5,7 +5,7 @@ import os from 'node:os'
 import { Database } from '../src/core/database.js'
 import type { Memory } from '../src/core/types.js'
 import { recallQueryHandler, recallSaveHandler, formatMemories, recallContextHandler } from '../src/mcp/tools.js'
-import type { IndexSessionParams } from '../src/core/database.js'
+import { sessionParams } from './fixtures/helpers.js'
 
 describe('MCP recall_query handler', () => {
   let tmpDir: string
@@ -146,21 +146,6 @@ describe('MCP recall_save handler', () => {
     expect(result.content[0].text).toContain('[discovery]')
   })
 })
-
-function sessionParams(o: Partial<IndexSessionParams> & { sessionId: string; projectId: string }): IndexSessionParams {
-  return {
-    projectDisplayName: 'test',
-    title: null,
-    messageCount: 0,
-    filePath: `/tmp/${o.sessionId}.jsonl`,
-    fileSize: 0,
-    fileMtime: '2026-04-17T00:00:00Z',
-    startedAt: '2026-04-17T00:00:00Z',
-    endedAt: '2026-04-17T01:00:00Z',
-    messages: [],
-    ...o,
-  }
-}
 
 describe('MCP recall_context handler', () => {
   let tmpDir: string
