@@ -1628,14 +1628,17 @@ export class Database {
   /** Phase 4d lint: memories whose session_id references a session row that no
    *  longer exists (user scrubbed ~/.claude/projects, or pre-index race). Manual
    *  memories (session_id IS NULL) are not orphan candidates by definition. */
-  getOrphanMemoryIds(): Array<{ memoryId: number; sessionId: string }> {
+  getOrphanMemoryIds(limit = 1000): Array<{ memoryId: number; sessionId: string }> {
+    // Capped — a bulk wipe of ~/.claude could otherwise return tens of thousands
+    // of rows into one JSON response, blocking the event loop on serialisation.
     const rows = this.db.prepare(`
       SELECT m.id AS memory_id, m.session_id
       FROM memories m
       WHERE m.session_id IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = m.session_id)
       ORDER BY m.id ASC
-    `).all() as Array<{ memory_id: number; session_id: string }>
+      LIMIT ?
+    `).all(limit) as Array<{ memory_id: number; session_id: string }>
     return rows.map(r => ({ memoryId: r.memory_id, sessionId: r.session_id }))
   }
 

@@ -142,7 +142,12 @@ export class CompressionPipeline {
         }
       } catch (err) {
         // Swallow and count — one corrupt row must not abort the whole batch.
-        console.warn('[compression] error on memory', c.id, (err as Error).message)
+        // Strip control chars: SQLite constraint errors can echo offending row
+        // content (which in turn derives from session summaries / user memory)
+        // into .message, so newlines/ANSI escapes must not reach structured log.
+        // eslint-disable-next-line no-control-regex
+        const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
+        console.warn('[compression] error on memory', c.id, safeMsg)
         stats.errors++
       }
     }

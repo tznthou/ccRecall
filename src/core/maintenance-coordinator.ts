@@ -72,7 +72,11 @@ export class MaintenanceCoordinator {
       await Promise.resolve()
       return this.compression.runOnce({ batchSize: this.batchSize })
     } catch (err) {
-      console.warn('[maintenance] tick error:', (err as Error).message)
+      // Strip control chars — underlying DB errors can carry memory content
+      // (and therefore user-influenced bytes) in .message; do not pollute log.
+      // eslint-disable-next-line no-control-regex
+      const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
+      console.warn('[maintenance] tick error:', safeMsg)
       return null
     } finally {
       this.inflight = false
