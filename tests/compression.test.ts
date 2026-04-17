@@ -35,6 +35,7 @@ function candidate(overrides: Partial<CompressionCandidate> = {}): CompressionCa
     effectiveConfidence: 1,
     summaryText: null,
     intentText: null,
+    sessionExists: false,
     ...overrides,
   }
 }
@@ -104,30 +105,42 @@ describe('planTransition() — L1 → L2 gates', () => {
 })
 
 describe('planTransition() — L2 → delete gates', () => {
-  it('deletes L2 session-backed memory when age >= 60d and access = 0', () => {
+  it('deletes L2 session-backed memory when age >= 60d, access = 0, session exists', () => {
     const a = planTransition(candidate({
-      compressionLevel: 2, ageDays: 70, accessCount: 0, sessionId: 'sess-1',
+      compressionLevel: 2, ageDays: 70, accessCount: 0,
+      sessionId: 'sess-1', sessionExists: true,
     }))
     expect(a.kind).toBe('delete')
   })
 
   it('skips L2 manual memory even at age >= 60d (auto-delete session-backed only)', () => {
     const a = planTransition(candidate({
-      compressionLevel: 2, ageDays: 70, accessCount: 0, sessionId: null,
+      compressionLevel: 2, ageDays: 70, accessCount: 0,
+      sessionId: null, sessionExists: false,
+    }))
+    expect(a.kind).toBe('skip')
+  })
+
+  it('skips L2 orphan (sessionId present but session row deleted) — preserves last copy', () => {
+    const a = planTransition(candidate({
+      compressionLevel: 2, ageDays: 70, accessCount: 0,
+      sessionId: 'sess-gone', sessionExists: false,
     }))
     expect(a.kind).toBe('skip')
   })
 
   it('skips L2 with access_count > 0', () => {
     const a = planTransition(candidate({
-      compressionLevel: 2, ageDays: 70, accessCount: 1, sessionId: 'sess-1',
+      compressionLevel: 2, ageDays: 70, accessCount: 1,
+      sessionId: 'sess-1', sessionExists: true,
     }))
     expect(a.kind).toBe('skip')
   })
 
   it('skips L2 when age < 60d', () => {
     const a = planTransition(candidate({
-      compressionLevel: 2, ageDays: 45, accessCount: 0, sessionId: 'sess-1',
+      compressionLevel: 2, ageDays: 45, accessCount: 0,
+      sessionId: 'sess-1', sessionExists: true,
     }))
     expect(a.kind).toBe('skip')
   })
@@ -255,8 +268,28 @@ describe('CompressionPipeline.runOnce() — end-to-end', () => {
     `)
 
     const stats = pipe.runOnce()
+    // Manual memory is filtered out of scan by the session_id IS NOT NULL gate
+    // in getCompressionCandidates — never reaches planTransition.
     expect(stats.deleted).toBe(0)
-    expect(stats.skipped).toBe(1)
+    expect(stats.scanned).toBe(0)
+    expect(db.getMemoryCount()).toBe(1)
+  })
+
+  it('does NOT delete orphan L2 memory (session row gone) — integration', () => {
+    db.upsertProject('p-orph', 'P')
+    db.rawExec(`
+      INSERT INTO sessions (id, project_id, file_path) VALUES ('s-orph', 'p-orph', '/tmp/o.jsonl')
+    `)
+    const id = db.saveMemory({
+      sessionId: 's-orph', messageId: null, type: 'decision', content: 'dangling',
+    })
+    db.rawExec(`
+      UPDATE memories SET compression_level = 2, created_at = datetime('now', '-70 days'), access_count = 0 WHERE id = ${id}
+    `)
+    db.rawExec(`DELETE FROM sessions WHERE id = 's-orph'`)
+
+    const stats = pipe.runOnce()
+    expect(stats.deleted).toBe(0)
     expect(db.getMemoryCount()).toBe(1)
   })
 
@@ -280,6 +313,34 @@ describe('CompressionPipeline.runOnce() — end-to-end', () => {
     }
     const stats = pipe.runOnce({ batchSize: 3 })
     expect(stats.scanned).toBe(3)
+  })
+
+  it('does NOT stall on permanently-ineligible head rows — reaches eligible tail', () => {
+    // Fill head with L0 memories that can never transition (access_count >= 2
+    // locks them out of L1 forever).
+    for (let i = 0; i < 10; i++) {
+      const id = db.saveMemory({
+        sessionId: null, messageId: null, type: 'decision',
+        content: `locked ${i}`, confidence: 0.2,
+      })
+      db.rawExec(`
+        UPDATE memories SET created_at = datetime('now', '-30 days'), access_count = 5 WHERE id = ${id}
+      `)
+    }
+    // Then one eligible row
+    const target = db.saveMemory({
+      sessionId: null, messageId: null, type: 'decision',
+      content: 'compress-me ' + 'x'.repeat(300), confidence: 0.2,
+    })
+    db.rawExec(`UPDATE memories SET created_at = datetime('now', '-10 days') WHERE id = ${target}`)
+
+    const stats = pipe.runOnce({ batchSize: 3 })
+    expect(stats.scanned).toBe(1)
+    expect(stats.compressed).toBe(1)
+    const row = db.rawAll<{ compression_level: number }>(
+      `SELECT compression_level FROM memories WHERE id = ${target}`,
+    )[0]
+    expect(row.compression_level).toBe(1)
   })
 
   it('session-backed L1 uses sessions.summary_text verbatim', () => {

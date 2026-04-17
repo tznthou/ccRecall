@@ -219,4 +219,43 @@ describe('E2E: index → search → HTTP', () => {
     ).map(r => r.topic_key)
     expect(memTopics).toEqual(sessionTopicsBefore)
   })
+
+  it('Phase 4d: GET /lint/warnings returns orphan + stale report', async () => {
+    // Seed one orphan and verify the endpoint surfaces it.
+    db.upsertProject('lint-p', 'lint-p')
+    db.rawExec(`
+      INSERT INTO sessions (id, project_id, file_path) VALUES ('lint-s', 'lint-p', '/tmp/l.jsonl')
+    `)
+    const mid = db.saveMemory({
+      sessionId: 'lint-s', messageId: null, type: 'decision', content: 'dangling',
+    })
+    db.rawExec(`DELETE FROM sessions WHERE id = 'lint-s'`)
+
+    const { status, body } = await fetch(`http://127.0.0.1:${port}/lint/warnings`)
+    expect(status).toBe(200)
+    const b = body as {
+      warnings: Array<{ memoryId: number; kind: string; details: string }>
+      counts: { orphan: number; stale: number; total: number }
+    }
+    expect(b.counts.orphan).toBe(1)
+    expect(b.warnings.some(w => w.memoryId === mid && w.kind === 'orphan')).toBe(true)
+  })
+
+  it('Phase 4d: GET /lint/warnings rejects cross-origin origin', async () => {
+    const res = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      http.get({
+        hostname: '127.0.0.1', port, path: '/lint/warnings',
+        headers: { Origin: 'https://evil.example.com' },
+      }, (r) => {
+        const chunks: Buffer[] = []
+        r.on('data', (c: Buffer) => chunks.push(c))
+        r.on('end', () => resolve({
+          status: r.statusCode!,
+          body: JSON.parse(Buffer.concat(chunks).toString()),
+        }))
+        r.on('error', reject)
+      }).on('error', reject)
+    })
+    expect(res.status).toBe(403)
+  })
 })

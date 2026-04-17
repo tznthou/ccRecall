@@ -98,10 +98,14 @@ export function planTransition(c: CompressionCandidate): CompressionAction {
     if (
       c.ageDays >= DELETE_AGE_DAYS
       && c.sessionId !== null
+      && c.sessionExists
       && c.accessCount === 0
     ) {
       return { kind: 'delete' }
     }
+    // Orphan (sessionId present but sessions row gone) is deliberately skipped —
+    // the source JSONL is already lost, so auto-delete would erase the last
+    // surviving copy. Lint surfaces orphans for the user to purge explicitly.
     return { kind: 'skip', reason: 'L2 gates not met' }
   }
   return { kind: 'skip', reason: `unknown compression_level=${level}` }

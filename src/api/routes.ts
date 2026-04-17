@@ -3,6 +3,7 @@ import { URL } from 'node:url'
 import { sendJson, readBody } from './server.js'
 import type { Database, MemoryInput } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
+import { runLint } from '../core/lint.js'
 import type {
   HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
@@ -435,6 +436,20 @@ export function createRequestHandler(db: Database) {
       const checkpointId = db.saveCheckpoint(session.id, session.projectId, v.snapshot)
       const result: CheckpointResult = { ok: true, checkpointId }
       sendJson(res, 200, result)
+      return
+    }
+
+    // GET /lint/warnings — orphan / stale memory detection (Phase 4d)
+    if (req.method === 'GET' && path === '/lint/warnings') {
+      // Reveals memory metadata (ids, session refs, decay numbers) — same
+      // loopback gate as other introspection endpoints so a non-loopback
+      // origin cannot enumerate recall internals via a browser prefetch.
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      const report = runLint(db)
+      sendJson(res, 200, report)
       return
     }
 

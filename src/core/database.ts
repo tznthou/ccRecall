@@ -132,6 +132,7 @@ interface CompressionCandidateRow {
   effective_confidence: number | null
   summary_text: string | null
   intent_text: string | null
+  session_exists: number
 }
 
 /** Phase 4d: normalised shape consumed by the compression pipeline. */
@@ -145,6 +146,10 @@ export interface CompressionCandidate {
   effectiveConfidence: number
   summaryText: string | null
   intentText: string | null
+  /** True when the session row that `sessionId` points at still exists.
+   *  False for manual memories (sessionId is null) or orphaned rows. Used by
+   *  the compression pipeline to block irreversible auto-delete of orphans. */
+  sessionExists: boolean
 }
 
 function mapMemoryRow(r: MemoryRow): Memory {
@@ -1672,23 +1677,39 @@ export class Database {
    *  (manual scrub of ~/.claude) still surface; the pipeline detects the NULL
    *  summary and falls back to syntactic truncation, matching manual memories. */
   getCompressionCandidates(limit: number): CompressionCandidate[] {
-    // Pre-filter by age >= 7d (the earliest L0→L1 gate). Anything younger cannot
-    // possibly transition, so scanning it wastes I/O. The Javascript policy in
-    // planTransition() stays authoritative over the per-level gates.
+    // Only return rows that match at least one level's transition gates — ORDER
+    // BY id ASC + LIMIT would otherwise stall on the first `batchSize` of rows
+    // whose access_count permanently disqualifies them (e.g. high-access L0
+    // that can never reach L1), starving truly eligible rows further back.
+    //
+    // `session_exists = 1` is surfaced so the pipeline can block auto-delete
+    // of orphaned rows (sessionId points at a session that was scrubbed) —
+    // deleting an orphan is irreversible data loss since the source JSONL is
+    // already gone.
     const rows = this.db.prepare(`
-      SELECT
-        m.id, m.session_id, m.content, m.compression_level, m.access_count,
-        (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) AS age_days,
-        (m.confidence * exp(
-          -0.6931471805599453 *
-          (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) /
-          (7.0 + 7.0 * MIN(m.access_count, 4))
-        )) AS effective_confidence,
-        s.summary_text, s.intent_text
-      FROM memories m
-      LEFT JOIN sessions s ON m.session_id = s.id
-      WHERE (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) >= 7
-      ORDER BY m.id ASC
+      SELECT id, session_id, content, compression_level, access_count,
+             age_days, effective_confidence, summary_text, intent_text,
+             session_exists
+      FROM (
+        SELECT
+          m.id, m.session_id, m.content, m.compression_level, m.access_count,
+          (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) AS age_days,
+          (m.confidence * exp(
+            -0.6931471805599453 *
+            (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) /
+            (7.0 + 7.0 * MIN(m.access_count, 4))
+          )) AS effective_confidence,
+          s.summary_text, s.intent_text,
+          CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS session_exists
+        FROM memories m
+        LEFT JOIN sessions s ON m.session_id = s.id
+      )
+      WHERE
+        (compression_level = 0 AND age_days >= 7 AND access_count < 2 AND effective_confidence < 0.5)
+        OR (compression_level = 1 AND age_days >= 30 AND access_count < 4)
+        OR (compression_level = 2 AND age_days >= 60 AND session_id IS NOT NULL
+            AND session_exists = 1 AND access_count = 0)
+      ORDER BY id ASC
       LIMIT ?
     `).all(limit) as CompressionCandidateRow[]
     return rows.map(r => ({
@@ -1701,6 +1722,7 @@ export class Database {
       effectiveConfidence: r.effective_confidence ?? 0,
       summaryText: r.summary_text,
       intentText: r.intent_text,
+      sessionExists: r.session_exists === 1,
     }))
   }
 
