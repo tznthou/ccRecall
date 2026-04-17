@@ -16,6 +16,7 @@ If the service is not running, hooks log a warning to stderr and exit cleanly �
 
 | Script | Claude Code Event | Action |
 |--------|------------------|--------|
+| `session-start.mjs` | `SessionStart` | GET `/memory/query` with the project name, write matching memories to stdout (Claude prepends them to context) |
 | `session-end.mjs` | `SessionEnd` | POST `/session/end` to harvest the just-ended session into a memory |
 
 ## Installation
@@ -25,6 +26,16 @@ Add to `~/.claude/settings.json` (or your project's `.claude/settings.json`):
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/tznthou/Documents/ccRecall/hooks/session-start.mjs"
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [
@@ -58,7 +69,10 @@ With ccRecall running, this POSTs to `/session/end`. The response (success or 40
 
 ## Design Notes
 
-- **Non-blocking**: hooks complete quickly; errors go to stderr and the script exits 0
-- **Skip on `resume`**: when `reason === 'resume'`, the session is continuing, so no harvest fires
-- **Skip when missing `session_id`**: defensive; Claude Code always provides it in SessionEnd
-- **5s timeout**: hook never hangs Claude Code even if the service is stuck
+- **Non-blocking**: hooks exit quickly; errors go to stderr and the script exits 0 — never blocks Claude Code
+- **Skip on `resume`**:
+  - SessionEnd: `reason === 'resume'` means the session continues
+  - SessionStart: `source === 'resume'` means the context is already loaded
+- **SessionStart query strategy**: uses the last path segment of `cwd` as a keyword against FTS5 — simple, no-prompt-yet heuristic; Phase 3+ will add smarter selection
+- **SessionStart stdout = context injection**: only memories are written to stdout; all errors and diagnostics go to stderr to avoid polluting Claude's context
+- **Timeouts**: SessionEnd 5s, SessionStart 2s (tighter because it sits on the pre-prompt critical path)
