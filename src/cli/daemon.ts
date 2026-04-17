@@ -1,7 +1,7 @@
 import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
-import { mkdir, writeFile, rm, realpath } from 'node:fs/promises'
+import { mkdir, writeFile, rm, realpath, lstat, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 /**
@@ -115,12 +115,41 @@ export interface InstallOptions extends PlistOptions {
   overrides?: DaemonPathOverrides
 }
 
+/** Refuse to touch a plist that isn't ours. Protects against clobbering an
+ *  unrelated LaunchAgent when `$HOME` points somewhere unexpected (sudo, test
+ *  harness, compromised env) and against following a symlink out of the user's
+ *  LaunchAgents directory. "Managed" = regular file whose content contains
+ *  our Label. Non-existent path is OK (first install). */
+async function assertManagedPlist(plistPath: string): Promise<void> {
+  const stats = await lstat(plistPath).catch(() => null)
+  if (!stats) return
+  if (stats.isSymbolicLink()) {
+    throw new Error(`refuse to touch symlink at ${plistPath} — remove it manually if you're sure it's ccRecall's`)
+  }
+  if (!stats.isFile()) {
+    throw new Error(`refuse to touch non-regular file at ${plistPath}`)
+  }
+  const content = await readFile(plistPath, 'utf8').catch(() => '')
+  if (!content.includes(`<string>${LABEL}</string>`)) {
+    throw new Error(`refuse to overwrite unmanaged plist at ${plistPath} (Label does not match ${LABEL})`)
+  }
+}
+
 export async function installDaemon(opts: InstallOptions = {}): Promise<void> {
   if (process.platform !== 'darwin') {
     throw new Error(`install-daemon currently supports macOS only (platform: ${process.platform}). See docs/launchd.md for manual setup.`)
   }
 
   const paths = resolveDaemonPaths(opts.overrides)
+
+  // dry-run must be side-effect free: skip realpath() (can block on broken
+  // symlinks or stale network mounts) and all filesystem writes. Generate the
+  // plist from paths as-given and print.
+  if (opts.dryRun) {
+    process.stdout.write(generatePlist(paths, { port: opts.port, dbPath: opts.dbPath }))
+    return
+  }
+
   // If ccrecallJs came from process.argv[1], resolve symlinks so the plist
   // points at the real dist/index.js, not an npm bin symlink that may move.
   try {
@@ -131,11 +160,7 @@ export async function installDaemon(opts: InstallOptions = {}): Promise<void> {
   }
   const plist = generatePlist(paths, { port: opts.port, dbPath: opts.dbPath })
 
-  if (opts.dryRun) {
-    process.stdout.write(plist)
-    return
-  }
-
+  await assertManagedPlist(paths.plistPath)
   await mkdir(paths.launchAgentsDir, { recursive: true })
   await mkdir(paths.logsDir, { recursive: true })
   await writeFile(paths.plistPath, plist, 'utf8')
@@ -160,6 +185,7 @@ export async function uninstallDaemon(opts: UninstallOptions = {}): Promise<void
     throw new Error(`uninstall-daemon currently supports macOS only (platform: ${process.platform}).`)
   }
   const paths = resolveDaemonPaths(opts.overrides)
+  await assertManagedPlist(paths.plistPath)
   if (!opts.skipLaunchctl) {
     await runLaunchctl(['unload', paths.plistPath]).catch(() => { /* already unloaded */ })
   }

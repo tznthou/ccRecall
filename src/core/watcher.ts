@@ -68,7 +68,7 @@ export class JsonlWatcher {
   async start(): Promise<void> {
     if (this.watcher) return
 
-    this.watcher = chokidar.watch(this.baseDir, {
+    const watcher = chokidar.watch(this.baseDir, {
       persistent: true,
       // runIndexer ran before watcher.start() — skip the add spam from the
       // initial tree walk.
@@ -81,17 +81,30 @@ export class JsonlWatcher {
     })
 
     const onEvent = (): void => { this.scheduleIncrementalScan() }
-    this.watcher.on('add', onEvent)
-    this.watcher.on('change', onEvent)
-    this.watcher.on('unlink', onEvent)
-    this.watcher.on('error', (err) => {
+    watcher.on('add', onEvent)
+    watcher.on('change', onEvent)
+    watcher.on('unlink', onEvent)
+    watcher.on('error', (err) => {
       // eslint-disable-next-line no-control-regex
       const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
       console.warn('[watcher] chokidar error:', safeMsg)
     })
 
+    // Await ready so callers (daemon bootstrap) can be sure ignoreInitial has
+    // settled before advertising the service. Without this, a JSONL written
+    // between scanProjects() and chokidar's ready event would be missed by
+    // both paths until the backstop or a rescue fires.
+    await new Promise<void>((resolve) => {
+      watcher.once('ready', () => resolve())
+    })
+
+    this.watcher = watcher
+
     this.fullResyncTimer = setInterval(() => {
-      this.scheduleIncrementalScan()
+      // Bypass scheduleIncrementalScan so steady JSONL churn cannot keep
+      // pushing the debounce out and starve the backstop. runScan's single-
+      // flight guard still prevents overlapping work.
+      void this.runScan()
     }, this.fullResyncMs)
     this.fullResyncTimer.unref?.()
   }

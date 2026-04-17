@@ -13,8 +13,16 @@ const subcommand = process.argv[2]
 
 if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
   const dryRun = process.argv.includes('--dry-run')
+  // Propagate the current daemon's runtime config into the plist so the
+  // auto-started instance uses the same port/db as the user's interactive
+  // session. Without this the LaunchAgent silently resets to defaults after
+  // the next login, which looks like memory loss or a port mismatch.
+  const envPort = process.env.CCRECALL_PORT
+  const parsedPort = envPort ? parseInt(envPort, 10) : NaN
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : undefined
+  const dbPath = process.env.CCRECALL_DB_PATH ?? undefined
   const action = subcommand === 'install-daemon'
-    ? () => installDaemon({ dryRun })
+    ? () => installDaemon({ dryRun, port, dbPath })
     : () => uninstallDaemon()
   action().then(() => process.exit(0)).catch((err: Error) => {
     console.error(`[ccrecall ${subcommand}] ${err.message}`)
@@ -24,7 +32,10 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
   printHelp()
   process.exit(0)
 } else {
-  startDaemon()
+  startDaemon().catch((err: Error) => {
+    console.error(`[ccrecall] fatal: ${err.message}`)
+    process.exit(1)
+  })
 }
 
 function printHelp(): void {
@@ -44,19 +55,24 @@ Environment:
 See docs/launchd.md for manual install and troubleshooting.`)
 }
 
-function startDaemon(): void {
+async function startDaemon(): Promise<void> {
   const PORT = parseInt(process.env.CCRECALL_PORT ?? '7749', 10)
   const DB_PATH = process.env.CCRECALL_DB_PATH ?? path.join(os.homedir(), '.ccrecall', 'ccrecall.db')
 
   const db = new Database(DB_PATH)
   console.log(`Database initialized at ${DB_PATH}`)
 
+  // Await the initial index so the watcher (which uses ignoreInitial=true)
+  // doesn't start before scanProjects has observed the tree. A JSONL written
+  // between these two phases would otherwise be invisible until the 10-minute
+  // backstop or a /session/end rescue.
   console.log('Running indexer...')
-  runIndexer(db).then(() => {
+  try {
+    await runIndexer(db)
     console.log('Indexer complete.')
-  }).catch((err) => {
+  } catch (err) {
     console.error('Indexer error:', err)
-  })
+  }
 
   // Phase 4d: start background compression scheduler. unref'd so it never blocks
   // process exit — HTTP server keep-alive is authoritative.
@@ -67,12 +83,15 @@ function startDaemon(): void {
 
   // Phase 4e: JSONL watch mode — incremental reindex when Claude Code writes new
   // session files. Complements the hook path; covers resumed sessions too.
+  // start() resolves only after chokidar's `ready` event, so ignoreInitial
+  // has settled before we advertise the service.
   const watcher = new JsonlWatcher(db)
-  watcher.start().then(() => {
+  try {
+    await watcher.start()
     console.log('JSONL watcher started.')
-  }).catch((err) => {
+  } catch (err) {
     console.error('Watcher start error:', err)
-  })
+  }
 
   // Rescue reindex uses runIndexer directly (not watcher.runNow) so /session/end
   // gets deterministic execution instead of being dropped by watcher's single-

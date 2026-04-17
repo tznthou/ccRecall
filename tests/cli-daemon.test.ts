@@ -161,3 +161,91 @@ describe('installDaemon full install + uninstall (skipLaunchctl)', () => {
     await expect(stat(plistPath)).rejects.toThrow()
   })
 })
+
+describe('installDaemon — managed-plist safety', () => {
+  it('refuses to overwrite an unrelated plist (no matching Label)', async () => {
+    if (process.platform !== 'darwin') return
+
+    const { writeFile, mkdir, symlink } = await import('node:fs/promises')
+    await mkdir(path.join(tmpHome, 'Library', 'LaunchAgents'), { recursive: true })
+    const plistPath = path.join(tmpHome, 'Library', 'LaunchAgents', 'com.tznthou.ccrecall.plist')
+    // Pre-existing plist with a different Label — simulates another agent
+    // happening to share the filename under a misconfigured $HOME.
+    await writeFile(plistPath, '<?xml version="1.0"?><plist><dict><key>Label</key><string>com.evil.other</string></dict></plist>', 'utf8')
+
+    const scriptPath = path.join(tmpHome, 'fake-ccrecall.js')
+    await writeFile(scriptPath, '// fake', 'utf8')
+
+    await expect(installDaemon({
+      overrides: { home: tmpHome, scriptPath, nodeBin: process.execPath },
+      skipLaunchctl: true,
+    })).rejects.toThrow(/refuse to overwrite unmanaged plist/)
+
+    // Original file left untouched.
+    const after = await readFile(plistPath, 'utf8')
+    expect(after).toContain('com.evil.other')
+
+    // Check symlink rejection with a fresh tmpdir (the first tmpdir already has
+    // a real file at plistPath; we need a different path for symlink testing).
+    const symHome = await (await import('node:fs/promises')).mkdtemp(path.join(os.tmpdir(), 'ccrecall-sym-'))
+    try {
+      await mkdir(path.join(symHome, 'Library', 'LaunchAgents'), { recursive: true })
+      const target = path.join(symHome, 'decoy.plist')
+      await writeFile(target, 'decoy', 'utf8')
+      const plistLink = path.join(symHome, 'Library', 'LaunchAgents', 'com.tznthou.ccrecall.plist')
+      await symlink(target, plistLink)
+
+      await expect(installDaemon({
+        overrides: { home: symHome, scriptPath, nodeBin: process.execPath },
+        skipLaunchctl: true,
+      })).rejects.toThrow(/refuse to touch symlink/)
+    } finally {
+      const { rm: rmFn } = await import('node:fs/promises')
+      await rmFn(symHome, { recursive: true, force: true })
+    }
+  })
+
+  it('uninstallDaemon refuses to delete an unrelated plist', async () => {
+    if (process.platform !== 'darwin') return
+
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    await mkdir(path.join(tmpHome, 'Library', 'LaunchAgents'), { recursive: true })
+    const plistPath = path.join(tmpHome, 'Library', 'LaunchAgents', 'com.tznthou.ccrecall.plist')
+    await writeFile(plistPath, '<?xml version="1.0"?><plist><dict><key>Label</key><string>com.other.agent</string></dict></plist>', 'utf8')
+
+    await expect(uninstallDaemon({
+      overrides: { home: tmpHome },
+      skipLaunchctl: true,
+    })).rejects.toThrow(/refuse to overwrite unmanaged plist/)
+
+    // File still there.
+    await expect(stat(plistPath)).resolves.toBeDefined()
+  })
+
+  it('dry-run does not follow symlinks (realpath is skipped)', async () => {
+    // If realpath ran on a bad/broken symlink target, dry-run would throw.
+    // The fix moves the dry-run guard before realpath, so dry-run must still
+    // produce a plist even when scriptPath points at a non-existent file.
+    const chunks: string[] = []
+    const origWrite = process.stdout.write.bind(process.stdout)
+    process.stdout.write = ((c: string | Uint8Array): boolean => {
+      chunks.push(typeof c === 'string' ? c : Buffer.from(c).toString())
+      return true
+    }) as typeof process.stdout.write
+    try {
+      await installDaemon({
+        dryRun: true,
+        overrides: {
+          home: tmpHome,
+          scriptPath: '/does/not/exist.js',
+          nodeBin: '/usr/local/bin/node',
+        },
+      })
+    } finally {
+      process.stdout.write = origWrite
+    }
+    const output = chunks.join('')
+    // Path preserved verbatim (realpath would have thrown or rewritten it).
+    expect(output).toContain('<string>/does/not/exist.js</string>')
+  })
+})
