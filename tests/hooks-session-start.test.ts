@@ -83,6 +83,7 @@ describe('hooks/session-start.mjs', () => {
     expect(ctx.received[0].path).toContain('/memory/query')
     expect(ctx.received[0].path).toContain('q=ccRecall')
     expect(ctx.received[0].path).toContain('limit=5')
+    expect(ctx.received[0].path).toContain('project=-Users-tznthou-Documents-ccRecall')
 
     expect(stdout).toContain('[ccRecall memory recall]')
     expect(stdout).toContain('ccRecall uses Apache-2.0 license')

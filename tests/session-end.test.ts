@@ -130,6 +130,20 @@ describe('POST /session/end', () => {
     expect(saved[0].sessionId).toBe(sessionId)
   })
 
+  it('is idempotent: repeat call returns existing memory id', async () => {
+    const first = await postJson(`http://127.0.0.1:${port}/session/end`, { sessionId })
+    const firstBody = first.body as { memoriesSaved: number[]; alreadyHarvested?: boolean }
+    expect(firstBody.memoriesSaved).toHaveLength(1)
+    expect(firstBody.alreadyHarvested).toBeUndefined()
+    const firstId = firstBody.memoriesSaved[0]
+
+    const second = await postJson(`http://127.0.0.1:${port}/session/end`, { sessionId })
+    const secondBody = second.body as { memoriesSaved: number[]; alreadyHarvested?: boolean }
+    expect(secondBody.memoriesSaved).toEqual([firstId])
+    expect(secondBody.alreadyHarvested).toBe(true)
+    expect(db.getMemoryCount()).toBe(1)
+  })
+
   it('respects dryRun: returns candidate but does not save', async () => {
     const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
       sessionId, dryRun: true,

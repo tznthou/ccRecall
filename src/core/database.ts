@@ -1356,18 +1356,31 @@ export class Database {
     return Number(info.lastInsertRowid)
   }
 
-  queryMemories(query: string, limit: number): Memory[] {
+  queryMemories(query: string, limit: number, projectId?: string | null): Memory[] {
     const q = Database.fts5QuoteIfNeeded(query)
     if (!q) return []
     try {
-      const rows = this.db.prepare(`
-        SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
-        FROM memories_fts
-        JOIN memories m ON m.id = memories_fts.rowid
-        WHERE memories_fts MATCH ?
-        ORDER BY rank, m.confidence DESC, m.id DESC
-        LIMIT ?
-      `).all(q, Math.min(limit, 100)) as Array<{
+      const cappedLimit = Math.min(limit, 100)
+      const rows = projectId
+        ? this.db.prepare(`
+            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+            FROM memories_fts
+            JOIN memories m ON m.id = memories_fts.rowid
+            JOIN sessions s ON m.session_id = s.id
+            WHERE memories_fts MATCH ?
+              AND s.project_id = ?
+            ORDER BY rank, m.confidence DESC, m.id DESC
+            LIMIT ?
+          `).all(q, projectId, cappedLimit)
+        : this.db.prepare(`
+            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+            FROM memories_fts
+            JOIN memories m ON m.id = memories_fts.rowid
+            WHERE memories_fts MATCH ?
+            ORDER BY rank, m.confidence DESC, m.id DESC
+            LIMIT ?
+          `).all(q, cappedLimit)
+      return (rows as Array<{
         id: number
         session_id: string | null
         message_id: string | null
@@ -1375,8 +1388,7 @@ export class Database {
         type: string
         confidence: number
         created_at: string
-      }>
-      return rows.map(r => ({
+      }>).map(r => ({
         id: r.id,
         sessionId: r.session_id,
         messageId: r.message_id,
@@ -1389,6 +1401,32 @@ export class Database {
       console.warn('[memories] queryMemories error:', (err as Error).message)
       return []
     }
+  }
+
+  getMemoriesBySessionId(sessionId: string): Memory[] {
+    const rows = this.db.prepare(`
+      SELECT id, session_id, message_id, content, type, confidence, created_at
+      FROM memories
+      WHERE session_id = ?
+      ORDER BY id ASC
+    `).all(sessionId) as Array<{
+      id: number
+      session_id: string | null
+      message_id: string | null
+      content: string
+      type: string
+      confidence: number
+      created_at: string
+    }>
+    return rows.map(r => ({
+      id: r.id,
+      sessionId: r.session_id,
+      messageId: r.message_id,
+      content: r.content,
+      type: r.type as MemoryType,
+      confidence: r.confidence,
+      createdAt: r.created_at,
+    }))
   }
 
   getMemoryCount(): number {

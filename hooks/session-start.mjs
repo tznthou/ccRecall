@@ -15,9 +15,11 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-function queryMemories(query) {
+function queryMemories(query, projectId) {
   return new Promise((resolve) => {
-    const url = `/memory/query?q=${encodeURIComponent(query)}&limit=${MEMORY_LIMIT}`
+    const params = new URLSearchParams({ q: query, limit: String(MEMORY_LIMIT) })
+    if (projectId) params.set('project', projectId)
+    const url = `/memory/query?${params.toString()}`
     const req = http.request({
       hostname: HOST,
       port: PORT,
@@ -60,6 +62,12 @@ function projectNameFromCwd(cwd) {
   return parts[parts.length - 1] ?? ''
 }
 
+// Matches Claude Code's project-directory encoding under ~/.claude/projects/
+function projectIdFromCwd(cwd) {
+  if (!cwd || typeof cwd !== 'string') return ''
+  return cwd.replace(/\//g, '-')
+}
+
 function formatMemories(memories, query) {
   if (memories.length === 0) return ''
   const lines = memories.map((m) => {
@@ -92,8 +100,9 @@ async function main() {
 
   const query = projectNameFromCwd(input.cwd)
   if (!query) return
+  const projectId = projectIdFromCwd(input.cwd)
 
-  const memories = await queryMemories(query)
+  const memories = await queryMemories(query, projectId)
   const text = formatMemories(memories, query)
   if (text) process.stdout.write(text)
 }

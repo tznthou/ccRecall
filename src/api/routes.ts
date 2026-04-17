@@ -143,18 +143,19 @@ export function createRequestHandler(db: Database) {
       return
     }
 
-    // GET /memory/query?q=...&limit=...
+    // GET /memory/query?q=...&limit=...&project=...
     if (req.method === 'GET' && path === '/memory/query') {
       const q = url.searchParams.get('q') ?? ''
       const rawLimit = parseInt(url.searchParams.get('limit') ?? '5', 10)
       const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 5 : rawLimit
+      const project = url.searchParams.get('project')
 
       if (!q) {
         sendJson(res, 200, { memories: [], totalTokenEstimate: 0, query: q, limit })
         return
       }
 
-      const rows = db.queryMemories(q, limit)
+      const rows = db.queryMemories(q, limit, project)
       const memories = rows.map(m => ({
         content: m.content,
         source: memorySource(m),
@@ -278,6 +279,20 @@ export function createRequestHandler(db: Database) {
         })
         return
       }
+
+      const existing = db.getMemoriesBySessionId(v.sessionId)
+      if (existing.length > 0) {
+        sendJson(res, 200, {
+          ok: true,
+          sessionId: v.sessionId,
+          memoriesSaved: existing.map(m => m.id),
+          dryRun: v.dryRun,
+          alreadyHarvested: true,
+          candidate: v.dryRun ? candidate : undefined,
+        })
+        return
+      }
+
       const savedIds: number[] = []
       if (!v.dryRun) {
         savedIds.push(db.saveMemory(candidate))
