@@ -1694,11 +1694,7 @@ export class Database {
         SELECT
           m.id, m.session_id, m.content, m.compression_level, m.access_count,
           (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) AS age_days,
-          (m.confidence * exp(
-            -0.6931471805599453 *
-            (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) /
-            (7.0 + 7.0 * MIN(m.access_count, 4))
-          )) AS effective_confidence,
+          ${Database.EFFECTIVE_CONFIDENCE} AS effective_confidence,
           s.summary_text, s.intent_text,
           CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS session_exists
         FROM memories m
