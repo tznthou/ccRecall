@@ -668,8 +668,12 @@ export class Database {
     // Phase 4b: register exp() as a user function for effective-confidence decay
     // in ORDER BY. SQLite's built-in math functions require a special compile flag
     // that better-sqlite3 does not enable by default.
-    this.db.function('exp', { deterministic: true }, (x: unknown): number => {
-      return typeof x === 'number' ? Math.exp(x) : NaN
+    // Return NULL (not NaN) for non-finite inputs so ORDER BY sorts the row last
+    // instead of first — SQLite treats NaN REAL values as larger than all finite
+    // numbers in DESC ordering, which would let a corrupt row dominate recall.
+    this.db.function('exp', { deterministic: true }, (x: unknown): number | null => {
+      if (typeof x !== 'number' || !Number.isFinite(x)) return null
+      return Math.exp(x)
     })
     this.initSchema()
     this.runMigrations()
@@ -1531,7 +1535,12 @@ export class Database {
           `).all(q, cappedLimit)
       return (rows as MemoryRow[]).map(mapMemoryRow)
     } catch (err) {
-      console.warn('[memories] queryMemories error:', (err as Error).message)
+      // Strip control chars from SQLite error message to prevent log injection —
+      // FTS5 errors embed the user-supplied query verbatim, which may contain
+      // newlines or ANSI escapes if the caller is malicious.
+      // eslint-disable-next-line no-control-regex
+      const safeMsg = (err as Error).message.replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
+      console.warn('[memories] queryMemories error:', safeMsg)
       return []
     }
   }
