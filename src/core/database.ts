@@ -725,6 +725,58 @@ export class Database {
     }))
   }
 
+  getSessionById(sessionId: string): SessionMeta | null {
+    const row = this.db.prepare(
+      `SELECT id, project_id, title, message_count, started_at, ended_at, archived,
+              summary_text, intent_text, outcome_status, duration_seconds, active_duration_seconds, summary_version,
+              tags, files_touched, tools_used, total_input_tokens, total_output_tokens
+       FROM sessions
+       WHERE id = ?`,
+    ).get(sessionId) as {
+      id: string
+      project_id: string
+      title: string | null
+      message_count: number
+      started_at: string | null
+      ended_at: string | null
+      archived: number
+      summary_text: string | null
+      intent_text: string | null
+      outcome_status: string | null
+      duration_seconds: number | null
+      active_duration_seconds: number | null
+      summary_version: number | null
+      tags: string | null
+      files_touched: string | null
+      tools_used: string | null
+      total_input_tokens: number | null
+      total_output_tokens: number | null
+    } | undefined
+
+    if (!row) return null
+
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      title: row.title,
+      messageCount: row.message_count,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      archived: row.archived === 1,
+      summaryText: row.summary_text,
+      intentText: row.intent_text,
+      outcomeStatus: (row.outcome_status as OutcomeStatus) ?? null,
+      durationSeconds: row.duration_seconds,
+      activeDurationSeconds: row.active_duration_seconds,
+      summaryVersion: row.summary_version,
+      tags: row.tags,
+      filesTouched: row.files_touched,
+      toolsUsed: row.tools_used,
+      totalInputTokens: row.total_input_tokens,
+      totalOutputTokens: row.total_output_tokens,
+    }
+  }
+
   /** 將 DB 中不在 keepIds 集合的 session 標記為 archived（JSONL 已從磁碟消失），排除 subagent sessions */
   archiveStaleSessionsExcept(keepIds: Set<string>): void {
     const allRows = this.db.prepare(`SELECT id FROM sessions WHERE archived = 0 AND id ${Database.EXCLUDE_SUBAGENTS}`).all() as Array<{ id: string }>

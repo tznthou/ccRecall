@@ -2,7 +2,7 @@ import http from 'node:http'
 import { URL } from 'node:url'
 import { sendJson, readBody } from './server.js'
 import type { Database, MemoryInput } from '../core/database.js'
-import type { HealthResult, Memory, MemoryType } from '../core/types.js'
+import type { HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus } from '../core/types.js'
 
 const VALID_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
   'decision', 'discovery', 'preference', 'pattern', 'feedback',
@@ -41,6 +41,52 @@ function optionalString(
   if (value == null) return { value: null }
   if (typeof value === 'string') return { value }
   return { error: `${field} must be string or null` }
+}
+
+type SessionEndBody = {
+  sessionId?: unknown
+  dryRun?: unknown
+}
+
+function validateSessionEndBody(
+  raw: unknown,
+): { sessionId: string; dryRun: boolean } | { error: string } {
+  if (!raw || typeof raw !== 'object') return { error: 'body must be JSON object' }
+  const b = raw as SessionEndBody
+  if (typeof b.sessionId !== 'string' || b.sessionId.trim() === '') {
+    return { error: 'sessionId must be non-empty string' }
+  }
+  if (b.dryRun != null && typeof b.dryRun !== 'boolean') {
+    return { error: 'dryRun must be boolean' }
+  }
+  return { sessionId: b.sessionId, dryRun: b.dryRun === true }
+}
+
+export function inferMemoryType(outcome: OutcomeStatus): MemoryType {
+  if (outcome === 'committed') return 'decision'
+  return 'discovery'
+}
+
+export function inferConfidence(outcome: OutcomeStatus): number {
+  if (outcome === 'committed') return 0.9
+  if (outcome === 'tested') return 0.8
+  return 0.7
+}
+
+export function buildMemoryFromSession(session: SessionMeta): MemoryInput | null {
+  const summary = session.summaryText?.trim()
+  if (!summary) return null
+  const parts: string[] = []
+  const intent = session.intentText?.trim()
+  if (intent) parts.push(`[intent] ${intent}`)
+  parts.push(summary)
+  return {
+    sessionId: session.id,
+    messageId: null,
+    content: parts.join('\n'),
+    type: inferMemoryType(session.outcomeStatus),
+    confidence: inferConfidence(session.outcomeStatus),
+  }
 }
 
 function validateSaveBody(raw: unknown): MemoryInput | { error: string } {
@@ -189,8 +235,60 @@ export function createRequestHandler(db: Database) {
 
     // POST /session/end
     if (req.method === 'POST' && path === '/session/end') {
-      // TODO: integrate with session end pipeline (Phase 2)
-      sendJson(res, 200, { ok: true })
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      let bodyText: string
+      try {
+        bodyText = await readBody(req)
+      } catch (err) {
+        const msg = (err as Error).message
+        if (msg === 'body too large') {
+          sendJson(res, 413, { error: msg })
+          return
+        }
+        throw err
+      }
+      let parsed: unknown
+      try {
+        parsed = bodyText ? JSON.parse(bodyText) : {}
+      } catch {
+        sendJson(res, 400, { error: 'invalid JSON body' })
+        return
+      }
+      const v = validateSessionEndBody(parsed)
+      if ('error' in v) {
+        sendJson(res, 400, v)
+        return
+      }
+      const session = db.getSessionById(v.sessionId)
+      if (!session) {
+        sendJson(res, 404, { error: 'session not found' })
+        return
+      }
+      const candidate = buildMemoryFromSession(session)
+      if (!candidate) {
+        sendJson(res, 200, {
+          ok: true,
+          sessionId: v.sessionId,
+          memoriesSaved: [],
+          dryRun: v.dryRun,
+          reason: 'session has no summary',
+        })
+        return
+      }
+      const savedIds: number[] = []
+      if (!v.dryRun) {
+        savedIds.push(db.saveMemory(candidate))
+      }
+      sendJson(res, 200, {
+        ok: true,
+        sessionId: v.sessionId,
+        memoriesSaved: savedIds,
+        dryRun: v.dryRun,
+        candidate: v.dryRun ? candidate : undefined,
+      })
       return
     }
 
