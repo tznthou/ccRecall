@@ -34,7 +34,9 @@ describe('saveMemory — project_id denormalize', () => {
     expect(row.project_id).toBe('proj-A')
   })
 
-  it('prefers caller-supplied projectId over sessions.project_id', () => {
+  it('ignores caller-supplied projectId when sessionId is set (anti-forge)', () => {
+    // Phase 4 decision: session-backed memories always trust sessions.project_id.
+    // This blocks a caller from claiming a forged scope via a valid sessionId.
     db.upsertProject('proj-A', 'Project A')
     db.upsertProject('proj-B', 'Project B')
     db.rawExec(`
@@ -43,13 +45,28 @@ describe('saveMemory — project_id denormalize', () => {
     `)
     const id = db.saveMemory({
       sessionId: 'sess-2', messageId: null, type: 'decision',
-      content: 'override',
-      projectId: 'proj-B',
+      content: 'attempted forge',
+      projectId: 'proj-B',  // caller claim — must be ignored
     })
     const row = db.rawAll<{ project_id: string | null }>(
       `SELECT project_id FROM memories WHERE id = ${id}`,
     )[0]
-    expect(row.project_id).toBe('proj-B')
+    expect(row.project_id).toBe('proj-A')
+  })
+
+  it('session-backed memory with missing session stores project_id=NULL', () => {
+    // Edge case: sessionId points to a non-existent sessions row (e.g. deleted).
+    // Never trust caller-supplied projectId in this case — drop to NULL rather
+    // than let a forged scope survive session deletion.
+    const id = db.saveMemory({
+      sessionId: 'ghost-session', messageId: null, type: 'decision',
+      content: 'orphan',
+      projectId: 'proj-forged',
+    })
+    const row = db.rawAll<{ project_id: string | null }>(
+      `SELECT project_id FROM memories WHERE id = ${id}`,
+    )[0]
+    expect(row.project_id).toBeNull()
   })
 
   it('manual memory without projectId stores NULL', () => {

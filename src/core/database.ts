@@ -1471,15 +1471,22 @@ export class Database {
   // ── Memories ──
 
   saveMemory(input: MemoryInput): number {
-    // Phase 4b: denormalize project_id. Session-backed memories auto-derive from
-    // sessions.project_id when caller did not supply. Manual memories rely on
-    // the caller providing projectId, otherwise they end up globally queryable only.
-    let projectId: string | null = input.projectId ?? null
-    if (input.sessionId && !projectId) {
+    // Phase 4b: denormalize project_id.
+    // Session-backed memories are ALWAYS derived from sessions.project_id — caller-
+    // supplied projectId is ignored for session-backed rows to prevent forged scope
+    // via a stale or orphaned sessions row (Phase 3 stale-denorm lesson). If the
+    // session is missing, project_id falls back to NULL rather than trusting the
+    // caller's claim.
+    // Manual memories (no sessionId) use caller-supplied projectId directly, or
+    // NULL when absent.
+    let projectId: string | null
+    if (input.sessionId) {
       const row = this.db.prepare(
         'SELECT project_id FROM sessions WHERE id = ?',
       ).get(input.sessionId) as { project_id: string } | undefined
       projectId = row?.project_id ?? null
+    } else {
+      projectId = input.projectId ?? null
     }
     const info = this.db.prepare(`
       INSERT INTO memories (session_id, message_id, content, type, confidence, project_id)
@@ -1507,10 +1514,13 @@ export class Database {
             JOIN memories m ON m.id = memories_fts.rowid
             LEFT JOIN sessions s ON m.session_id = s.id
             WHERE memories_fts MATCH ?
-              AND COALESCE(s.project_id, m.project_id) = ?
+              AND (
+                (m.session_id IS NOT NULL AND s.project_id = ?) OR
+                (m.session_id IS NULL AND m.project_id = ?)
+              )
             ORDER BY rank, ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
             LIMIT ?
-          `).all(q, projectId, cappedLimit)
+          `).all(q, projectId, projectId, cappedLimit)
         : this.db.prepare(`
             SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
             FROM memories_fts

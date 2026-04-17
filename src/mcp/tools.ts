@@ -213,7 +213,10 @@ export function registerTools(server: McpServer, db: Database): void {
         'Returns: formatted list of matching memories with type and confidence.',
       ].join('\n'),
       inputSchema: recallQueryInput,
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      // Phase 4c touch mutates access_count / last_accessed, so this tool is no
+      // longer read-only or idempotent. Mislabelling would let MCP hosts retry
+      // or cache under the wrong assumption and silently skew recall ranking.
+      annotations: { readOnlyHint: false, idempotentHint: false },
     },
     async (args) => recallQueryHandler(db, memoryService, args),
   )
@@ -237,7 +240,10 @@ export function registerTools(server: McpServer, db: Database): void {
         'Returns: markdown with memory clusters by topic, plus FTS fallback if no topic match.',
       ].join('\n'),
       inputSchema: recallContextInput,
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      // Phase 4c touch mutates access_count / last_accessed per surfaced memory
+      // (with cross-cluster dedup), so this tool is no longer read-only or
+      // idempotent — same reasoning as recall_query above.
+      annotations: { readOnlyHint: false, idempotentHint: false },
     },
     async (args) => recallContextHandler(db, memoryService, args),
   )

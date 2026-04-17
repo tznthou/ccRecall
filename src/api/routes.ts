@@ -183,6 +183,13 @@ export function createRequestHandler(db: Database) {
 
     // GET /memory/query?q=...&limit=...&project=...
     if (req.method === 'GET' && path === '/memory/query') {
+      // Phase 4c touch made this a stateful endpoint (access_count / last_accessed).
+      // Apply the same origin gate as POST so browser prefetches or CSRF from a
+      // non-loopback origin cannot poison recall ranking.
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
       const q = url.searchParams.get('q') ?? ''
       const rawLimit = parseInt(url.searchParams.get('limit') ?? '5', 10)
       const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 5 : rawLimit
