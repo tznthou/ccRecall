@@ -28,7 +28,7 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/user/ccRew
 | **Rule-based summarization** | Extracts intent, activity, outcome, and tags from sessions — no LLM calls, zero API cost |
 | **FTS5 full-text search** | Sub-100ms keyword search across all conversation history, fast enough for hook injection |
 | **Incremental indexing** | Only re-indexes sessions that changed (mtime diffing), handles resumed sessions via UUID dedup |
-| **Metacognition** | Knowledge map tracks what topics the AI has explored, at what depth, with what confidence |
+| **Metacognition** | `knowledge_map` aggregates topic mentions from sessions + memories. Depth derived from mention count (shallow / medium / deep). Exposed via `/metacognition/check` and MCP `recall_context` |
 | **Forgetting curve** | Memories compress over time: raw → summary → one-liner → deleted. Confidence decays on unused memories |
 | **Read-only** | Never modifies `~/.claude/` — only reads JSONL logs |
 
@@ -71,7 +71,7 @@ flowchart TB
 | better-sqlite3 | Database | Synchronous API, zero external deps |
 | FTS5 | Full-text search | Built into SQLite, unicode61 tokenizer |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
-| vitest | Testing | 207 tests across 10 files, integration-style |
+| vitest | Testing | 273 tests across 15 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
@@ -118,14 +118,15 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `/memory/save` | POST | Save a memory entry (origin-checked) | Live |
 | `/session/end` | POST | Harvest a finished session's summary into a memory (idempotent) | Live |
 | `/memory/context?session_id=...` | GET | Session context lookup | Stub |
-| `/metacognition/check?topic=...` | GET | Knowledge depth check | Stub (Phase 3) |
-| `/session/checkpoint` | POST | Pre-compact checkpoint | Stub (Phase 3) |
+| `/metacognition/check?projectId=...[&topic=...]` | GET | Knowledge map: summary (top/recent/stale topics + counts) or topic detail (memories + related topics) | Live |
+| `/session/checkpoint` | POST | Mid-session snapshot into dedicated `session_checkpoints` table (not harvested as memory) | Live |
 
 ## MCP Tools
 
 | Tool | Purpose |
 |------|---------|
-| `recall_query` | Search past decisions, discoveries, patterns via FTS5 |
+| `recall_query` | Raw FTS5 keyword search across memories |
+| `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
 | `recall_save` | Store a new memory (type: decision / discovery / preference / pattern / feedback) |
 
 Expose them to Claude Code:
@@ -156,17 +157,20 @@ ccRecall/
 │   │   └── routes.ts          # Request routing + harvest flow
 │   ├── mcp/
 │   │   ├── server.ts          # MCP stdio server entry
-│   │   └── tools.ts           # recall_query + recall_save
+│   │   └── tools.ts           # recall_query + recall_context + recall_save
+│   ├── core/topic-extractor.ts # Rule-based topic extraction from session tags/files
 │   └── index.ts               # HTTP entry point
 ├── hooks/
 │   ├── session-start.mjs      # Inject memories on SessionStart (stdout)
 │   ├── session-end.mjs        # POST /session/end on SessionEnd
 │   └── README.md              # Hook installation guide
-├── tests/                     # 207 tests across parser / scanner /
+├── tests/                     # 273 tests across parser / scanner /
 │   │                          # summarizer / database / indexer / e2e /
 │   │                          # memories / mcp / session-end /
-│   │                          # hooks-session-start / hooks-session-end
-│   └── fixtures/              # Sample JSONL files
+│   │                          # hooks-session-start / hooks-session-end /
+│   │                          # knowledge-map / topic-extractor /
+│   │                          # metacognition / session-checkpoint
+│   └── fixtures/              # Sample JSONL + shared test helpers
 └── .claude/
     └── pi-research/           # Architecture research documents
 ```
