@@ -58,6 +58,77 @@ export interface IndexSessionParams {
   messages: MessageInput[]
 }
 
+/** sessions 資料表的完整欄位 SELECT 子句（getSessions / getSessionById 共用） */
+const SESSION_SELECT_COLUMNS = `id, project_id, title, message_count, started_at, ended_at, archived,
+       summary_text, intent_text, outcome_status, duration_seconds, active_duration_seconds, summary_version,
+       tags, files_touched, tools_used, total_input_tokens, total_output_tokens`
+
+interface SessionRow {
+  id: string
+  project_id: string
+  title: string | null
+  message_count: number
+  started_at: string | null
+  ended_at: string | null
+  archived: number
+  summary_text: string | null
+  intent_text: string | null
+  outcome_status: string | null
+  duration_seconds: number | null
+  active_duration_seconds: number | null
+  summary_version: number | null
+  tags: string | null
+  files_touched: string | null
+  tools_used: string | null
+  total_input_tokens: number | null
+  total_output_tokens: number | null
+}
+
+function mapSessionRow(r: SessionRow): SessionMeta {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    title: r.title,
+    messageCount: r.message_count,
+    startedAt: r.started_at,
+    endedAt: r.ended_at,
+    archived: r.archived === 1,
+    summaryText: r.summary_text,
+    intentText: r.intent_text,
+    outcomeStatus: (r.outcome_status as OutcomeStatus) ?? null,
+    durationSeconds: r.duration_seconds,
+    activeDurationSeconds: r.active_duration_seconds,
+    summaryVersion: r.summary_version,
+    tags: r.tags,
+    filesTouched: r.files_touched,
+    toolsUsed: r.tools_used,
+    totalInputTokens: r.total_input_tokens,
+    totalOutputTokens: r.total_output_tokens,
+  }
+}
+
+interface MemoryRow {
+  id: number
+  session_id: string | null
+  message_id: string | null
+  content: string
+  type: string
+  confidence: number
+  created_at: string
+}
+
+function mapMemoryRow(r: MemoryRow): Memory {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    messageId: r.message_id,
+    content: r.content,
+    type: r.type as MemoryType,
+    confidence: r.confidence,
+    createdAt: r.created_at,
+  }
+}
+
 /** Migration 定義 */
 interface Migration {
   version: number
@@ -675,106 +746,24 @@ export class Database {
 
   getSessions(projectId: string): SessionMeta[] {
     const rows = this.db.prepare(
-      `SELECT id, project_id, title, message_count, started_at, ended_at, archived,
-              summary_text, intent_text, outcome_status, duration_seconds, active_duration_seconds, summary_version,
-              tags, files_touched, tools_used, total_input_tokens, total_output_tokens
+      `SELECT ${SESSION_SELECT_COLUMNS}
        FROM sessions
        WHERE project_id = ?
          AND id ${Database.EXCLUDE_SUBAGENTS}
        ORDER BY started_at DESC`,
-    ).all(projectId) as Array<{
-      id: string
-      project_id: string
-      title: string | null
-      message_count: number
-      started_at: string | null
-      ended_at: string | null
-      archived: number
-      summary_text: string | null
-      intent_text: string | null
-      outcome_status: string | null
-      duration_seconds: number | null
-      active_duration_seconds: number | null
-      summary_version: number | null
-      tags: string | null
-      files_touched: string | null
-      tools_used: string | null
-      total_input_tokens: number | null
-      total_output_tokens: number | null
-    }>
+    ).all(projectId) as SessionRow[]
 
-    return rows.map(r => ({
-      id: r.id,
-      projectId: r.project_id,
-      title: r.title,
-      messageCount: r.message_count,
-      startedAt: r.started_at,
-      endedAt: r.ended_at,
-      archived: r.archived === 1,
-      summaryText: r.summary_text,
-      intentText: r.intent_text,
-      outcomeStatus: (r.outcome_status as OutcomeStatus) ?? null,
-      durationSeconds: r.duration_seconds,
-      activeDurationSeconds: r.active_duration_seconds,
-      summaryVersion: r.summary_version,
-      tags: r.tags,
-      filesTouched: r.files_touched,
-      toolsUsed: r.tools_used,
-      totalInputTokens: r.total_input_tokens,
-      totalOutputTokens: r.total_output_tokens,
-    }))
+    return rows.map(mapSessionRow)
   }
 
   getSessionById(sessionId: string): SessionMeta | null {
     const row = this.db.prepare(
-      `SELECT id, project_id, title, message_count, started_at, ended_at, archived,
-              summary_text, intent_text, outcome_status, duration_seconds, active_duration_seconds, summary_version,
-              tags, files_touched, tools_used, total_input_tokens, total_output_tokens
+      `SELECT ${SESSION_SELECT_COLUMNS}
        FROM sessions
        WHERE id = ?`,
-    ).get(sessionId) as {
-      id: string
-      project_id: string
-      title: string | null
-      message_count: number
-      started_at: string | null
-      ended_at: string | null
-      archived: number
-      summary_text: string | null
-      intent_text: string | null
-      outcome_status: string | null
-      duration_seconds: number | null
-      active_duration_seconds: number | null
-      summary_version: number | null
-      tags: string | null
-      files_touched: string | null
-      tools_used: string | null
-      total_input_tokens: number | null
-      total_output_tokens: number | null
-    } | undefined
+    ).get(sessionId) as SessionRow | undefined
 
-    if (!row) return null
-
-    return {
-      id: row.id,
-      projectId: row.project_id,
-      title: row.title,
-      messageCount: row.message_count,
-      startedAt: row.started_at,
-      endedAt: row.ended_at,
-      archived: row.archived === 1,
-      summaryText: row.summary_text,
-      intentText: row.intent_text,
-      outcomeStatus: (row.outcome_status as OutcomeStatus) ?? null,
-      durationSeconds: row.duration_seconds,
-      activeDurationSeconds: row.active_duration_seconds,
-      summaryVersion: row.summary_version,
-      tags: row.tags,
-      filesTouched: row.files_touched,
-      toolsUsed: row.tools_used,
-      totalInputTokens: row.total_input_tokens,
-      totalOutputTokens: row.total_output_tokens,
-    }
+    return row ? mapSessionRow(row) : null
   }
 
   /** 將 DB 中不在 keepIds 集合的 session 標記為 archived（JSONL 已從磁碟消失），排除 subagent sessions */
@@ -1380,23 +1369,7 @@ export class Database {
             ORDER BY rank, m.confidence DESC, m.id DESC
             LIMIT ?
           `).all(q, cappedLimit)
-      return (rows as Array<{
-        id: number
-        session_id: string | null
-        message_id: string | null
-        content: string
-        type: string
-        confidence: number
-        created_at: string
-      }>).map(r => ({
-        id: r.id,
-        sessionId: r.session_id,
-        messageId: r.message_id,
-        content: r.content,
-        type: r.type as MemoryType,
-        confidence: r.confidence,
-        createdAt: r.created_at,
-      }))
+      return (rows as MemoryRow[]).map(mapMemoryRow)
     } catch (err) {
       console.warn('[memories] queryMemories error:', (err as Error).message)
       return []
@@ -1409,24 +1382,8 @@ export class Database {
       FROM memories
       WHERE session_id = ?
       ORDER BY id ASC
-    `).all(sessionId) as Array<{
-      id: number
-      session_id: string | null
-      message_id: string | null
-      content: string
-      type: string
-      confidence: number
-      created_at: string
-    }>
-    return rows.map(r => ({
-      id: r.id,
-      sessionId: r.session_id,
-      messageId: r.message_id,
-      content: r.content,
-      type: r.type as MemoryType,
-      confidence: r.confidence,
-      createdAt: r.created_at,
-    }))
+    `).all(sessionId) as MemoryRow[]
+    return rows.map(mapMemoryRow)
   }
 
   getMemoryCount(): number {

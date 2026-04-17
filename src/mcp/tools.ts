@@ -5,6 +5,20 @@ import type { Memory, MemoryType } from '../core/types.js'
 
 const MEMORY_TYPES = ['decision', 'discovery', 'preference', 'pattern', 'feedback'] as const
 
+type McpTextResult = {
+  content: Array<{ type: 'text'; text: string }>
+  isError?: true
+}
+
+function textResult(text: string): McpTextResult {
+  return { content: [{ type: 'text' as const, text }] }
+}
+
+function textError(prefix: string, err: unknown): McpTextResult {
+  const msg = err instanceof Error ? err.message : String(err)
+  return { content: [{ type: 'text' as const, text: `${prefix}: ${msg}` }], isError: true }
+}
+
 const recallQueryInput = {
   query: z.string().min(1).describe('FTS5 search query (keywords or phrase)'),
   limit: z.number().int().positive().max(50).optional().describe('Max results (default 10, max 50)'),
@@ -23,18 +37,12 @@ export function formatMemories(memories: Memory[], query: string): string {
 export function recallQueryHandler(
   db: Database,
   args: { query: string; limit?: number },
-) {
+): McpTextResult {
   try {
     const memories = db.queryMemories(args.query, args.limit ?? 10)
-    return {
-      content: [{ type: 'text' as const, text: formatMemories(memories, args.query) }],
-    }
+    return textResult(formatMemories(memories, args.query))
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return {
-      content: [{ type: 'text' as const, text: `Error querying memories: ${msg}` }],
-      isError: true,
-    }
+    return textError('Error querying memories', err)
   }
 }
 
@@ -55,7 +63,7 @@ export function recallSaveHandler(
     messageId?: string | null
     confidence?: number
   },
-) {
+): McpTextResult {
   try {
     const id = db.saveMemory({
       sessionId: args.sessionId ?? null,
@@ -64,15 +72,9 @@ export function recallSaveHandler(
       type: args.type,
       confidence: args.confidence ?? 1,
     })
-    return {
-      content: [{ type: 'text' as const, text: `Saved memory #${id} (type: ${args.type})` }],
-    }
+    return textResult(`Saved memory #${id} (type: ${args.type})`)
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return {
-      content: [{ type: 'text' as const, text: `Error saving memory: ${msg}` }],
-      isError: true,
-    }
+    return textError('Error saving memory', err)
   }
 }
 
