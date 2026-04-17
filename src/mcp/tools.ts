@@ -139,11 +139,24 @@ export function recallContextHandler(
       })
     }
 
-    // FTS fallback if no topic matched
+    // FTS fallback if no topic matched — per-keyword union (queryMemories quotes every
+    // token into a phrase, so "foo OR bar" collapses to a phrase query, not a boolean OR)
     let fallback: Memory[] | null = null
     if (clusters.length === 0 && args.keywords.length > 0) {
-      const ftsQuery = args.keywords.join(' OR ')
-      fallback = db.queryMemories(ftsQuery, memoryLimit, args.projectId)
+      const seen = new Set<number>()
+      const aggregated: Memory[] = []
+      for (const kw of args.keywords) {
+        if (aggregated.length >= memoryLimit) break
+        const results = db.queryMemories(kw, memoryLimit, args.projectId)
+        for (const m of results) {
+          if (aggregated.length >= memoryLimit) break
+          if (!seen.has(m.id)) {
+            seen.add(m.id)
+            aggregated.push(m)
+          }
+        }
+      }
+      fallback = aggregated
     }
 
     return textResult(formatContextResult(clusters, unmatched, fallback, args.keywords))

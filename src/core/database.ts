@@ -519,6 +519,8 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_memory_topics_topic   ON memory_topics(topic_key, project_id);
         CREATE INDEX IF NOT EXISTS idx_checkpoints_session   ON session_checkpoints(session_id, created_at DESC);
       `)
+      // 強制 reindex：existing sessions 需 re-run indexer 才會 populate session_topics + knowledge_map
+      db.exec("UPDATE sessions SET file_mtime = NULL")
     },
   },
 ]
@@ -1464,7 +1466,9 @@ export class Database {
     run(topicKeys)
   }
 
-  /** Full rebuild of knowledge_map for a project (aggregate from session_topics + memory_topics, exclude subagents) */
+  /** Full rebuild of knowledge_map for a project. project_id for memory_topics is derived
+      from sessions.project_id (not the denormalized column) so repo renames / reindex won't
+      leave stale cross-project associations. */
   rebuildKnowledgeMap(projectId: string): void {
     const run = this.db.transaction(() => {
       this.db.prepare('DELETE FROM knowledge_map WHERE project_id = ?').run(projectId)
@@ -1472,19 +1476,20 @@ export class Database {
         INSERT INTO knowledge_map (topic_key, project_id, mention_count, last_touched)
         SELECT topic_key, project_id, COUNT(*) AS mention_count, MAX(touched_at) AS last_touched
         FROM (
-          SELECT st.topic_key, st.project_id,
+          SELECT st.topic_key, s.project_id,
                  COALESCE(s.ended_at, s.started_at, datetime('now')) AS touched_at
           FROM session_topics st
           JOIN sessions s ON s.id = st.session_id
-          WHERE st.project_id = ?
+          WHERE s.project_id = ?
             AND s.id ${Database.EXCLUDE_SUBAGENTS}
           UNION ALL
-          SELECT mt.topic_key, mt.project_id,
+          SELECT mt.topic_key, s.project_id,
                  COALESCE(m.created_at, datetime('now')) AS touched_at
           FROM memory_topics mt
           JOIN memories m ON m.id = mt.memory_id
-          WHERE mt.project_id = ?
-            AND (m.session_id IS NULL OR m.session_id ${Database.EXCLUDE_SUBAGENTS})
+          JOIN sessions s ON s.id = m.session_id
+          WHERE s.project_id = ?
+            AND s.id ${Database.EXCLUDE_SUBAGENTS}
         )
         GROUP BY topic_key, project_id
       `).run(projectId, projectId)
@@ -1528,7 +1533,9 @@ export class Database {
       SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
       FROM memory_topics mt
       JOIN memories m ON m.id = mt.memory_id
-      WHERE mt.project_id = ?
+      JOIN sessions s ON s.id = m.session_id
+      WHERE s.project_id = ?
+        AND s.id ${Database.EXCLUDE_SUBAGENTS}
         AND mt.topic_key IN (${placeholders})
       ORDER BY m.confidence DESC, m.id DESC
       LIMIT ?
@@ -1567,7 +1574,8 @@ export class Database {
     }
   }
 
-  /** 共現 topics（與目標共享 session 或 memory），按共現次數排序 */
+  /** 共現 topics（與目標共享 session 或 memory），按共現次數排序。
+      project_id 透過 JOIN sessions 決定，避免 memory_topics 過時的 project_id 汙染。 */
   getRelatedTopics(topicKey: string, projectId: string, limit: number): string[] {
     const cappedLimit = Math.min(limit, 50)
     const rows = this.db.prepare(`
@@ -1575,15 +1583,18 @@ export class Database {
         SELECT st2.topic_key AS k
         FROM session_topics st1
         JOIN session_topics st2 ON st1.session_id = st2.session_id AND st2.topic_key != st1.topic_key
-        WHERE st1.topic_key = ? AND st1.project_id = ? AND st2.project_id = ?
+        JOIN sessions s ON s.id = st1.session_id
+        WHERE st1.topic_key = ? AND s.project_id = ? AND s.id ${Database.EXCLUDE_SUBAGENTS}
         UNION ALL
         SELECT mt2.topic_key AS k
         FROM memory_topics mt1
         JOIN memory_topics mt2 ON mt1.memory_id = mt2.memory_id AND mt2.topic_key != mt1.topic_key
-        WHERE mt1.topic_key = ? AND mt1.project_id = ? AND mt2.project_id = ?
+        JOIN memories m ON m.id = mt1.memory_id
+        JOIN sessions s ON s.id = m.session_id
+        WHERE mt1.topic_key = ? AND s.project_id = ? AND s.id ${Database.EXCLUDE_SUBAGENTS}
       )
       GROUP BY k ORDER BY c DESC, k ASC LIMIT ?
-    `).all(topicKey, projectId, projectId, topicKey, projectId, projectId, cappedLimit) as Array<{ k: string; c: number }>
+    `).all(topicKey, projectId, topicKey, projectId, cappedLimit) as Array<{ k: string; c: number }>
     return rows.map(r => r.k)
   }
 

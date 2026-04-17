@@ -306,14 +306,17 @@ export function createRequestHandler(db: Database) {
 
       const savedIds: number[] = []
       if (!v.dryRun) {
-        const memoryId = db.saveMemory(candidate)
-        savedIds.push(memoryId)
-        // Phase 3c: 新 memory 繼承 session topics，然後 rebuild knowledge_map
-        const sessionTopics = db.getSessionTopicKeys(session.id)
-        if (sessionTopics.length > 0) {
-          db.saveMemoryTopics(memoryId, session.projectId, sessionTopics)
-        }
-        db.rebuildKnowledgeMap(session.projectId)
+        // Atomic：若 saveMemoryTopics 或 rebuildKnowledgeMap 失敗，整個 harvest rollback，
+        // 避免 retry 時 existing.length > 0 回 alreadyHarvested 但 topic 關聯缺失的 split-brain
+        db.runTransaction(() => {
+          const memoryId = db.saveMemory(candidate)
+          savedIds.push(memoryId)
+          const sessionTopics = db.getSessionTopicKeys(session.id)
+          if (sessionTopics.length > 0) {
+            db.saveMemoryTopics(memoryId, session.projectId, sessionTopics)
+          }
+          db.rebuildKnowledgeMap(session.projectId)
+        })
       }
       sendJson(res, 200, {
         ok: true,

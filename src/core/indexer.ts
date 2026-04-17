@@ -151,38 +151,39 @@ export async function runIndexer(
     // 用去重後的 messages 產生 session 摘要 + session_files
     const { summary, sessionFiles } = summarizeSession(messages, startedAt, endedAt)
 
-    // DB 寫入 — 失敗向上拋出（不應靜默）
-    db.indexSession({
-      sessionId: s.sessionId,
-      projectId: s.projectId,
-      projectDisplayName: s.projectDisplayName,
-      title: parsed.title,
-      messageCount: messages.length,
-      filePath: s.filePath,
-      fileSize: s.fileSize,
-      fileMtime: s.fileMtime,
-      startedAt,
-      endedAt,
-      summaryText: summary.summaryText,
-      intentText: summary.intentText || null,
-      outcomeStatus: summary.outcomeStatus,
-      outcomeSignals: JSON.stringify(summary.outcomeSignals),
-      durationSeconds: summary.durationSeconds,
-      activeDurationSeconds: summary.activeDurationSeconds,
-      summaryVersion: summary.summaryVersion,
-      tags: summary.tags,
-      filesTouched: summary.filesTouched,
-      toolsUsed: summary.toolsUsed,
-      sessionFiles,
-      messages: toMessageInputs(messages),
+    // DB 寫入 + topic 抽取在同一 transaction，避免 session row 已更新但 session_topics 未寫
+    // 導致 file_mtime 匹配下次 indexer 會跳過此 session（sticky 空 topic 狀態）
+    db.runTransaction(() => {
+      db.indexSession({
+        sessionId: s.sessionId,
+        projectId: s.projectId,
+        projectDisplayName: s.projectDisplayName,
+        title: parsed.title,
+        messageCount: messages.length,
+        filePath: s.filePath,
+        fileSize: s.fileSize,
+        fileMtime: s.fileMtime,
+        startedAt,
+        endedAt,
+        summaryText: summary.summaryText,
+        intentText: summary.intentText || null,
+        outcomeStatus: summary.outcomeStatus,
+        outcomeSignals: JSON.stringify(summary.outcomeSignals),
+        durationSeconds: summary.durationSeconds,
+        activeDurationSeconds: summary.activeDurationSeconds,
+        summaryVersion: summary.summaryVersion,
+        tags: summary.tags,
+        filesTouched: summary.filesTouched,
+        toolsUsed: summary.toolsUsed,
+        sessionFiles,
+        messages: toMessageInputs(messages),
+      })
+      const session = db.getSessionById(s.sessionId)
+      if (session) {
+        const topics = extractFromSession(session)
+        db.saveSessionTopics(s.sessionId, s.projectId, topics)
+      }
     })
-
-    // Phase 3c: 抽 topics 寫入 session_topics（main session only，subagent 後段處理不動）
-    const session = db.getSessionById(s.sessionId)
-    if (session) {
-      const topics = extractFromSession(session)
-      db.saveSessionTopics(s.sessionId, s.projectId, topics)
-    }
   }
 
   // 4. SUBAGENT SCANNING — 對有變動的 session，掃描 subagents/
