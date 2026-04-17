@@ -51,7 +51,7 @@ flowchart TB
     end
 
     subgraph Consumers["Context Injection"]
-        Hook["Claude Code Hooks<br/>SessionStart / UserPromptSubmit"]
+        Hook["Claude Code Hooks<br/>SessionStart / SessionEnd"]
         MCP["MCP Server<br/>recall_query / recall_save"]
     end
 
@@ -71,7 +71,8 @@ flowchart TB
 | better-sqlite3 | Database | Synchronous API, zero external deps |
 | FTS5 | Full-text search | Built into SQLite, unicode61 tokenizer |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
-| vitest | Testing | 154 tests, integration-style |
+| vitest | Testing | 207 tests across 10 files, integration-style |
+| `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
 
@@ -113,12 +114,27 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | Endpoint | Method | Description | Status |
 |----------|--------|-------------|--------|
 | `/health` | GET | Service health + DB stats | Live |
-| `/memory/query?q=...&limit=...` | GET | FTS5 search across all sessions | Live |
+| `/memory/query?q=...&limit=...&project=...` | GET | FTS5 search across memories with optional project filter | Live |
+| `/memory/save` | POST | Save a memory entry (origin-checked) | Live |
+| `/session/end` | POST | Harvest a finished session's summary into a memory (idempotent) | Live |
 | `/memory/context?session_id=...` | GET | Session context lookup | Stub |
-| `/metacognition/check?topic=...` | GET | Knowledge depth check | Stub |
-| `/memory/save` | POST | Save a memory entry | Stub |
-| `/session/checkpoint` | POST | Pre-compact checkpoint | Stub |
-| `/session/end` | POST | Session end hook | Stub |
+| `/metacognition/check?topic=...` | GET | Knowledge depth check | Stub (Phase 3) |
+| `/session/checkpoint` | POST | Pre-compact checkpoint | Stub (Phase 3) |
+
+## MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `recall_query` | Search past decisions, discoveries, patterns via FTS5 |
+| `recall_save` | Store a new memory (type: decision / discovery / preference / pattern / feedback) |
+
+Expose them to Claude Code:
+
+```bash
+claude mcp add ccrecall --scope user -- /absolute/path/to/ccRecall/node_modules/.bin/tsx /absolute/path/to/ccRecall/src/mcp/server.ts
+```
+
+See [hooks/README.md](hooks/README.md) for SessionStart / SessionEnd hook installation.
 
 ---
 
@@ -128,27 +144,31 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 ccRecall/
 ├── src/
 │   ├── core/
-│   │   ├── types.ts         # All type definitions
-│   │   ├── parser.ts         # JSONL conversation parser
-│   │   ├── scanner.ts        # File system scanner
-│   │   ├── summarizer.ts     # Rule-based session summarizer
-│   │   ├── database.ts       # SQLite + FTS5 (trimmed from ccRewind)
-│   │   ├── indexer.ts        # Indexing pipeline orchestrator
-│   │   └── index.ts          # Barrel exports
+│   │   ├── types.ts          # All type definitions
+│   │   ├── parser.ts          # JSONL conversation parser
+│   │   ├── scanner.ts         # File system scanner
+│   │   ├── summarizer.ts      # Rule-based session summarizer
+│   │   ├── database.ts        # SQLite + FTS5 (trimmed from ccRewind)
+│   │   ├── indexer.ts         # Indexing pipeline orchestrator
+│   │   └── index.ts           # Barrel exports
 │   ├── api/
-│   │   ├── server.ts         # HTTP server
-│   │   └── routes.ts         # Request routing
-│   └── index.ts              # Entry point
-├── tests/
-│   ├── fixtures/             # Sample JSONL files
-│   ├── parser.test.ts
-│   ├── scanner.test.ts
-│   ├── summarizer.test.ts
-│   ├── database.test.ts
-│   ├── indexer.test.ts
-│   └── e2e.test.ts
+│   │   ├── server.ts          # HTTP server
+│   │   └── routes.ts          # Request routing + harvest flow
+│   ├── mcp/
+│   │   ├── server.ts          # MCP stdio server entry
+│   │   └── tools.ts           # recall_query + recall_save
+│   └── index.ts               # HTTP entry point
+├── hooks/
+│   ├── session-start.mjs      # Inject memories on SessionStart (stdout)
+│   ├── session-end.mjs        # POST /session/end on SessionEnd
+│   └── README.md              # Hook installation guide
+├── tests/                     # 207 tests across parser / scanner /
+│   │                          # summarizer / database / indexer / e2e /
+│   │                          # memories / mcp / session-end /
+│   │                          # hooks-session-start / hooks-session-end
+│   └── fixtures/              # Sample JSONL files
 └── .claude/
-    └── pi-research/          # Architecture research documents
+    └── pi-research/           # Architecture research documents
 ```
 
 ---
