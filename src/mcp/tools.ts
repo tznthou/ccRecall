@@ -1,6 +1,7 @@
 import * as z from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Database } from '../core/database.js'
+import { MemoryService } from '../core/memory-service.js'
 import type { Memory, MemoryType, KnowledgeDepth } from '../core/types.js'
 import { deriveDepth } from '../core/types.js'
 import { normalizeTopicKey } from '../core/topic-extractor.js'
@@ -38,10 +39,14 @@ export function formatMemories(memories: Memory[], query: string): string {
 
 export function recallQueryHandler(
   db: Database,
+  memoryService: MemoryService,
   args: { query: string; limit?: number },
 ): McpTextResult {
   try {
     const memories = db.queryMemories(args.query, args.limit ?? 10)
+    // Phase 4c: touch returned memories so access_count reflects real usage,
+    // extending their half-life under the decay formula.
+    if (memories.length > 0) memoryService.touch(memories.map(m => m.id))
     return textResult(formatMemories(memories, args.query))
   } catch (err) {
     return textError('Error querying memories', err)
@@ -104,6 +109,7 @@ const recallContextInput = {
 
 export function recallContextHandler(
   db: Database,
+  memoryService: MemoryService,
   args: { projectId: string; keywords: string[]; memoryLimit?: number },
 ): McpTextResult {
   try {
@@ -150,6 +156,14 @@ export function recallContextHandler(
       fallback = aggregated
     }
 
+    // Phase 4c: gather all memory ids surfaced (clusters + fallback) and touch once.
+    // MemoryService.touch dedupes internally, so a memory appearing in multiple
+    // clusters still only bumps access_count by 1 per request.
+    const surfacedIds: number[] = []
+    for (const c of clusters) for (const m of c.memories) surfacedIds.push(m.id)
+    if (fallback) for (const m of fallback) surfacedIds.push(m.id)
+    if (surfacedIds.length > 0) memoryService.touch(surfacedIds)
+
     return textResult(formatContextResult(clusters, unmatched, fallback, args.keywords))
   } catch (err) {
     return textError('Error building context', err)
@@ -183,6 +197,7 @@ export function recallSaveHandler(
 }
 
 export function registerTools(server: McpServer, db: Database): void {
+  const memoryService = new MemoryService(db)
   server.registerTool(
     'recall_query',
     {
@@ -200,7 +215,7 @@ export function registerTools(server: McpServer, db: Database): void {
       inputSchema: recallQueryInput,
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    async (args) => recallQueryHandler(db, args),
+    async (args) => recallQueryHandler(db, memoryService, args),
   )
 
   server.registerTool(
@@ -224,7 +239,7 @@ export function registerTools(server: McpServer, db: Database): void {
       inputSchema: recallContextInput,
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    async (args) => recallContextHandler(db, args),
+    async (args) => recallContextHandler(db, memoryService, args),
   )
 
   server.registerTool(

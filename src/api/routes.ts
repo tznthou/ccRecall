@@ -2,6 +2,7 @@ import http from 'node:http'
 import { URL } from 'node:url'
 import { sendJson, readBody } from './server.js'
 import type { Database, MemoryInput } from '../core/database.js'
+import { MemoryService } from '../core/memory-service.js'
 import type {
   HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
@@ -157,6 +158,7 @@ function validateCheckpointBody(
 const startTime = Date.now()
 
 export function createRequestHandler(db: Database) {
+  const memoryService = new MemoryService(db)
   return async function handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -192,6 +194,9 @@ export function createRequestHandler(db: Database) {
       }
 
       const rows = db.queryMemories(q, limit, project)
+      // Phase 4c: touch surfaced memories so their access_count and last_accessed
+      // feed into the decay formula at next query time.
+      if (rows.length > 0) memoryService.touch(rows.map(m => m.id))
       const memories = rows.map(m => ({
         content: m.content,
         source: memorySource(m),

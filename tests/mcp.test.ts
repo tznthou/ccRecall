@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { Database } from '../src/core/database.js'
+import { MemoryService } from '../src/core/memory-service.js'
 import type { Memory } from '../src/core/types.js'
 import { recallQueryHandler, recallSaveHandler, formatMemories, recallContextHandler } from '../src/mcp/tools.js'
 import { sessionParams } from './fixtures/helpers.js'
@@ -10,10 +11,12 @@ import { sessionParams } from './fixtures/helpers.js'
 describe('MCP recall_query handler', () => {
   let tmpDir: string
   let db: Database
+  let svc: MemoryService
 
   beforeEach(() => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-mcp-test-'))
     db = new Database(path.join(tmpDir, 'test.db'))
+    svc = new MemoryService(db)
   })
 
   afterEach(() => {
@@ -22,7 +25,7 @@ describe('MCP recall_query handler', () => {
   })
 
   it('returns empty-result message when no memories match', () => {
-    const result = recallQueryHandler(db, { query: 'nonexistent' })
+    const result = recallQueryHandler(db, svc, { query: 'nonexistent' })
     expect(result.isError).toBeUndefined()
     expect(result.content[0].text).toContain('No memories found')
   })
@@ -35,7 +38,7 @@ describe('MCP recall_query handler', () => {
       type: 'decision',
       confidence: 0.9,
     })
-    const result = recallQueryHandler(db, { query: 'Apache' })
+    const result = recallQueryHandler(db, svc, { query: 'Apache' })
     expect(result.content[0].text).toContain('[decision]')
     expect(result.content[0].text).toContain('Apache-2.0')
     expect(result.content[0].text).toContain('conf 0.90')
@@ -51,7 +54,7 @@ describe('MCP recall_query handler', () => {
         confidence: 1,
       })
     }
-    const result = recallQueryHandler(db, { query: 'apache', limit: 2 })
+    const result = recallQueryHandler(db, svc, { query: 'apache', limit: 2 })
     const lines = result.content[0].text.split('\n').filter(Boolean)
     expect(lines.length).toBe(2)
   })
@@ -66,7 +69,7 @@ describe('MCP recall_query handler', () => {
         confidence: 1,
       })
     }
-    const result = recallQueryHandler(db, { query: 'keyword' })
+    const result = recallQueryHandler(db, svc, { query: 'keyword' })
     const lines = result.content[0].text.split('\n').filter(Boolean)
     expect(lines.length).toBe(10)
   })
@@ -101,10 +104,12 @@ describe('formatMemories', () => {
 describe('MCP recall_save handler', () => {
   let tmpDir: string
   let db: Database
+  let svc: MemoryService
 
   beforeEach(() => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-mcp-save-'))
     db = new Database(path.join(tmpDir, 'test.db'))
+    svc = new MemoryService(db)
   })
 
   afterEach(() => {
@@ -141,7 +146,7 @@ describe('MCP recall_save handler', () => {
 
   it('persists memory queryable via recallQueryHandler', () => {
     recallSaveHandler(db, { content: 'searchable via mcp tool', type: 'discovery' })
-    const result = recallQueryHandler(db, { query: 'searchable' })
+    const result = recallQueryHandler(db, svc, { query: 'searchable' })
     expect(result.content[0].text).toContain('searchable via mcp tool')
     expect(result.content[0].text).toContain('[discovery]')
   })
@@ -150,10 +155,12 @@ describe('MCP recall_save handler', () => {
 describe('MCP recall_context handler', () => {
   let tmpDir: string
   let db: Database
+  let svc: MemoryService
 
   beforeEach(() => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-mcp-ctx-'))
     db = new Database(path.join(tmpDir, 'test.db'))
+    svc = new MemoryService(db)
     db.upsertProject('proj-a', 'Project A')
     db.indexSession(sessionParams({ sessionId: 'sess-1', projectId: 'proj-a' }))
     db.saveSessionTopics('sess-1', 'proj-a', ['typescript', 'mcp', 'sqlite'])
@@ -170,7 +177,7 @@ describe('MCP recall_context handler', () => {
   })
 
   it('returns clusters for matched topics', () => {
-    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['typescript', 'sqlite'] })
+    const r = recallContextHandler(db, svc, { projectId: 'proj-a', keywords: ['typescript', 'sqlite'] })
     expect(r.isError).toBeUndefined()
     expect(r.content[0].text).toContain('## Topic: typescript')
     expect(r.content[0].text).toContain('## Topic: sqlite')
@@ -179,38 +186,38 @@ describe('MCP recall_context handler', () => {
   })
 
   it('shows depth label based on mention count', () => {
-    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['typescript'] })
+    const r = recallContextHandler(db, svc, { projectId: 'proj-a', keywords: ['typescript'] })
     // typescript: 1 session mention + 1 memory mention = 2 → medium
     expect(r.content[0].text).toContain('medium,')
   })
 
   it('reports unmatched keywords', () => {
-    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['typescript', 'unknownxyz'] })
+    const r = recallContextHandler(db, svc, { projectId: 'proj-a', keywords: ['typescript', 'unknownxyz'] })
     expect(r.content[0].text).toContain('## Topic: typescript')
     expect(r.content[0].text).toContain('No topic match for: unknownxyz')
   })
 
   it('falls back to FTS when no topic matches', () => {
-    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['vitest'] })
+    const r = recallContextHandler(db, svc, { projectId: 'proj-a', keywords: ['vitest'] })
     // vitest 不是 topic，但 memory content 包含 "vitest"
     expect(r.content[0].text).toContain('FTS fallback')
     expect(r.content[0].text).toContain('use vitest')
   })
 
   it('returns empty-result message when nothing matches at all', () => {
-    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['absolutelyzzzzz'] })
+    const r = recallContextHandler(db, svc, { projectId: 'proj-a', keywords: ['absolutelyzzzzz'] })
     expect(r.content[0].text).toContain('No relevant memories')
   })
 
   it('respects project isolation', () => {
     db.upsertProject('proj-b', 'Project B')
-    const r = recallContextHandler(db, { projectId: 'proj-b', keywords: ['typescript'] })
+    const r = recallContextHandler(db, svc, { projectId: 'proj-b', keywords: ['typescript'] })
     // proj-b has no topics at all, no memories → should be empty or fallback empty
     expect(r.content[0].text).toContain('No relevant memories')
   })
 
   it('normalizes keywords (e.g. TypeScript → typescript)', () => {
-    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['TypeScript'] })
+    const r = recallContextHandler(db, svc, { projectId: 'proj-a', keywords: ['TypeScript'] })
     expect(r.content[0].text).toContain('## Topic: typescript')
   })
 
@@ -222,7 +229,7 @@ describe('MCP recall_context handler', () => {
       db.saveMemoryTopics(mid, 'proj-a', ['typescript'])
     }
     db.rebuildKnowledgeMap('proj-a')
-    const r = recallContextHandler(db, { projectId: 'proj-a', keywords: ['typescript'], memoryLimit: 3 })
+    const r = recallContextHandler(db, svc, { projectId: 'proj-a', keywords: ['typescript'], memoryLimit: 3 })
     const memLines = r.content[0].text.split('\n').filter(l => l.startsWith('- ['))
     expect(memLines.length).toBe(3)
   })
