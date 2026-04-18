@@ -11,6 +11,7 @@ import { MemoryService } from './core/memory-service.js'
 import { MaintenanceCoordinator } from './core/maintenance-coordinator.js'
 import { JsonlWatcher } from './core/watcher.js'
 import { installDaemon, uninstallDaemon } from './cli/daemon.js'
+import { installHooks, uninstallHooks } from './cli/hooks-installer.js'
 
 /** Read the package.json version shipped next to this bundle. Works across
  *  layouts: src/index.ts (tsx) → ../package.json, dist/index.js → ../package.json,
@@ -51,6 +52,15 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
     console.error(`[ccmem ${subcommand}] ${err.message}`)
     process.exit(1)
   })
+} else if (subcommand === 'install-hooks' || subcommand === 'uninstall-hooks') {
+  const dryRun = process.argv.includes('--dry-run')
+  const action = subcommand === 'install-hooks'
+    ? () => installHooks({ dryRun })
+    : () => uninstallHooks({ dryRun })
+  action().then(() => process.exit(0)).catch((err: Error) => {
+    console.error(`[ccmem ${subcommand}] ${err.message}`)
+    process.exit(1)
+  })
 } else if (subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
   printHelp()
   process.exit(0)
@@ -70,6 +80,9 @@ Usage:
   ccmem install-daemon             Install macOS LaunchAgent for auto-start
   ccmem install-daemon --dry-run   Print plist without installing
   ccmem uninstall-daemon           Remove LaunchAgent and stop auto-start
+  ccmem install-hooks              Register SessionStart/SessionEnd hooks in ~/.claude/settings.json
+  ccmem install-hooks --dry-run    Print merged settings.json without writing
+  ccmem uninstall-hooks            Remove ccRecall hook entries from ~/.claude/settings.json
 
 Environment:
   CCRECALL_PORT                    HTTP port (default: 7749)
