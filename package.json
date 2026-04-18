@@ -1,6 +1,6 @@
 {
   "name": "@tznthou/ccrecall",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "AI memory service for Claude Code — on-demand context injection with metacognition",
   "type": "module",
   "main": "dist/index.js",
