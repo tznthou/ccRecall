@@ -64,6 +64,9 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
 } else if (subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
   printHelp()
   process.exit(0)
+} else if (subcommand === '--version' || subcommand === '-v' || subcommand === 'version') {
+  console.log(readPackageVersion())
+  process.exit(0)
 } else {
   startDaemon().catch((err: Error) => {
     console.error(`[ccmem] fatal: ${err.message}`)
@@ -83,6 +86,7 @@ Usage:
   ccmem install-hooks              Register SessionStart/SessionEnd hooks in ~/.claude/settings.json
   ccmem install-hooks --dry-run    Print merged settings.json without writing
   ccmem uninstall-hooks            Remove ccRecall hook entries from ~/.claude/settings.json
+  ccmem --version                  Print the installed package version
 
 Environment:
   CCRECALL_PORT                    HTTP port (default: 7749)
