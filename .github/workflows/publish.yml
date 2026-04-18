@@ -16,6 +16,12 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # id-token: write lets this job mint an OIDC token that npm exchanges
+    # for a short-lived publish credential via Trusted Publishing. No long-
+    # lived NPM_TOKEN is stored or needed.
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +49,7 @@ jobs:
       #   first publish must opt in explicitly.
       # --no-git-checks: pnpm otherwise refuses to publish from a CI
       #   detached-HEAD checkout.
-      - run: pnpm publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # --provenance: attach a SLSA provenance attestation derived from
+      #   the OIDC token. Triggers the Trusted Publishing path on npm —
+      #   requires a matching trusted-publisher rule on the package.
+      - run: pnpm publish --access public --no-git-checks --provenance
