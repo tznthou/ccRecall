@@ -93,6 +93,9 @@ describe('generatePlist', () => {
 
 describe('installDaemon dry-run', () => {
   it('dry-run prints plist without touching the filesystem', async () => {
+    // Platform guard throws before dryRun short-circuit, so skip on non-darwin
+    // CI. Same pattern used by the full install + managed-plist suites below.
+    if (process.platform !== 'darwin') return
     const chunks: string[] = []
     const origWrite = process.stdout.write.bind(process.stdout)
     process.stdout.write = ((c: string | Uint8Array): boolean => {
@@ -227,6 +230,7 @@ describe('installDaemon — managed-plist safety', () => {
     // If realpath ran on a bad/broken symlink target, dry-run would throw.
     // The fix moves the dry-run guard before realpath, so dry-run must still
     // produce a plist even when scriptPath points at a non-existent file.
+    if (process.platform !== 'darwin') return
     const chunks: string[] = []
     const origWrite = process.stdout.write.bind(process.stdout)
     process.stdout.write = ((c: string | Uint8Array): boolean => {
