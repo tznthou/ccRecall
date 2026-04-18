@@ -156,6 +156,25 @@ See [hooks/README.md](hooks/README.md) for SessionStart / SessionEnd hook instal
 
 ---
 
+## ccRecall vs auto memory
+
+ccRecall lives alongside Claude Code's built-in auto memory (`~/.claude/projects/*/memory/`). They're complementary — use them for different things.
+
+|  | auto memory | ccRecall |
+|---|---|---|
+| **Write path** | Claude curates by hand — new `.md` file + MEMORY.md index line | Automatic: SessionEnd hook harvests each session into the DB |
+| **Read path** | Always in session context (MEMORY.md loads at session start) | On-demand MCP query when auto memory has no entry |
+| **Signal density** | High — facts worth naming | Long tail — everything the hook can extract |
+| **Typical use** | "Remember X" / "always Y" — durable preferences, decisions | "Didn't we fix that?" / "last time" — cross-session recall |
+
+**Default for saving:** write to auto memory, let the hook harvest ccRecall independently. Don't call `recall_save` to mirror a fact you already curated — duplicate writes just create noise.
+
+**Default for querying:** MEMORY.md is already in context — check the index first. Fall back to `recall_query` / `recall_context` only when the user references past work and auto memory has no matching entry.
+
+ccRecall's value is the long tail that auto memory can't cover (nobody hand-curates 500 sessions of notes). If Claude defaults to both, auto memory wins because it's already loaded and curated. ccRecall earns its keep when the curated index misses.
+
+---
+
 ## Running as a service (macOS)
 
 ccRecall runs as a local HTTP daemon. To keep it up across reboots, register

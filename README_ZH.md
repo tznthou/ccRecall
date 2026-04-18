@@ -154,6 +154,25 @@ SessionStart / SessionEnd hook 安裝見 [hooks/README.md](hooks/README.md)。
 
 ---
 
+## ccRecall 與 auto memory 的分工
+
+ccRecall 和 Claude Code 內建的 auto memory（`~/.claude/projects/*/memory/`）是互補關係，各司其職，不要混用。
+
+|  | auto memory | ccRecall |
+|---|---|---|
+| **寫入路徑** | Claude 手動策展——新開一個 `.md` 檔 + 更新 MEMORY.md index | 自動化：SessionEnd hook 把整個 session 萃取進資料庫 |
+| **讀取路徑** | 永遠在 session context（MEMORY.md 啟動時就載入） | auto memory 沒答案時，才用 MCP 查詢 |
+| **訊號密度** | 高——值得被命名的決策和偏好 | 長尾——hook 能抓到的都留著 |
+| **適用情境** | 「記住 X」「以後都 Y」——重要偏好、明確決策 | 「上次那個怎麼修的？」——跨多個 session 的回憶 |
+
+**寫入預設：存 auto memory，ccRecall 讓 hook 自己抓就好。** 不要 auto memory 寫完一份、又呼叫 `recall_save` 複寫一次——雙寫只會製造噪音。
+
+**查詢預設：MEMORY.md 已經在 context 裡，先看 index 有沒有。** auto memory 沒答案，才 fallback 到 `recall_query` / `recall_context`。
+
+ccRecall 的價值在長尾——幾百個 session 不可能全手工整理。如果 Claude 兩邊都試，auto memory 永遠會贏（本來就在 context 裡而且已經被策展）。ccRecall 存在的意義是：策展索引漏掉時，長尾那堆還在資料庫裡可以撈出來。
+
+---
+
 ## 作為服務運行（macOS）
 
 ccRecall 是本地 HTTP daemon。要重開機也維持運行，註冊 per-user LaunchAgent：
