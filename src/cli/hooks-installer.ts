@@ -401,7 +401,9 @@ function writeSettingsAtomically(settingsPath: string, settings: ClaudeSettings,
   }
 
   const tmp = `${realPath}.tmp-${process.pid}-${Date.now()}`
-  writeFileSync(tmp, content, 'utf8')
+  // settings.json can contain tokens/hook paths — restrict tmp to owner-only
+  // (0o600) so the brief window between write and rename isn't world-readable.
+  writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
 
   if (read.mtimeMs !== null) {
     // Concurrent-edit guard: compare mtime right before rename. An atomic file
