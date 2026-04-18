@@ -33,6 +33,8 @@ You don't need to know SQLite, FTS5, or MCP internals — they'll come up as nee
 npm install -g @tznthou/ccrecall
 ```
 
+> Prefer **pnpm**? First-time global installs need a one-off `pnpm setup` — it creates the global bin directory and wires `PNPM_HOME` into your shell config. Open a new terminal, then `pnpm add -g @tznthou/ccrecall`. Yarn v1 is similar: confirm `yarn global bin` is on your `PATH` before running `yarn global add`.
+
 You'll get two CLI commands:
 
 - `ccmem` — runs the daemon (the core service)
