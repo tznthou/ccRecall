@@ -18,9 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     # id-token: write lets this job mint an OIDC token that npm exchanges
     # for a short-lived publish credential via Trusted Publishing. No long-
-    # lived NPM_TOKEN is stored or needed.
+    # lived NPM_TOKEN is stored or needed. contents: write lets the trailing
+    # `gh release create --draft` step land a release on the repo.
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:
@@ -58,3 +59,15 @@ jobs:
       #   the OIDC token. Triggers the Trusted Publishing path on npm —
       #   requires a matching trusted-publisher rule on the package.
       - run: pnpm publish --access public --no-git-checks --provenance
+
+      # Auto-create a draft GitHub Release so we never forget one (v0.1.4 was
+      # published to npm but the GitHub Release was missed for hours).
+      # Draft, not published — humans polish the auto-generated notes (which
+      # are derived from commit history) and promote when ready. Only fires
+      # on tag pushes; workflow_dispatch reruns skip this step to avoid
+      # "release already exists" errors on re-publishes.
+      - name: Create draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" --draft --generate-notes --title "${{ github.ref_name }}"
