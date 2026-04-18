@@ -1,12 +1,12 @@
 {
-  "name": "ccrecall",
+  "name": "@tznthou/ccrecall",
   "version": "0.1.0",
   "description": "AI memory service for Claude Code — on-demand context injection with metacognition",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "ccrecall": "./dist/index.js",
-    "ccrecall-mcp": "./dist/mcp/server.js"
+    "ccmem": "./dist/index.js",
+    "ccmem-mcp": "./dist/mcp/server.js"
   },
   "files": [
     "dist",

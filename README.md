@@ -19,6 +19,8 @@ CLAUDE.md and RESUME.md help, but they're static files you maintain by hand. ccR
 
 ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/ccRewind) (a conversation replay GUI). ccRewind lets humans look back at what happened; ccRecall lets the AI remember what happened.
 
+> **Note:** This project is unrelated to [spences10/ccrecall](https://github.com/spences10/ccrecall), an analytics-focused tool that happens to share the name. Because the npm package `ccrecall` is already taken, we publish as `@tznthou/ccrecall` and the CLI binary is named `ccmem`.
+
 ---
 
 ## Features
@@ -32,7 +34,7 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/cc
 | **Forgetting curve** | Memories compress over time: raw → summary → one-liner → deleted. Confidence decays on unused memories. Background maintenance tick runs every 5 min |
 | **Watch mode** | chokidar-based JSONL watcher picks up new sessions within 2 s; periodic 10 min full-resync covers missed filesystem events |
 | **Rescue reindex** | `/session/end` retries a reindex on cache miss — no fresh-session race between the hook and the daemon |
-| **Auto-start (macOS)** | `ccrecall install-daemon` registers a LaunchAgent so the service stays up across reboots |
+| **Auto-start (macOS)** | `ccmem install-daemon` registers a LaunchAgent so the service stays up across reboots |
 | **Read-only** | Never modifies `~/.claude/` — only reads JSONL logs |
 
 ---
@@ -134,7 +136,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
 | `recall_save` | Store a new memory (type: decision / discovery / preference / pattern / feedback) |
 
-Expose them to Claude Code. After `pnpm build`, the `ccrecall-mcp` bin is on
+Expose them to Claude Code. After `pnpm build`, the `ccmem-mcp` bin is on
 the repo's `node_modules/.bin` path — point `claude mcp add` at it or at a
 global install:
 
@@ -159,7 +161,7 @@ a per-user LaunchAgent:
 
 ```bash
 pnpm build
-node dist/index.js install-daemon        # or `ccrecall install-daemon` if globally linked
+node dist/index.js install-daemon        # or `ccmem install-daemon` if globally linked
 node dist/index.js install-daemon --dry-run   # preview plist without writing
 
 # verify
@@ -285,4 +287,4 @@ Copyright 2026 tznthou
 
 ## Author
 
-tznthou - [tznthou@gmail.com](mailto:tznthou@gmail.com)
+tznthou — [tznthou.com](https://tznthou.com) · [tznthou@gmail.com](mailto:tznthou@gmail.com)

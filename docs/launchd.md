@@ -6,10 +6,10 @@ auto-restart on crash, install it as a per-user LaunchAgent.
 
 ## Automatic install (recommended)
 
-After installing ccRecall globally (`pnpm add -g ccrecall` or equivalent):
+After installing ccRecall globally (`pnpm add -g @tznthou/ccrecall` or equivalent):
 
 ```bash
-ccrecall install-daemon
+ccmem install-daemon
 ```
 
 This will:
@@ -28,19 +28,19 @@ curl http://127.0.0.1:7749/health
 To preview the plist before installing:
 
 ```bash
-ccrecall install-daemon --dry-run
+ccmem install-daemon --dry-run
 ```
 
 To stop auto-start and remove the plist:
 
 ```bash
-ccrecall uninstall-daemon
+ccmem uninstall-daemon
 ```
 
 ## Manual install
 
 If you prefer to edit the plist by hand (or you're on a system where the
-`ccrecall` bin isn't on `PATH`), write the following to
+`ccmem` bin isn't on `PATH`), write the following to
 `~/Library/LaunchAgents/com.tznthou.ccrecall.plist`:
 
 ```xml
@@ -96,5 +96,5 @@ launchctl load -w ~/Library/LaunchAgents/com.tznthou.ccrecall.plist
   ```
 - **Linux / Windows**
   `install-daemon` is macOS only. Linux users can run ccRecall under systemd
-  (example unit files in Phase 5), or just `nohup ccrecall &` for a quick local
+  (example unit files in Phase 5), or just `nohup ccmem &` for a quick local
   setup.

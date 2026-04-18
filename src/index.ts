@@ -30,7 +30,7 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
     ? () => installDaemon({ dryRun, port, dbPath })
     : () => uninstallDaemon()
   action().then(() => process.exit(0)).catch((err: Error) => {
-    console.error(`[ccrecall ${subcommand}] ${err.message}`)
+    console.error(`[ccmem ${subcommand}] ${err.message}`)
     process.exit(1)
   })
 } else if (subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
@@ -38,7 +38,7 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
   process.exit(0)
 } else {
   startDaemon().catch((err: Error) => {
-    console.error(`[ccrecall] fatal: ${err.message}`)
+    console.error(`[ccmem] fatal: ${err.message}`)
     process.exit(1)
   })
 }
@@ -48,14 +48,14 @@ function printHelp(): void {
   console.log(`ccRecall — AI memory service for Claude Code
 
 Usage:
-  ccrecall                            Run the daemon (HTTP API on :${port})
-  ccrecall install-daemon             Install macOS LaunchAgent for auto-start
-  ccrecall install-daemon --dry-run   Print plist without installing
-  ccrecall uninstall-daemon           Remove LaunchAgent and stop auto-start
+  ccmem                            Run the daemon (HTTP API on :${port})
+  ccmem install-daemon             Install macOS LaunchAgent for auto-start
+  ccmem install-daemon --dry-run   Print plist without installing
+  ccmem uninstall-daemon           Remove LaunchAgent and stop auto-start
 
 Environment:
-  CCRECALL_PORT                       HTTP port (default: 7749)
-  CCRECALL_DB_PATH                    SQLite path (default: ~/.ccrecall/ccrecall.db)
+  CCRECALL_PORT                    HTTP port (default: 7749)
+  CCRECALL_DB_PATH                 SQLite path (default: ~/.ccrecall/ccrecall.db)
 
 See docs/launchd.md for manual install and troubleshooting.`)
 }
