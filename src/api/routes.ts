@@ -164,6 +164,14 @@ export interface RequestHandlerOptions {
   /** Called when /session/end sees a missing session — typically `() => runIndexer(db)`
    *  — so a fresh-session hook can harvest after a forced reindex retry. */
   rescueReindex?: () => Promise<void>
+  /** Reported in /health; closure-captured so daemons installed from different
+   *  package versions don't lie about which one is actually running. Defaults
+   *  to 'unknown' only because tests use createServer(db) without options. */
+  version?: string
+  /** SQLite path reported in /health so operators can confirm the daemon is
+   *  writing where they expect. Empty string falls back to the current TODO
+   *  behaviour, which matches pre-0.1.3 clients that ignored the field. */
+  dbPath?: string
 }
 
 export function createRequestHandler(
@@ -182,8 +190,8 @@ export function createRequestHandler(
     if (req.method === 'GET' && path === '/health') {
       const result: HealthResult = {
         status: 'ok',
-        version: '0.1.0',
-        dbPath: '', // TODO: expose from Database
+        version: opts.version ?? 'unknown',
+        dbPath: opts.dbPath ?? '',
         sessionCount: db.getMainSessionCount(),
         memoryCount: db.getMemoryCount(),
         topicCount: db.getTopicCount(),

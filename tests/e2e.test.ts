@@ -260,3 +260,72 @@ describe('E2E: index → search → HTTP', () => {
     expect(res.status).toBe(403)
   })
 })
+
+describe('GET /health version + dbPath propagation', () => {
+  let tmpDir: string
+  let db: Database
+  let server: http.Server
+  let port: number
+  const TEST_DB_PATH = '/tmp/ccrecall-health-test.db'
+  const TEST_VERSION = '9.9.9-test'
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-health-'))
+    db = new Database(path.join(tmpDir, 'unused.db'))
+    server = createServer(db, { version: TEST_VERSION, dbPath: TEST_DB_PATH })
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        port = (server.address() as { port: number }).port
+        resolve()
+      })
+    })
+  })
+
+  afterEach(async () => {
+    server.close()
+    db.close()
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('reports version passed via createServer options', async () => {
+    const { body } = await fetch(`http://127.0.0.1:${port}/health`)
+    expect((body as { version: string }).version).toBe(TEST_VERSION)
+  })
+
+  it('reports dbPath passed via createServer options', async () => {
+    const { body } = await fetch(`http://127.0.0.1:${port}/health`)
+    expect((body as { dbPath: string }).dbPath).toBe(TEST_DB_PATH)
+  })
+})
+
+describe('GET /health defaults when options omitted', () => {
+  let tmpDir: string
+  let db: Database
+  let server: http.Server
+  let port: number
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-health-defaults-'))
+    db = new Database(path.join(tmpDir, 'unused.db'))
+    server = createServer(db)
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        port = (server.address() as { port: number }).port
+        resolve()
+      })
+    })
+  })
+
+  afterEach(async () => {
+    server.close()
+    db.close()
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it("falls back to 'unknown' + empty dbPath when options omitted", async () => {
+    const { body } = await fetch(`http://127.0.0.1:${port}/health`)
+    const b = body as { version: string; dbPath: string }
+    expect(b.version).toBe('unknown')
+    expect(b.dbPath).toBe('')
+  })
+})

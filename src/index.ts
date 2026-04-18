@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import path from 'node:path'
 import os from 'node:os'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { createServer } from './api/server.js'
 import { Database } from './core/database.js'
 import { runIndexer } from './core/indexer.js'
@@ -9,6 +11,22 @@ import { MemoryService } from './core/memory-service.js'
 import { MaintenanceCoordinator } from './core/maintenance-coordinator.js'
 import { JsonlWatcher } from './core/watcher.js'
 import { installDaemon, uninstallDaemon } from './cli/daemon.js'
+
+/** Read the package.json version shipped next to this bundle. Works across
+ *  layouts: src/index.ts (tsx) → ../package.json, dist/index.js → ../package.json,
+ *  node_modules/@tznthou/ccrecall/dist/index.js → ../package.json. If the file
+ *  is missing or unreadable (shouldn't happen in a published install), fall
+ *  back to 'unknown' rather than crashing the daemon. */
+function readPackageVersion(): string {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    const pkgPath = path.resolve(here, '..', 'package.json')
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown }
+    return typeof pkg.version === 'string' ? pkg.version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
 
 const subcommand = process.argv[2]
 
@@ -104,6 +122,8 @@ async function startDaemon(): Promise<void> {
   // flight guard when a scheduled scan is already inflight.
   const server = createServer(db, {
     rescueReindex: () => runIndexer(db),
+    version: readPackageVersion(),
+    dbPath: DB_PATH,
   })
 
   server.listen(PORT, '127.0.0.1', () => {
