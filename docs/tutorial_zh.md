@@ -85,7 +85,16 @@ curl http://127.0.0.1:7749/health
 
 Claude 應該會主動呼叫 `mcp__ccrecall__recall_query` 工具搜尋你以前的對話。看到它「正在查記憶」就是接上了。
 
-第一次用可能會拉空——因為剛裝好還沒索引完。隔一小段時間或重跑 session 就會有結果。
+### 為什麼第一次可能拉空
+
+Daemon 啟動當下會自動跑 `runIndexer`，把 `~/.claude/projects/` 下所有歷史 JSONL 掃一遍建索引。掃完後 watcher 才開始監看新檔案。**首次啟動期間查不到東西是正常的**，掃描時間視歷史量而定——十幾個 session 幾秒、幾百個 session 可能要一兩分鐘。
+
+想知道進度可以 tail log：
+
+```bash
+tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
+# 看到 "Indexer complete." 就是掃完了
+```
 
 ---
 
@@ -145,7 +154,21 @@ Claude：三大 cluster：
 
 MCP 是「Claude 主動問」。Hook 是「session 開始/結束時自動跑」——SessionStart 會在對話開始前自動注入上次相關的記憶到 context，SessionEnd 會把剛結束的 session 摘要存成記憶。
 
-設定見 [`hooks/README.md`](../hooks/README.md)。
+設定見 [`hooks/README.md`](../hooks/README.md)。配完以後可以這樣驗證：
+
+```bash
+# 取 HOOKS_DIR（見 hooks/README.md）
+HOOKS_DIR="$(npm root -g)/@tznthou/ccrecall/hooks"
+
+# 手動觸發 session-end
+echo '{"session_id":"test","hook_event_name":"SessionEnd","reason":"other"}' \
+  | node "$HOOKS_DIR/session-end.mjs"
+
+# 看 DB 有沒有多一筆 memory
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+```
+
+如果 daemon 的 log 看到 `/session/end` 請求、DB memories 數字有動，就代表 hook 串通了。
 
 ### macOS 開機自動啟動（daemon 本體）
 
@@ -166,13 +189,40 @@ ccmem install-daemon    # 重裝 plist 吃新 port
 ```
 
 **Q: Claude 沒自動呼叫 recall_query？**
-A: 確認 `claude mcp list` 有 `ccrecall`。若沒有重跑 `claude mcp add`。另外 Claude 不一定每次都 call——它會根據 context 判斷，你可以直接「請你用 recall_query 查 xxx」強制觸發。
+A: 確認 `claude mcp list` 有 `ccrecall`。若沒有重跑 `claude mcp add`。另外 Claude 不一定每次都 call——它會根據 context 判斷。強制觸發方式：
+- 查：「請你用 recall_query 查 xxx」
+- 存：「幫我用 recall_save 記住這件事：xxx」
+
+直接點名工具名稱基本上都會成功 call。
 
 **Q: 我的對話記錄會被上傳到雲端嗎？**
 A: 不會。ccRecall 完全本地跑，SQLite DB 在 `~/.ccrecall/`，零外呼。摘要引擎是規則式，不呼叫 LLM。
 
 **Q: 會修改 `~/.claude/` 裡的檔案嗎？**
 A: 不會。ccRecall 嚴格唯讀 `~/.claude/`，只寫自己的 `~/.ccrecall/` 和 `~/Library/Logs/ccrecall/`。
+
+---
+
+## 解除安裝
+
+```bash
+# 1. 停並移除 LaunchAgent
+ccmem uninstall-daemon
+
+# 2. 移除 Claude Code MCP 註冊
+claude mcp remove ccrecall -s user
+
+# 3. 移除 npm package
+npm uninstall -g @tznthou/ccrecall
+
+# 4.（可選）清資料與 log
+rm -rf ~/.ccrecall ~/Library/Logs/ccrecall
+
+# 5.（可選）清 hook 設定
+# 手動編輯 ~/.claude/settings.json，刪掉 SessionStart / SessionEnd 裡 ccRecall 相關條目
+```
+
+前三步做完 ccRecall 就完全下線。後兩步是清痕跡，想留記憶 DB 備份就只做前三步。
 
 ---
 

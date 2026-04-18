@@ -73,7 +73,14 @@ If you prefer to edit the plist by hand (or you're on a system where the
 ```
 
 Replace the `node` path (`which node`) and the script path with your install
-location. Then:
+location. If you installed from npm, the script path is:
+
+```bash
+echo "$(npm root -g)/@tznthou/ccrecall/dist/index.js"
+# pnpm / yarn: swap to `pnpm root -g` or `$(yarn global dir)/node_modules`
+```
+
+Then:
 
 ```bash
 mkdir -p ~/Library/Logs/ccrecall

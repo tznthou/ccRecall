@@ -85,7 +85,16 @@ Start a fresh Claude Code session and ask something like:
 
 Claude should proactively invoke `mcp__ccrecall__recall_query` to search your past conversations. Seeing "looking up memories" in the tool calls means the connection is live.
 
-Your first query might come back empty — the indexer is still catching up on a fresh install. Give it a few minutes or restart the session.
+### Why your first query might come up empty
+
+On first boot, the daemon kicks off `runIndexer` to walk every historical JSONL under `~/.claude/projects/` and build the index. The file watcher only arms itself after that pass completes. Empty results during this window aren't a bug — they're the index still warming up. A dozen sessions take a few seconds; hundreds can take a minute or two.
+
+Tail the log if you want to watch the progress:
+
+```bash
+tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
+# "Indexer complete." means you're good to go
+```
 
 ---
 
@@ -147,7 +156,21 @@ That's ccRecall's metacognition layer — not just individual memories, but topi
 
 MCP is "Claude asks on demand." Hooks fire automatically at session start and end — SessionStart injects relevant memories into the context before the first prompt; SessionEnd harvests the session just ended into a memory.
 
-Setup: [`hooks/README.md`](../hooks/README.md).
+Setup: [`hooks/README.md`](../hooks/README.md). After wiring it up, sanity-check it works:
+
+```bash
+# Grab HOOKS_DIR (see hooks/README.md for pnpm / yarn variants)
+HOOKS_DIR="$(npm root -g)/@tznthou/ccrecall/hooks"
+
+# Fire session-end by hand
+echo '{"session_id":"test","hook_event_name":"SessionEnd","reason":"other"}' \
+  | node "$HOOKS_DIR/session-end.mjs"
+
+# Did a memory land?
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+```
+
+If the daemon log shows a `/session/end` hit and the memory count ticks up, the hook is wired end to end.
 
 ### macOS auto-start (daemon itself)
 
@@ -168,13 +191,38 @@ ccmem install-daemon    # reinstall plist with the new port
 ```
 
 **Q: Claude never calls recall_query.**
-A: Check `claude mcp list` shows `ccrecall`. If not, re-run `claude mcp add`. Also Claude doesn't always decide to call it — you can force it by saying "use recall_query to search for xxx."
+A: Check `claude mcp list` shows `ccrecall`. If not, re-run `claude mcp add`. Claude doesn't always decide to call it on its own — name the tool explicitly and it will:
+- To look up: "use recall_query to search for xxx"
+- To save: "use recall_save to remember xxx"
 
 **Q: Are my conversations uploaded anywhere?**
 A: No. ccRecall runs fully locally; the SQLite DB lives at `~/.ccrecall/` and nothing leaves your machine. The summarizer is rule-based — no LLM calls.
 
 **Q: Does it modify `~/.claude/`?**
 A: No. ccRecall is strictly read-only against `~/.claude/`. It only writes to its own `~/.ccrecall/` and `~/Library/Logs/ccrecall/`.
+
+---
+
+## Uninstalling
+
+```bash
+# 1. Stop and unregister the LaunchAgent
+ccmem uninstall-daemon
+
+# 2. Unregister the MCP server from Claude Code
+claude mcp remove ccrecall -s user
+
+# 3. Remove the npm package
+npm uninstall -g @tznthou/ccrecall
+
+# 4. (Optional) Wipe the data and logs
+rm -rf ~/.ccrecall ~/Library/Logs/ccrecall
+
+# 5. (Optional) Clean up hook entries
+# Edit ~/.claude/settings.json and drop the SessionStart / SessionEnd entries you added.
+```
+
+The first three steps take ccRecall fully offline. Skip steps 4–5 if you want to keep the memory DB around in case you reinstall later.
 
 ---
 
