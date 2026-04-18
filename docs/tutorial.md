@@ -67,6 +67,64 @@ This registers ccRecall's MCP server (`ccmem-mcp`) with Claude Code. `--scope us
 
 ---
 
+## How It Runs in the Background
+
+After the three setup steps you might reasonably wonder: does it just keep running on its own, or do I have to babysit something? The short answer is **you don't** — four moving parts handle the work:
+
+1. **The daemon**
+   `ccmem install-daemon` wires ccRecall into macOS LaunchAgent, so it comes up at login and sits idle on `127.0.0.1:7749` waiting for HTTP requests. If the Mac is awake, the daemon is alive.
+
+2. **The watcher**
+   The daemon points chokidar at `~/.claude/projects/`. Whenever Claude Code writes a new session JSONL, the watcher notices within seconds, indexes it, and updates SQLite. No manual rescans, no cron jobs.
+
+3. **A 10-minute backstop**
+   Filesystem events occasionally drop — sleep/wake, external disks, edge cases — so every ten minutes the daemon does a full rescan as a safety net. Anything the watcher missed lands here.
+
+4. **Hooks**
+   The next section walks you through wiring these up. Once configured, Claude Code calls ccRecall at two moments automatically:
+   - **SessionStart**: relevant memories are injected into Claude's context *before* your first prompt — you never have to ask it to "look something up"
+   - **SessionEnd**: the session you just finished is harvested into a new memory
+
+The takeaway: **install + hooks = set and forget**. ccRecall accumulates on its own.
+
+---
+
+## Wiring Hooks (One Line)
+
+Step 3 covered MCP — that's Claude pulling memories on demand. Hooks are the other half: they fire automatically at session boundaries, and they're what makes the memory layer accumulate without you thinking about it.
+
+```bash
+ccmem install-hooks
+```
+
+This command:
+1. Locates `~/.claude/settings.json` (creates an empty `{}` if missing)
+2. Backs up the original to `settings.json.bak-<timestamp>`
+3. Merges (not overwrites) SessionStart + SessionEnd registrations into the `hooks` object
+4. Leaves any other hooks you already configured completely alone
+
+**Restart any running Claude Code sessions** after install — hook config doesn't hot-reload.
+
+Preview without writing: `ccmem install-hooks --dry-run`.
+Remove later: `ccmem uninstall-hooks` (only deletes ccRecall's own entries; your other hooks stay).
+
+### Verifying the hook fires
+
+```bash
+# Note the current memory count
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+
+# Open a fresh Claude Code session, chat briefly, close it
+
+# Recount — should be +1
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+
+# Or tail the daemon log and watch /session/end land
+tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
+```
+
+---
+
 ## Verify It's Working
 
 ### Is the daemon alive?
@@ -152,25 +210,9 @@ That's ccRecall's metacognition layer — not just individual memories, but topi
 
 ## Going Further
 
-### Hooks: auto-trigger ccRecall via Claude Code lifecycle
+### Hook internals / manual setup
 
-MCP is "Claude asks on demand." Hooks fire automatically at session start and end — SessionStart injects relevant memories into the context before the first prompt; SessionEnd harvests the session just ended into a memory.
-
-Setup: [`hooks/README.md`](../hooks/README.md). After wiring it up, sanity-check it works:
-
-```bash
-# Grab HOOKS_DIR (see hooks/README.md for pnpm / yarn variants)
-HOOKS_DIR="$(npm root -g)/@tznthou/ccrecall/hooks"
-
-# Fire session-end by hand
-echo '{"session_id":"test","hook_event_name":"SessionEnd","reason":"other"}' \
-  | node "$HOOKS_DIR/session-end.mjs"
-
-# Did a memory land?
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
-```
-
-If the daemon log shows a `/session/end` hit and the memory count ticks up, the hook is wired end to end.
+The `ccmem install-hooks` step above covers most situations. If you want to edit `~/.claude/settings.json` by hand, understand the hook script internals, or troubleshoot something unexpected, see [`hooks/README.md`](../hooks/README.md) — script design notes, a manual JSON template, and the nvm/fnm "HOOKS_DIR moves after Node version switch" caveat all live there.
 
 ### macOS auto-start (daemon itself)
 
@@ -219,7 +261,7 @@ npm uninstall -g @tznthou/ccrecall
 rm -rf ~/.ccrecall ~/Library/Logs/ccrecall
 
 # 5. (Optional) Clean up hook entries
-# Edit ~/.claude/settings.json and drop the SessionStart / SessionEnd entries you added.
+ccmem uninstall-hooks
 ```
 
 The first three steps take ccRecall fully offline. Skip steps 4–5 if you want to keep the memory DB around in case you reinstall later.

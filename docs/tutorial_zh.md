@@ -67,6 +67,64 @@ claude mcp add ccrecall --scope user -- ccmem-mcp
 
 ---
 
+## 日常如何自動運作
+
+裝完三步後，你大概會想「所以它會自己跑？我還要做什麼嗎？」答案是：**幾乎什麼都不用**。四個零件在你背後接力：
+
+1. **Daemon（背景服務）**
+   `ccmem install-daemon` 把它註冊成 macOS LaunchAgent，開機自動啟動，駐在背景等 HTTP 請求。電腦開著它就在。
+
+2. **Watcher（檔案監聽）**
+   Daemon 用 chokidar 盯住 `~/.claude/projects/`。每次 Claude Code 寫新的 session JSONL，watcher 幾秒內就抓到、丟去索引、更新 SQLite。不用手動重掃。
+
+3. **10 分鐘 backstop（兜底掃描）**
+   檔案系統偶爾會漏事件（macOS sleep/wake、外接硬碟插拔等），所以每 10 分鐘再全掃一次當保險。漏掉的 JSONL 這邊會接住。
+
+4. **Hooks（Claude Code 生命週期鉤子）**
+   下一節會教你設 hook。設好之後 Claude Code 會在兩個時機自動叫 ccRecall：
+   - **SessionStart**：開新 session 前，把相關記憶注入 context（Claude 不用自己決定要不要查）
+   - **SessionEnd**：session 結束時，把剛剛這段萃取成一筆新的 memory
+
+一句話：**裝完 + 配好 hook，之後就不用管，它自己累積。**
+
+---
+
+## 設 Hooks（一行搞定）
+
+Step 3 的 MCP 是「Claude 想查才去查」。Hook 則是「每次 session 開頭/結尾自動跑」，是自動累積記憶的關鍵。
+
+```bash
+ccmem install-hooks
+```
+
+這會：
+1. 找到 `~/.claude/settings.json`（不存在就建一個 `{}`）
+2. 備份原檔到 `settings.json.bak-<timestamp>`
+3. 合併（非覆蓋）`SessionStart` 和 `SessionEnd` 兩個 hook 的註冊
+4. 你原本寫過的其他 hook 完全不動
+
+**裝完要重開 Claude Code session**——hook 設定不會 hot-reload。
+
+想看會寫什麼而不真的寫：`ccmem install-hooks --dry-run`。
+要拔掉：`ccmem uninstall-hooks`（只刪 ccRecall 自己的 entry，不會誤動你其他 hook）。
+
+### 驗證 hook 真的有觸發
+
+```bash
+# 記下目前 memory 數
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+
+# 開新 Claude Code session，聊幾句，關掉
+
+# 再數一次，應該 +1
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+
+# 或者 tail daemon log 看 /session/end 被打到
+tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
+```
+
+---
+
 ## 怎麼知道它在運作
 
 ### 確認 daemon 活著
@@ -150,23 +208,9 @@ Claude：三大 cluster：
 
 ## 進階
 
-### Hook：讓 Claude Code lifecycle 自動觸發 ccRecall
+### Hook 的細節 / 手動設定
 
-MCP 是「Claude 主動問」。Hook 是「session 開始/結束時自動跑」——SessionStart 會在對話開始前自動注入上次相關的記憶到 context，SessionEnd 會把剛結束的 session 摘要存成記憶。
-
-設定見 [`hooks/README.md`](../hooks/README.md)。配完以後可以這樣驗證：
-
-```bash
-# 取 HOOKS_DIR（見 hooks/README.md）
-HOOKS_DIR="$(npm root -g)/@tznthou/ccrecall/hooks"
-
-# 手動觸發 session-end
-echo '{"session_id":"test","hook_event_name":"SessionEnd","reason":"other"}' \
-  | node "$HOOKS_DIR/session-end.mjs"
-
-# 看 DB 有沒有多一筆 memory
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
-```
+上面「設 Hooks」那節的 `ccmem install-hooks` 大部分情境夠用。如果你想手動編 `~/.claude/settings.json`、了解 hook 腳本行為、或遇到問題要 troubleshoot，看 [`hooks/README.md`](../hooks/README.md)——裡面有腳本細節、手動 JSON 範本、以及 nvm/fnm 切 Node 版本後 HOOKS_DIR 飄移的處理。
 
 如果 daemon 的 log 看到 `/session/end` 請求、DB memories 數字有動，就代表 hook 串通了。
 
@@ -219,7 +263,7 @@ npm uninstall -g @tznthou/ccrecall
 rm -rf ~/.ccrecall ~/Library/Logs/ccrecall
 
 # 5.（可選）清 hook 設定
-# 手動編輯 ~/.claude/settings.json，刪掉 SessionStart / SessionEnd 裡 ccRecall 相關條目
+ccmem uninstall-hooks
 ```
 
 前三步做完 ccRecall 就完全下線。後兩步是清痕跡，想留記憶 DB 備份就只做前三步。

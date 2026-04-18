@@ -2,6 +2,8 @@
 
 Hook scripts that let Claude Code's lifecycle events trigger ccRecall actions.
 
+> **TL;DR — skip the manual JSON.** Run `ccmem install-hooks` and you're done. The command auto-detects `HOOKS_DIR`, merges into `~/.claude/settings.json` without touching your other hooks, and backs up the original. The rest of this README is for people who want to edit the JSON themselves or troubleshoot a specific issue.
+
 ## Prerequisites
 
 1. ccRecall installed globally — `npm install -g @tznthou/ccrecall` (or `pnpm add -g`, `yarn global add`).
