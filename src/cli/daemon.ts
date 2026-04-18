@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import path from 'node:path'
 import os from 'node:os'
+import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { mkdir, writeFile, rm, realpath, lstat, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -173,7 +174,12 @@ export async function installDaemon(opts: InstallOptions = {}): Promise<void> {
 
   console.log(`ccRecall LaunchAgent installed: ${paths.plistPath}`)
   console.log(`Logs: ${paths.logsDir}/ccrecall.{out,err}.log`)
-  console.log('Verify with: launchctl list | grep ccrecall')
+
+  if (!opts.skipLaunchctl) {
+    const port = opts.port ?? DEFAULT_PORT
+    const result = await verifyDaemonStarted(LABEL, port)
+    console.log(formatVerifyMessage(result, port, paths.logsDir))
+  }
 }
 
 export interface UninstallOptions {
@@ -203,4 +209,97 @@ function runLaunchctl(args: string[]): Promise<void> {
       else reject(new Error(`launchctl ${args.join(' ')} exited with code ${code}`))
     })
   })
+}
+
+/** Read the PID from `launchctl list <label>` output. Returns null when the
+ *  label is unknown (no prior load) or loaded without a PID (crash-loop window).
+ *  Distinguishing those two cases isn't useful for our messaging — both mean
+ *  "not running right now." */
+function launchctlGetPid(label: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const child = spawn('launchctl', ['list', label], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let stdout = ''
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+    child.on('error', () => resolve(null))
+    child.on('exit', (code) => {
+      if (code !== 0) return resolve(null)
+      const match = stdout.match(/"PID"\s*=\s*(\d+)/)
+      resolve(match ? parseInt(match[1], 10) : null)
+    })
+  })
+}
+
+/** Single-shot /health probe. Resolves to true only on a 2xx from the daemon.
+ *  All failure modes (ECONNREFUSED, timeout, non-2xx) collapse to false so the
+ *  caller doesn't need to distinguish them — the verify message is the same. */
+function probeHealth(port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { hostname: '127.0.0.1', port, path: '/health', timeout: timeoutMs },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode === 200)
+      },
+    )
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+  })
+}
+
+export interface VerifyOverrides {
+  getPid?: (label: string) => Promise<number | null>
+  probeHealth?: (port: number) => Promise<boolean>
+  sleep?: (ms: number) => Promise<void>
+}
+
+export interface VerifyResult {
+  pid: number | null
+  healthy: boolean
+}
+
+/** Poll launchctl for the daemon PID with a short deadline, then best-effort
+ *  /health probe. Exposed for testing so cli-daemon.test.ts can stub the two
+ *  side-effectful calls and exercise the three-state reporting logic. */
+export async function verifyDaemonStarted(
+  label: string,
+  port: number,
+  opts: {
+    maxWaitMs?: number
+    pollIntervalMs?: number
+    healthTimeoutMs?: number
+    overrides?: VerifyOverrides
+  } = {},
+): Promise<VerifyResult> {
+  const getPid = opts.overrides?.getPid ?? launchctlGetPid
+  const probe = opts.overrides?.probeHealth ?? ((p: number) => probeHealth(p, opts.healthTimeoutMs ?? 1000))
+  const sleep = opts.overrides?.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
+  const maxWaitMs = opts.maxWaitMs ?? 5000
+  const intervalMs = opts.pollIntervalMs ?? 500
+
+  const deadline = Date.now() + maxWaitMs
+  let pid: number | null = null
+  while (Date.now() < deadline) {
+    pid = await getPid(label)
+    if (pid !== null) break
+    await sleep(intervalMs)
+  }
+
+  if (pid === null) return { pid: null, healthy: false }
+  const healthy = await probe(port)
+  return { pid, healthy }
+}
+
+/** Format the three possible verify outcomes into a one-line status string.
+ *  Pure function — unit-tested independently from the poll timing. */
+export function formatVerifyMessage(result: VerifyResult, port: number, logsDir: string): string {
+  if (result.pid !== null && result.healthy) {
+    return `Daemon started (PID ${result.pid}, http://127.0.0.1:${port})`
+  }
+  if (result.pid !== null) {
+    return `Daemon loaded (PID ${result.pid}). Initial indexing may take a few minutes — tail ${logsDir}/ccrecall.out.log`
+  }
+  return `Daemon install completed but no PID reported yet. Check ${logsDir}/ccrecall.err.log`
 }

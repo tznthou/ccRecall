@@ -8,6 +8,8 @@ import {
   generatePlist,
   installDaemon,
   uninstallDaemon,
+  verifyDaemonStarted,
+  formatVerifyMessage,
 } from '../src/cli/daemon'
 
 let tmpHome: string
@@ -224,6 +226,69 @@ describe('installDaemon — managed-plist safety', () => {
 
     // File still there.
     await expect(stat(plistPath)).resolves.toBeDefined()
+  })
+
+  it('verifyDaemonStarted returns pid+healthy when PID appears and /health is up', async () => {
+    let pidCalls = 0
+    const result = await verifyDaemonStarted('com.test.label', 7749, {
+      pollIntervalMs: 1,
+      maxWaitMs: 100,
+      overrides: {
+        getPid: async () => {
+          pidCalls++
+          return pidCalls >= 2 ? 12345 : null
+        },
+        probeHealth: async () => true,
+        sleep: async () => undefined,
+      },
+    })
+    expect(result).toEqual({ pid: 12345, healthy: true })
+  })
+
+  it('verifyDaemonStarted returns pid but not healthy when /health fails', async () => {
+    const result = await verifyDaemonStarted('com.test.label', 7749, {
+      pollIntervalMs: 1,
+      maxWaitMs: 100,
+      overrides: {
+        getPid: async () => 12345,
+        probeHealth: async () => false,
+        sleep: async () => undefined,
+      },
+    })
+    expect(result).toEqual({ pid: 12345, healthy: false })
+  })
+
+  it('verifyDaemonStarted returns null PID when poll times out', async () => {
+    const result = await verifyDaemonStarted('com.test.label', 7749, {
+      pollIntervalMs: 1,
+      maxWaitMs: 5,
+      overrides: {
+        getPid: async () => null,
+        probeHealth: async () => true,
+        sleep: async () => undefined,
+      },
+    })
+    expect(result).toEqual({ pid: null, healthy: false })
+  })
+
+  it('formatVerifyMessage: PID+healthy → Daemon started', () => {
+    const msg = formatVerifyMessage({ pid: 9999, healthy: true }, 7749, '/var/log/ccrecall')
+    expect(msg).toMatch(/Daemon started/)
+    expect(msg).toContain('9999')
+    expect(msg).toContain('127.0.0.1:7749')
+  })
+
+  it('formatVerifyMessage: PID only → Daemon loaded + log hint', () => {
+    const msg = formatVerifyMessage({ pid: 9999, healthy: false }, 7749, '/var/log/ccrecall')
+    expect(msg).toMatch(/Daemon loaded/)
+    expect(msg).toContain('9999')
+    expect(msg).toContain('/var/log/ccrecall/ccrecall.out.log')
+  })
+
+  it('formatVerifyMessage: no PID → install completed + err log hint', () => {
+    const msg = formatVerifyMessage({ pid: null, healthy: false }, 7749, '/var/log/ccrecall')
+    expect(msg).toMatch(/no PID reported/)
+    expect(msg).toContain('/var/log/ccrecall/ccrecall.err.log')
   })
 
   it('dry-run does not follow symlinks (realpath is skipped)', async () => {
