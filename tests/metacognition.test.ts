@@ -62,8 +62,10 @@ describe('GET /metacognition/check', () => {
     expect(b.topTopics.length).toBeGreaterThan(0)
     expect(b.topTopics[0].topicKey).toBe('typescript') // mention_count 最高
     expect(b.topTopics[0].depth).toBeDefined()
-    // recent 第一個 topic 的 last_touched 應該是最新的
-    expect(b.recentTopics[0].lastTouched).toContain('2026-04-17')
+    // recent 第一個 topic 應該是最新 touched：typescript 有 memory m1（created_at=now）
+    // 比 s2.ended_at (2026-04-17) 還新，所以排在最前。避開硬編日期 — MAX(touched_at)
+    // 會隨執行當天變動，昨天綠今天紅的 flaky 根因。
+    expect(b.recentTopics[0].topicKey).toBe('typescript')
     // stale 第一個應該是最舊的
     expect(b.staleTopics[0].topicKey).toBe('old-stuff')
     expect(b.counts.totalTopics).toBeGreaterThan(0)
