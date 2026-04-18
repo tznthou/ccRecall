@@ -34,7 +34,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # Node 24 ships npm >= 11.5.1, required for the current OIDC
+          # handshake — Node 22 / npm 10 silently falls back to anonymous
+          # and npm responds with a misleading 404 on the PUT. This only
+          # affects the publish step; CI still tests across 20/22 per the
+          # package's engines range.
+          node-version: '24'
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
 

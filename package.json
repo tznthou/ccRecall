@@ -33,6 +33,14 @@
     "context-management",
     "metacognition"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tznthou/ccRecall.git"
+  },
+  "homepage": "https://github.com/tznthou/ccRecall#readme",
+  "bugs": {
+    "url": "https://github.com/tznthou/ccRecall/issues"
+  },
   "author": "tznthou",
   "license": "Apache-2.0",
   "dependencies": {
