@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    name: Node ${{ matrix.node }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # build runs tsc (typecheck) + chmod. dist/ is required by
+      # tests/bin-smoke.test.ts, so this must precede vitest.
+      - run: pnpm build
+
+      # Skip the --fix variant from package.json; CI must not silently
+      # modify source. Fail on any lint error instead.
+      - run: pnpm exec eslint .
+
+      - run: pnpm vitest run
