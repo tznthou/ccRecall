@@ -243,7 +243,7 @@ ccRecall/
 
 ## Related Projects
 
-- **[ccRewind](https://github.com/user/ccRewind)** — Session replay GUI for Claude Code. ccRecall's core modules (parser, scanner, summarizer, database, indexer) were extracted from ccRewind.
+- **[ccRewind](https://github.com/tznthou/ccRewind)** — Session replay GUI for Claude Code. ccRecall's core modules (parser, scanner, summarizer, database, indexer) were extracted from ccRewind.
 
 ---
 

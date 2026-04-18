@@ -1,5 +1,7 @@
 # Running ccRecall as a macOS LaunchAgent
 
+> [中文](launchd_zh.md)
+
 ccRecall runs as a local HTTP service — Claude Code hooks and the MCP tools
 talk to it on `127.0.0.1:7749`. To keep it running across reboots and to
 auto-restart on crash, install it as a per-user LaunchAgent.

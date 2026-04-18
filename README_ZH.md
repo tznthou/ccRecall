@@ -241,7 +241,7 @@ ccRecall/
 
 ## 相關專案
 
-- **[ccRewind](https://github.com/user/ccRewind)** — Claude Code 的 session 回放 GUI。ccRecall 的核心模組（parser, scanner, summarizer, database, indexer）從 ccRewind 抽取而來。
+- **[ccRewind](https://github.com/tznthou/ccRewind)** — Claude Code 的 session 回放 GUI。ccRecall 的核心模組（parser, scanner, summarizer, database, indexer）從 ccRewind 抽取而來。
 
 ---
 

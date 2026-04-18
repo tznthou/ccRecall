@@ -270,8 +270,8 @@ The first three steps take ccRecall fully offline. Skip steps 4–5 if you want 
 
 ## Going Deeper
 
-- **How it works (10-year-old version)**: [`.claude/pi-research/ccrecall-for-kids.md`](../.claude/pi-research/ccrecall-for-kids.md) — the five-step pipeline explained via a goldfish-friend metaphor
-- **AI long-term memory design**: [`.claude/pi-research/ai-long-term-memory-design.md`](../.claude/pi-research/ai-long-term-memory-design.md) — forgetting curve, compression pipeline
-- **Architectural lineage**: [`.claude/pi-research/ccrewind-memory-service-architecture.md`](../.claude/pi-research/ccrewind-memory-service-architecture.md) — modules extracted from ccRewind
+- **How it works (10-year-old version)**: [`docs/research/ccrecall-for-kids.md`](./research/ccrecall-for-kids.md) — the five-step pipeline explained via a goldfish-friend metaphor
+- **AI long-term memory design**: [`docs/research/ai-long-term-memory-design.md`](./research/ai-long-term-memory-design.md) — forgetting curve, compression pipeline
+- **Architectural lineage**: [`docs/research/ccrewind-memory-service-architecture.md`](./research/ccrewind-memory-service-architecture.md) — modules extracted from ccRewind
 
 Found a bug or have a question? Open a [GitHub Issue](https://github.com/tznthou/ccRecall/issues).

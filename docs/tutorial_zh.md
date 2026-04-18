@@ -216,7 +216,7 @@ Claude：三大 cluster：
 
 ### macOS 開機自動啟動（daemon 本體）
 
-步驟 2 已經 cover 了基本流程。深入的 plist 手動寫法、uninstall、port 衝突處理見 [`docs/launchd.md`](./launchd.md)。
+步驟 2 已經 cover 了基本流程。深入的 plist 手動寫法、uninstall、port 衝突處理見 [`docs/launchd_zh.md`](./launchd_zh.md)。
 
 ---
 
@@ -272,8 +272,8 @@ ccmem uninstall-hooks
 
 ## 想深入？
 
-- **十歲版運作原理**：[`.claude/pi-research/ccrecall-for-kids.md`](../.claude/pi-research/ccrecall-for-kids.md) — 用金魚腦比喻講五步驟
-- **AI 長期記憶設計**：[`.claude/pi-research/ai-long-term-memory-design.md`](../.claude/pi-research/ai-long-term-memory-design.md) — 遺忘曲線、壓縮 pipeline
-- **架構源流**：[`.claude/pi-research/ccrewind-memory-service-architecture.md`](../.claude/pi-research/ccrewind-memory-service-architecture.md) — 從 ccRewind 抽取的模組設計
+- **十歲版運作原理**：[`docs/research/ccrecall-for-kids.md`](./research/ccrecall-for-kids.md) — 用金魚腦比喻講五步驟
+- **AI 長期記憶設計**：[`docs/research/ai-long-term-memory-design.md`](./research/ai-long-term-memory-design.md) — 遺忘曲線、壓縮 pipeline
+- **架構源流**：[`docs/research/ccrewind-memory-service-architecture.md`](./research/ccrewind-memory-service-architecture.md) — 從 ccRewind 抽取的模組設計
 
 有問題或發現 bug，歡迎開 [GitHub Issue](https://github.com/tznthou/ccRecall/issues)。
