@@ -391,7 +391,11 @@ function writeSettingsAtomically(settingsPath: string, settings: ClaudeSettings,
   const realPath = read.followedSymlink ? realpathSync(settingsPath) : settingsPath
 
   if (read.raw !== null) {
-    const bak = `${realPath}.bak-${Date.now()}`
+    // ISO-8601 with `:` swapped for `-` so the filename is Windows-safe and
+    // still sorts chronologically. Drop sub-second precision and the `Z` suffix
+    // — humans reading the dirent want a glance, not millisecond accuracy.
+    const ts = new Date().toISOString().replace(/:/g, '-').replace(/\..+$/, '')
+    const bak = `${realPath}.bak-${ts}`
     copyFileSync(realPath, bak)
   }
 
