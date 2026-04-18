@@ -84,6 +84,8 @@ flowchart TB
 
 ## Quick Start
 
+> **First time here?** The full walkthrough (install via npm → MCP setup → everyday usage) lives in [`docs/tutorial.md`](docs/tutorial.md). The section below is the contributor / dev-mode path.
+
 ### Prerequisites
 
 - Node.js `>=20.0.0,<23.0.0`

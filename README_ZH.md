@@ -84,6 +84,8 @@ flowchart TB
 
 ## 快速開始
 
+> **第一次來？** 完整教學（npm 安裝 → MCP 設定 → 日常使用）在 [`docs/tutorial_zh.md`](docs/tutorial_zh.md)。下方是 contributor / 開發模式路徑。
+
 ### 環境需求
 
 - Node.js `>=20.0.0,<23.0.0`
