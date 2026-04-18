@@ -391,10 +391,11 @@ function writeSettingsAtomically(settingsPath: string, settings: ClaudeSettings,
   const realPath = read.followedSymlink ? realpathSync(settingsPath) : settingsPath
 
   if (read.raw !== null) {
-    // ISO-8601 with `:` swapped for `-` so the filename is Windows-safe and
-    // still sorts chronologically. Drop sub-second precision and the `Z` suffix
-    // — humans reading the dirent want a glance, not millisecond accuracy.
-    const ts = new Date().toISOString().replace(/:/g, '-').replace(/\..+$/, '')
+    // ISO-8601 with `:` and `.` swapped for `-` so the filename is Windows-safe
+    // and still sorts chronologically. Keep millisecond precision to avoid two
+    // back-to-back install-hooks runs colliding on the same backup name and
+    // silently destroying the only copy of the user's original settings.json.
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, '')
     const bak = `${realPath}.bak-${ts}`
     copyFileSync(realPath, bak)
   }

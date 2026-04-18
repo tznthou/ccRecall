@@ -209,9 +209,10 @@ describe('installHooks integration', () => {
     await installHooks({ home: tmpHome, overrides: { hooksDir: FAKE_HOOKS_DIR }, nodeBin: FAKE_NODE })
     const files = await readdir(path.join(tmpHome, '.claude'))
     expect(files.some(f => f.startsWith('settings.json.bak-'))).toBe(true)
-    // ISO-8601-ish: settings.json.bak-2026-04-18T18-50-00 (colons swapped for dashes)
+    // ISO-8601-ish with ms: settings.json.bak-2026-04-18T18-50-00-123
+    // (colons + dot swapped for dashes; ms preserved to avoid same-second collision)
     const bak = files.find(f => f.startsWith('settings.json.bak-'))!
-    expect(bak).toMatch(/^settings\.json\.bak-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/)
+    expect(bak).toMatch(/^settings\.json\.bak-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}$/)
     // original theme preserved
     const after = JSON.parse(await readFile(p, 'utf8')) as ClaudeSettings
     expect(after.theme).toBe('dark')
