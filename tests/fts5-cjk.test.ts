@@ -57,6 +57,7 @@ describe('FTS5 CJK — queryMemories', () => {
     db.saveMemory(mem({ content: 'ひらがなのテスト文字', type: 'discovery' }))
     db.saveMemory(mem({ content: 'カタカナテストデータ', type: 'discovery' }))
     db.saveMemory(mem({ content: '한글 검색 테스트', type: 'discovery' }))
+    db.saveMemory(mem({ content: 'Use UI library for the dashboard', type: 'decision' }))
   })
 
   it('matches 2-char Chinese (身為) via LIKE fallback', () => {
@@ -107,8 +108,10 @@ describe('FTS5 CJK — queryMemories', () => {
     expect(results.some(m => m.content.includes('Vibe'))).toBe(true)
   })
 
-  it('1-char English does not trigger LIKE fallback and does not crash', () => {
-    expect(() => db.queryMemories('a', 10)).not.toThrow()
+  it('matches 2-char Latin acronym (UI) via LIKE fallback', () => {
+    const results = db.queryMemories('UI', 10)
+    expect(results.length).toBeGreaterThan(0)
+    expect(results.some(m => m.content.includes('UI'))).toBe(true)
   })
 
   it('returns [] for empty query', () => {

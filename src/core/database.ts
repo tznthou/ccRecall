@@ -4,7 +4,6 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Project, SessionMeta, Message, MessageContext, SearchPage, SearchOptions, SessionSearchPage, SessionTokenStats, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
-import { containsCJK } from './cjk.js'
 
 /** 寫入 memories 時使用的參數型別 */
 export interface MemoryInput {
@@ -1278,10 +1277,18 @@ export class Database {
     ).join(' ')
   }
 
-  /** LIKE pattern builder for CJK fallback. Escapes SQL LIKE wildcards so user
+  /** LIKE pattern builder for fallback. Escapes SQL LIKE wildcards so user
    *  input `%` / `_` / `\` are treated as literals. Used with `LIKE ? ESCAPE '\'`. */
-  private static cjkLikePattern(query: string): string {
+  private static likePattern(query: string): string {
     return '%' + query.replace(/[\\%_]/g, '\\$&') + '%'
+  }
+
+  /** True iff any whitespace-separated token in the query is shorter than 3
+   *  characters, which the trigram tokenizer cannot index. Applies to every
+   *  language — 2-char Latin acronyms like `UI` / `DB` fail just as hard as
+   *  2-char CJK like `記憶`. Gates the LIKE fallback path. */
+  private static hasShortToken(query: string): boolean {
+    return query.trim().split(/\s+/).some(t => t.length > 0 && t.length < 3)
   }
 
   search(query: string, projectId?: string | null, offset = 0, limit = Database.SEARCH_PAGE_SIZE, options?: SearchOptions): SearchPage {
@@ -1337,8 +1344,8 @@ export class Database {
         session_started_at: string | null
       }>
 
-      if (rows.length === 0 && containsCJK(rawQuery)) {
-        return this.searchMessagesCJKLike(rawQuery, projectId, offset, limit, options)
+      if (rows.length === 0 && Database.hasShortToken(rawQuery)) {
+        return this.searchMessagesFallback(rawQuery, projectId, offset, limit, options)
       }
 
       const hasMore = rows.length > limit
@@ -1361,10 +1368,11 @@ export class Database {
     }
   }
 
-  /** CJK LIKE fallback: trigram tokenizer cannot match queries shorter than 3
-   *  chars, so CJK 1–2 char queries scan content directly. Rank semantics are
+  /** Short-token LIKE fallback: trigram tokenizer cannot index any token
+   *  shorter than 3 characters, which hits both CJK (`記憶`) and Latin acronyms
+   *  (`UI` / `DB` / `CI`). LIKE scans content directly. Rank semantics are
    *  lost; recency (timestamp DESC) proxies relevance. */
-  private searchMessagesCJKLike(
+  private searchMessagesFallback(
     rawQuery: string,
     projectId: string | null | undefined,
     offset: number,
@@ -1388,7 +1396,7 @@ export class Database {
         AND m.type NOT IN ('last-prompt', 'queue-operation')
         AND s.id ${Database.EXCLUDE_SUBAGENTS}
     `
-    const params: (string | number | null)[] = [Database.cjkLikePattern(rawQuery)]
+    const params: (string | number | null)[] = [Database.likePattern(rawQuery)]
 
     if (projectId) {
       sql += ' AND s.project_id = ?'
@@ -1489,8 +1497,8 @@ export class Database {
         outcome_status: string | null
       }>
 
-      if (rows.length === 0 && containsCJK(rawQuery)) {
-        return this.searchSessionsCJKLike(rawQuery, projectId, offset, limit, options)
+      if (rows.length === 0 && Database.hasShortToken(rawQuery)) {
+        return this.searchSessionsFallback(rawQuery, projectId, offset, limit, options)
       }
 
       const hasMore = rows.length > limit
@@ -1513,17 +1521,18 @@ export class Database {
     }
   }
 
-  /** CJK LIKE fallback for searchSessions. Scans all FTS5-indexed columns
-   *  (title, tags, files_touched, summary_text, intent_text) since a CJK 1–2
-   *  char query could match any of them, and trigram cannot tokenize them. */
-  private searchSessionsCJKLike(
+  /** Short-token LIKE fallback for searchSessions. Scans all FTS5-indexed
+   *  columns (title, tags, files_touched, summary_text, intent_text) since a
+   *  short query could match any of them, and trigram cannot tokenize tokens
+   *  shorter than 3 characters. */
+  private searchSessionsFallback(
     rawQuery: string,
     projectId: string | null | undefined,
     offset: number,
     limit: number,
     options: SearchOptions | undefined,
   ): SessionSearchPage {
-    const pattern = Database.cjkLikePattern(rawQuery)
+    const pattern = Database.likePattern(rawQuery)
     let sql = `
       SELECT
         s.id AS session_id,
@@ -1783,8 +1792,8 @@ export class Database {
             LIMIT ?
           `).all(q, cappedLimit)
       const mapped = (rows as MemoryRow[]).map(mapMemoryRow)
-      if (mapped.length === 0 && containsCJK(query)) {
-        return this.queryMemoriesCJKLike(query, cappedLimit, projectId)
+      if (mapped.length === 0 && Database.hasShortToken(query)) {
+        return this.queryMemoriesFallback(query, cappedLimit, projectId)
       }
       return mapped
     } catch (err) {
@@ -1795,15 +1804,15 @@ export class Database {
     }
   }
 
-  /** CJK LIKE fallback for queryMemories. Trigram tokenizer cannot match
-   *  queries shorter than 3 chars; LIKE scans content. EFFECTIVE_CONFIDENCE
+  /** Short-token LIKE fallback for queryMemories. Trigram tokenizer cannot
+   *  match queries shorter than 3 chars; LIKE scans content. EFFECTIVE_CONFIDENCE
    *  (confidence × decay) replaces FTS5 rank as the primary ordering. */
-  private queryMemoriesCJKLike(
+  private queryMemoriesFallback(
     rawQuery: string,
     limit: number,
     projectId: string | null | undefined,
   ): Memory[] {
-    const pattern = Database.cjkLikePattern(rawQuery)
+    const pattern = Database.likePattern(rawQuery)
     try {
       const rows = projectId
         ? this.db.prepare(`
@@ -1827,7 +1836,7 @@ export class Database {
           `).all(pattern, limit)
       return (rows as MemoryRow[]).map(mapMemoryRow)
     } catch (err) {
-      console.warn('[memories] queryMemoriesCJKLike error:', scrubErrorMessage(err))
+      console.warn('[memories] queryMemoriesFallback error:', scrubErrorMessage(err))
       return []
     }
   }
