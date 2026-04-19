@@ -1386,7 +1386,6 @@ export class Database {
         s.title AS session_title,
         s.project_id,
         p.display_name AS project_name,
-        '' AS snippet,
         m.timestamp,
         s.started_at AS session_started_at
       FROM messages m
@@ -1421,7 +1420,6 @@ export class Database {
         session_title: string | null
         project_id: string
         project_name: string
-        snippet: string
         timestamp: string | null
         session_started_at: string | null
       }>
@@ -1433,7 +1431,7 @@ export class Database {
         projectId: r.project_id,
         projectName: r.project_name,
         messageId: r.message_id,
-        snippet: r.snippet,
+        snippet: '',
         timestamp: r.timestamp,
         sessionStartedAt: r.session_started_at,
       }))
@@ -1541,7 +1539,6 @@ export class Database {
         p.display_name AS project_name,
         s.tags,
         s.files_touched,
-        '' AS snippet,
         s.started_at,
         s.outcome_status
       FROM sessions s
@@ -1581,7 +1578,6 @@ export class Database {
         project_name: string
         tags: string | null
         files_touched: string | null
-        snippet: string
         started_at: string | null
         outcome_status: string | null
       }>
@@ -1594,7 +1590,7 @@ export class Database {
         projectName: r.project_name,
         tags: r.tags,
         filesTouched: r.files_touched,
-        snippet: r.snippet,
+        snippet: '',
         startedAt: r.started_at,
         outcomeStatus: Database.parseOutcomeStatus(r.outcome_status),
       }))
@@ -1765,6 +1761,7 @@ export class Database {
   }
 
   queryMemories(query: string, limit: number, projectId?: string | null): Memory[] {
+    const rawQuery = query
     const q = Database.fts5QuoteIfNeeded(query)
     if (!q) return []
     try {
@@ -1792,8 +1789,8 @@ export class Database {
             LIMIT ?
           `).all(q, cappedLimit)
       const mapped = (rows as MemoryRow[]).map(mapMemoryRow)
-      if (mapped.length === 0 && Database.hasShortToken(query)) {
-        return this.queryMemoriesFallback(query, cappedLimit, projectId)
+      if (mapped.length === 0 && Database.hasShortToken(rawQuery)) {
+        return this.queryMemoriesFallback(rawQuery, cappedLimit, projectId)
       }
       return mapped
     } catch (err) {
