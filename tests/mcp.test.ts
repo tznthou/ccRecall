@@ -88,17 +88,58 @@ describe('formatMemories', () => {
   }
 
   it('shows confidence when not 1', () => {
-    const text = formatMemories([{ ...baseMemory, confidence: 0.85 }], 'q')
+    const { text } = formatMemories([{ ...baseMemory, confidence: 0.85 }], 'q')
     expect(text).toBe('- [decision] (conf 0.85) sample content')
   })
 
   it('omits confidence when equal to 1', () => {
-    const text = formatMemories([{ ...baseMemory, type: 'pattern' }], 'q')
+    const { text } = formatMemories([{ ...baseMemory, type: 'pattern' }], 'q')
     expect(text).toBe('- [pattern] sample content')
   })
 
   it('returns empty-result message for empty array', () => {
-    expect(formatMemories([], 'missing')).toBe('No memories found for: missing')
+    expect(formatMemories([], 'missing').text).toBe('No memories found for: missing')
+  })
+
+  it('leaves short memories untouched when within budget', () => {
+    const memories = [
+      { ...baseMemory, id: 1, content: 'short one' },
+      { ...baseMemory, id: 2, content: 'short two' },
+    ]
+    const { text, emittedIds } = formatMemories(memories, 'q')
+    expect(text).not.toContain('…')
+    expect(text).not.toContain('truncated')
+    expect(text.split('\n').length).toBe(2)
+    expect(emittedIds).toEqual([1, 2])
+  })
+
+  it('truncates a long single memory with ellipsis (per-row cap)', () => {
+    const long = 'x'.repeat(500)
+    const { text } = formatMemories([{ ...baseMemory, content: long }], 'q')
+    expect(text).toContain('…')
+    expect(text.length).toBeLessThan(long.length)
+  })
+
+  it('appends trailer when total budget exhausted', () => {
+    const memories = Array.from({ length: 20 }, (_, i) => ({
+      ...baseMemory,
+      id: i + 1,
+      content: `這是第 ${i} 筆記憶內容夠長用來吃掉 budget 快速累加的 CJK 文字片段`,
+    }))
+    const { text, emittedIds } = formatMemories(memories, 'q', 100)
+    expect(text).toMatch(/\(\.\.\. \+\d+ more memories truncated\)/)
+    expect(emittedIds.length).toBeLessThan(memories.length)
+  })
+
+  it('honors caller-supplied maxTokens override', () => {
+    const memories = Array.from({ length: 20 }, (_, i) => ({
+      ...baseMemory,
+      id: i + 1,
+      content: `這是第 ${i} 筆記憶內容夠長用來吃掉 budget 快速累加的 CJK 文字片段`,
+    }))
+    const defaultOut = formatMemories(memories, 'q')
+    const biggerOut = formatMemories(memories, 'q', 2000)
+    expect(biggerOut.emittedIds.length).toBeGreaterThan(defaultOut.emittedIds.length)
   })
 })
 

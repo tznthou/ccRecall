@@ -6,6 +6,16 @@ import { MemoryService } from '../core/memory-service.js'
 import type { Memory, MemoryType, KnowledgeDepth } from '../core/types.js'
 import { deriveDepth } from '../core/types.js'
 import { normalizeTopicKey } from '../core/topic-extractor.js'
+import {
+  approximateTokens,
+  truncateToChars,
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_PER_ROW_CHAR_CAP,
+} from '../core/token-budget.js'
+
+// Reserve tokens for trailer + possible unmatched-keyword note before
+// selecting memory rows, so final text respects the maxTokens target.
+const TRAILER_RESERVE_TOKENS = 20
 
 const MEMORY_TYPES = ['decision', 'discovery', 'preference', 'pattern', 'feedback'] as const
 
@@ -26,29 +36,67 @@ function textError(prefix: string, err: unknown): McpTextResult {
 const recallQueryInput = {
   query: z.string().min(1).describe('FTS5 search query (keywords or phrase)'),
   limit: z.number().int().positive().max(50).optional().describe('Max results (default 10, max 50)'),
+  maxTokens: z.number().int().positive().max(2000).optional().describe(
+    `Approximate total output token budget (default ${DEFAULT_MAX_TOKENS}). Results are truncated with per-row ellipsis and a trailer so clipping is always visible.`,
+  ),
 }
 
-function formatMemoryLine(m: Memory): string {
+function formatMemoryLine(m: Memory, perRowCharCap: number = DEFAULT_PER_ROW_CHAR_CAP): string {
   const conf = m.confidence !== 1 ? ` (conf ${m.confidence.toFixed(2)})` : ''
-  return `- [${m.type}]${conf} ${m.content}`
+  return `- [${m.type}]${conf} ${truncateToChars(m.content, perRowCharCap)}`
 }
 
-export function formatMemories(memories: Memory[], query: string): string {
-  if (memories.length === 0) return `No memories found for: ${query}`
-  return memories.map(formatMemoryLine).join('\n')
+function takeWithinBudget(
+  memories: Memory[],
+  budget: number,
+  perRowCharCap: number,
+): { taken: string[]; takenIds: number[]; dropped: number; usedTokens: number } {
+  const taken: string[] = []
+  const takenIds: number[] = []
+  let used = 0
+  for (let i = 0; i < memories.length; i++) {
+    const line = formatMemoryLine(memories[i], perRowCharCap)
+    const cost = approximateTokens(line)
+    if (used + cost > budget) {
+      return { taken, takenIds, dropped: memories.length - i, usedTokens: used }
+    }
+    taken.push(line)
+    takenIds.push(memories[i].id)
+    used += cost
+  }
+  return { taken, takenIds, dropped: 0, usedTokens: used }
+}
+
+export interface FormattedResult {
+  text: string
+  emittedIds: number[]
+}
+
+export function formatMemories(
+  memories: Memory[],
+  query: string,
+  maxTokens: number = DEFAULT_MAX_TOKENS,
+): FormattedResult {
+  if (memories.length === 0) return { text: `No memories found for: ${query}`, emittedIds: [] }
+  const memoryBudget = Math.max(0, maxTokens - TRAILER_RESERVE_TOKENS)
+  const { taken, takenIds, dropped } = takeWithinBudget(memories, memoryBudget, DEFAULT_PER_ROW_CHAR_CAP)
+  if (dropped > 0) taken.push(`(... +${dropped} more memories truncated)`)
+  return { text: taken.join('\n'), emittedIds: takenIds }
 }
 
 export function recallQueryHandler(
   db: Database,
   memoryService: MemoryService,
-  args: { query: string; limit?: number },
+  args: { query: string; limit?: number; maxTokens?: number },
 ): McpTextResult {
   try {
     const memories = db.queryMemories(args.query, args.limit ?? 10)
-    // Phase 4c: touch returned memories so access_count reflects real usage,
-    // extending their half-life under the decay formula. touch noops on [].
-    memoryService.touch(memories.map(m => m.id))
-    return textResult(formatMemories(memories, args.query))
+    const { text, emittedIds } = formatMemories(memories, args.query, args.maxTokens)
+    // Phase 4c: touch only memories that actually reached the caller.
+    // Budget-dropped rows are not "surfaced" — bumping their access_count
+    // would skew decay / compression toward unused content.
+    memoryService.touch(emittedIds)
+    return textResult(text)
   } catch (err) {
     return textError('Error querying memories', err)
   }
@@ -77,41 +125,73 @@ export function formatContextResult(
   unmatchedKeywords: string[],
   fallbackMemories: Memory[] | null,
   keywords: string[],
-): string {
+  maxTokens: number = DEFAULT_MAX_TOKENS,
+): FormattedResult {
   if (clusters.length === 0 && (!fallbackMemories || fallbackMemories.length === 0)) {
-    return `No relevant memories for: ${keywords.join(', ')}`
+    return { text: `No relevant memories for: ${keywords.join(', ')}`, emittedIds: [] }
   }
-  const parts: string[] = [`# Relevant memories for: ${keywords.join(', ')}`, '']
+  let remaining = Math.max(0, maxTokens - TRAILER_RESERVE_TOKENS)
+  const mainHeader = `# Relevant memories for: ${keywords.join(', ')}`
+  remaining -= approximateTokens(mainHeader)
+  const parts: string[] = [mainHeader, '']
+  const emittedIds: number[] = []
+  let totalDropped = 0
   for (const c of clusters) {
-    parts.push(`## Topic: ${c.topic} (${c.depth}, ${c.mentionCount} mentions)`)
+    const clusterHeader = `## Topic: ${c.topic} (${c.depth}, ${c.mentionCount} mentions)`
+    const headerCost = approximateTokens(clusterHeader)
+    if (remaining < headerCost) {
+      totalDropped += c.memories.length
+      continue
+    }
+    parts.push(clusterHeader)
+    remaining -= headerCost
     if (c.memories.length === 0) {
       parts.push('(no memories linked yet)')
     } else {
-      for (const m of c.memories) parts.push(formatMemoryLine(m))
+      const result = takeWithinBudget(c.memories, remaining, DEFAULT_PER_ROW_CHAR_CAP)
+      parts.push(...result.taken)
+      remaining -= result.usedTokens
+      totalDropped += result.dropped
+      emittedIds.push(...result.takenIds)
     }
     parts.push('')
   }
   if (fallbackMemories && fallbackMemories.length > 0) {
-    parts.push('## FTS fallback (no topic match)')
-    for (const m of fallbackMemories) parts.push(formatMemoryLine(m))
-    parts.push('')
+    const fbHeader = '## FTS fallback (no topic match)'
+    const headerCost = approximateTokens(fbHeader)
+    if (remaining < headerCost) {
+      totalDropped += fallbackMemories.length
+    } else {
+      parts.push(fbHeader)
+      const result = takeWithinBudget(fallbackMemories, remaining - headerCost, DEFAULT_PER_ROW_CHAR_CAP)
+      parts.push(...result.taken)
+      totalDropped += result.dropped
+      emittedIds.push(...result.takenIds)
+      parts.push('')
+    }
+  }
+  if (totalDropped > 0) {
+    parts.push(`(... +${totalDropped} more memories truncated)`)
   }
   if (unmatchedKeywords.length > 0) {
     parts.push(`(No topic match for: ${unmatchedKeywords.join(', ')})`)
   }
-  return parts.join('\n').trimEnd()
+  return { text: parts.join('\n').trimEnd(), emittedIds }
 }
 
 const recallContextInput = {
   projectId: z.string().min(1).describe('Project ID (derived from cwd, e.g. "-Users-foo-my-project")'),
   keywords: z.array(z.string().min(1)).min(1).describe('Candidate topic keywords (e.g. ["typescript", "mcp"])'),
   memoryLimit: z.number().int().positive().max(20).optional().describe('Max memories per topic (default 5)'),
+  maxTokens: z.number().int().positive().max(2000).optional().describe(
+    `Approximate total output token budget (default ${DEFAULT_MAX_TOKENS}). Results are truncated with per-row ellipsis and a trailer so clipping is always visible.`,
+  ),
 }
 
 export function recallContextHandler(
   db: Database,
   memoryService: MemoryService,
-  args: { projectId: string; keywords: string[]; memoryLimit?: number },
+  args: { projectId: string; keywords: string[]; memoryLimit?: number; maxTokens?: number },
 ): McpTextResult {
   try {
     const memoryLimit = args.memoryLimit ?? 5
@@ -157,14 +237,17 @@ export function recallContextHandler(
       fallback = aggregated
     }
 
-    // Phase 4c: gather all memory ids surfaced (clusters + fallback) and touch once.
-    // MemoryService.touch dedupes internally, so a memory appearing in multiple
-    // clusters still only bumps access_count by 1 per request.
-    const clusterIds = clusters.flatMap(c => c.memories.map(m => m.id))
-    const fallbackIds = fallback?.map(m => m.id) ?? []
-    memoryService.touch([...clusterIds, ...fallbackIds])
-
-    return textResult(formatContextResult(clusters, unmatched, fallback, args.keywords))
+    const { text, emittedIds } = formatContextResult(
+      clusters,
+      unmatched,
+      fallback,
+      args.keywords,
+      args.maxTokens,
+    )
+    // Phase 4c: touch only memories that actually reached the caller.
+    // MemoryService.touch dedupes internally.
+    memoryService.touch(emittedIds)
+    return textResult(text)
   } catch (err) {
     return textError('Error building context', err)
   }

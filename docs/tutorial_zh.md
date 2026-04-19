@@ -169,7 +169,7 @@ Claude：找到了——你們用 async/await 強制 scanProjects 完成後才 w
          避開 chokidar ignoreInitial=true 的 race。commit ee64c6b。
 ```
 
-ccRecall 在背景把這段記憶以 `<300 tokens` 的小紙條塞進 Claude 的 context，他看到就能延續。
+ccRecall 在背景把這段記憶以 `~300 tokens` 的小紙條塞進 Claude 的 context（預設 budget，caller 可透過 `maxTokens` 最多提高到 2000），他看到就能延續。
 
 ### 情境二：主動存「這個是重要決策」
 

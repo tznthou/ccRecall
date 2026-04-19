@@ -170,7 +170,7 @@ Claude: Found it — you used async/await to force scanProjects to complete
         race. Commit ee64c6b.
 ```
 
-ccRecall silently injected that memory into Claude's context as a <300-token note, and he picked up where you left off.
+ccRecall silently injected that memory into Claude's context as a ~300-token note (the default budget; callers can raise it via `maxTokens` up to 2000), and he picked up where you left off.
 
 ### Scenario 2: Actively Saving "This Is Important"
 
