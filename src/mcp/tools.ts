@@ -41,21 +41,20 @@ const recallQueryInput = {
   ),
 }
 
-function formatMemoryLine(m: Memory, perRowCharCap: number = DEFAULT_PER_ROW_CHAR_CAP): string {
+function formatMemoryLine(m: Memory): string {
   const conf = m.confidence !== 1 ? ` (conf ${m.confidence.toFixed(2)})` : ''
-  return `- [${m.type}]${conf} ${truncateToChars(m.content, perRowCharCap)}`
+  return `- [${m.type}]${conf} ${truncateToChars(m.content, DEFAULT_PER_ROW_CHAR_CAP)}`
 }
 
 function takeWithinBudget(
   memories: Memory[],
   budget: number,
-  perRowCharCap: number,
 ): { taken: string[]; takenIds: number[]; dropped: number; usedTokens: number } {
   const taken: string[] = []
   const takenIds: number[] = []
   let used = 0
   for (let i = 0; i < memories.length; i++) {
-    const line = formatMemoryLine(memories[i], perRowCharCap)
+    const line = formatMemoryLine(memories[i])
     const cost = approximateTokens(line)
     if (used + cost > budget) {
       return { taken, takenIds, dropped: memories.length - i, usedTokens: used }
@@ -79,7 +78,7 @@ export function formatMemories(
 ): FormattedResult {
   if (memories.length === 0) return { text: `No memories found for: ${query}`, emittedIds: [] }
   const memoryBudget = Math.max(0, maxTokens - TRAILER_RESERVE_TOKENS)
-  const { taken, takenIds, dropped } = takeWithinBudget(memories, memoryBudget, DEFAULT_PER_ROW_CHAR_CAP)
+  const { taken, takenIds, dropped } = takeWithinBudget(memories, memoryBudget)
   if (dropped > 0) taken.push(`(... +${dropped} more memories truncated)`)
   return { text: taken.join('\n'), emittedIds: takenIds }
 }
@@ -148,7 +147,7 @@ export function formatContextResult(
     if (c.memories.length === 0) {
       parts.push('(no memories linked yet)')
     } else {
-      const result = takeWithinBudget(c.memories, remaining, DEFAULT_PER_ROW_CHAR_CAP)
+      const result = takeWithinBudget(c.memories, remaining)
       parts.push(...result.taken)
       remaining -= result.usedTokens
       totalDropped += result.dropped
@@ -163,7 +162,7 @@ export function formatContextResult(
       totalDropped += fallbackMemories.length
     } else {
       parts.push(fbHeader)
-      const result = takeWithinBudget(fallbackMemories, remaining - headerCost, DEFAULT_PER_ROW_CHAR_CAP)
+      const result = takeWithinBudget(fallbackMemories, remaining - headerCost)
       parts.push(...result.taken)
       totalDropped += result.dropped
       emittedIds.push(...result.takenIds)
