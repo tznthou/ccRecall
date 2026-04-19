@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Project, SessionMeta, Message, MessageContext, SearchPage, SearchOptions, SessionSearchPage, SessionTokenStats, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
+import { containsCJK } from './cjk.js'
 
 /** 寫入 memories 時使用的參數型別 */
 export interface MemoryInput {
@@ -626,6 +627,49 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 19,
+    description: 'switch FTS5 tokenizer to trigram for CJK support (3 tables)',
+    up: (db) => {
+      db.exec(`
+        DROP TABLE IF EXISTS memories_fts;
+        CREATE VIRTUAL TABLE memories_fts USING fts5(
+          content,
+          content='memories',
+          content_rowid='id',
+          tokenize='trigram'
+        );
+        INSERT INTO memories_fts(rowid, content)
+        SELECT id, COALESCE(content, '') FROM memories;
+
+        DROP TABLE IF EXISTS sessions_fts;
+        CREATE VIRTUAL TABLE sessions_fts USING fts5(
+          title,
+          tags,
+          files_touched,
+          summary_text,
+          intent_text,
+          content='sessions',
+          content_rowid='rowid',
+          tokenize='trigram'
+        );
+        INSERT INTO sessions_fts(rowid, title, tags, files_touched, summary_text, intent_text)
+        SELECT rowid, COALESCE(title,''), COALESCE(tags,''), COALESCE(files_touched,''),
+               COALESCE(summary_text,''), COALESCE(intent_text,'')
+        FROM sessions;
+
+        DROP TABLE IF EXISTS messages_fts;
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+          content_text,
+          content='messages',
+          content_rowid='id',
+          tokenize='trigram'
+        );
+        INSERT INTO messages_fts(rowid, content_text)
+        SELECT id, COALESCE(content_text, '') FROM messages;
+      `)
+    },
+  },
 ]
 
 /** DB SELECT messages 的原始行型別 */
@@ -1234,8 +1278,15 @@ export class Database {
     ).join(' ')
   }
 
+  /** LIKE pattern builder for CJK fallback. Escapes SQL LIKE wildcards so user
+   *  input `%` / `_` / `\` are treated as literals. Used with `LIKE ? ESCAPE '\'`. */
+  private static cjkLikePattern(query: string): string {
+    return '%' + query.replace(/[\\%_]/g, '\\$&') + '%'
+  }
+
   search(query: string, projectId?: string | null, offset = 0, limit = Database.SEARCH_PAGE_SIZE, options?: SearchOptions): SearchPage {
     limit = Math.min(limit, 100)
+    const rawQuery = query
     query = Database.fts5QuoteIfNeeded(query)
     try {
       let sql = `
@@ -1286,6 +1337,10 @@ export class Database {
         session_started_at: string | null
       }>
 
+      if (rows.length === 0 && containsCJK(rawQuery)) {
+        return this.searchMessagesCJKLike(rawQuery, projectId, offset, limit, options)
+      }
+
       const hasMore = rows.length > limit
       if (hasMore) rows.pop()
       const results = rows.map(r => ({
@@ -1306,9 +1361,84 @@ export class Database {
     }
   }
 
+  /** CJK LIKE fallback: trigram tokenizer cannot match queries shorter than 3
+   *  chars, so CJK 1–2 char queries scan content directly. Rank semantics are
+   *  lost; recency (timestamp DESC) proxies relevance. */
+  private searchMessagesCJKLike(
+    rawQuery: string,
+    projectId: string | null | undefined,
+    offset: number,
+    limit: number,
+    options: SearchOptions | undefined,
+  ): SearchPage {
+    let sql = `
+      SELECT
+        m.id AS message_id,
+        m.session_id,
+        s.title AS session_title,
+        s.project_id,
+        p.display_name AS project_name,
+        '' AS snippet,
+        m.timestamp,
+        s.started_at AS session_started_at
+      FROM messages m
+      JOIN sessions s ON s.id = m.session_id
+      JOIN projects p ON p.id = s.project_id
+      WHERE m.content_text LIKE ? ESCAPE '\\'
+        AND m.type NOT IN ('last-prompt', 'queue-operation')
+        AND s.id ${Database.EXCLUDE_SUBAGENTS}
+    `
+    const params: (string | number | null)[] = [Database.cjkLikePattern(rawQuery)]
+
+    if (projectId) {
+      sql += ' AND s.project_id = ?'
+      params.push(projectId)
+    }
+    if (options?.dateFrom) {
+      sql += ' AND date(s.started_at) >= ?'
+      params.push(options.dateFrom)
+    }
+    if (options?.dateTo) {
+      sql += ' AND date(s.started_at) <= ?'
+      params.push(options.dateTo)
+    }
+
+    sql += ' ORDER BY m.timestamp DESC, m.id DESC LIMIT ? OFFSET ?'
+    params.push(limit + 1, offset)
+
+    try {
+      const rows = this.db.prepare(sql).all(...params) as Array<{
+        message_id: number
+        session_id: string
+        session_title: string | null
+        project_id: string
+        project_name: string
+        snippet: string
+        timestamp: string | null
+        session_started_at: string | null
+      }>
+      const hasMore = rows.length > limit
+      if (hasMore) rows.pop()
+      const results = rows.map(r => ({
+        sessionId: r.session_id,
+        sessionTitle: r.session_title,
+        projectId: r.project_id,
+        projectName: r.project_name,
+        messageId: r.message_id,
+        snippet: r.snippet,
+        timestamp: r.timestamp,
+        sessionStartedAt: r.session_started_at,
+      }))
+      return { results, offset, hasMore }
+    } catch {
+      return { results: [], offset, hasMore: false }
+    }
+  }
+
   /** 搜尋 session 標題 / 標籤 / 檔案路徑 / 摘要 / 意圖 */
   searchSessions(query: string, projectId?: string | null, offset = 0, limit = Database.SEARCH_PAGE_SIZE, options?: SearchOptions): SessionSearchPage {
     limit = Math.min(limit, 100)
+    const rawQuery = query
     query = Database.fts5QuoteIfNeeded(query)
     try {
       let sql = `
@@ -1359,6 +1489,10 @@ export class Database {
         outcome_status: string | null
       }>
 
+      if (rows.length === 0 && containsCJK(rawQuery)) {
+        return this.searchSessionsCJKLike(rawQuery, projectId, offset, limit, options)
+      }
+
       const hasMore = rows.length > limit
       if (hasMore) rows.pop()
       const results = rows.map(r => ({
@@ -1373,6 +1507,88 @@ export class Database {
         outcomeStatus: Database.parseOutcomeStatus(r.outcome_status),
       }))
 
+      return { results, offset, hasMore }
+    } catch {
+      return { results: [], offset, hasMore: false }
+    }
+  }
+
+  /** CJK LIKE fallback for searchSessions. Scans all FTS5-indexed columns
+   *  (title, tags, files_touched, summary_text, intent_text) since a CJK 1–2
+   *  char query could match any of them, and trigram cannot tokenize them. */
+  private searchSessionsCJKLike(
+    rawQuery: string,
+    projectId: string | null | undefined,
+    offset: number,
+    limit: number,
+    options: SearchOptions | undefined,
+  ): SessionSearchPage {
+    const pattern = Database.cjkLikePattern(rawQuery)
+    let sql = `
+      SELECT
+        s.id AS session_id,
+        s.title AS session_title,
+        s.project_id,
+        p.display_name AS project_name,
+        s.tags,
+        s.files_touched,
+        '' AS snippet,
+        s.started_at,
+        s.outcome_status
+      FROM sessions s
+      JOIN projects p ON p.id = s.project_id
+      WHERE (
+        s.title LIKE ? ESCAPE '\\'
+        OR s.tags LIKE ? ESCAPE '\\'
+        OR s.files_touched LIKE ? ESCAPE '\\'
+        OR s.summary_text LIKE ? ESCAPE '\\'
+        OR s.intent_text LIKE ? ESCAPE '\\'
+      )
+        AND s.id ${Database.EXCLUDE_SUBAGENTS}
+    `
+    const params: (string | number | null)[] = [pattern, pattern, pattern, pattern, pattern]
+
+    if (projectId) {
+      sql += ' AND s.project_id = ?'
+      params.push(projectId)
+    }
+    if (options?.dateFrom) {
+      sql += ' AND date(s.started_at) >= ?'
+      params.push(options.dateFrom)
+    }
+    if (options?.dateTo) {
+      sql += ' AND date(s.started_at) <= ?'
+      params.push(options.dateTo)
+    }
+
+    sql += ' ORDER BY s.started_at DESC, s.rowid DESC LIMIT ? OFFSET ?'
+    params.push(limit + 1, offset)
+
+    try {
+      const rows = this.db.prepare(sql).all(...params) as Array<{
+        session_id: string
+        session_title: string | null
+        project_id: string
+        project_name: string
+        tags: string | null
+        files_touched: string | null
+        snippet: string
+        started_at: string | null
+        outcome_status: string | null
+      }>
+      const hasMore = rows.length > limit
+      if (hasMore) rows.pop()
+      const results = rows.map(r => ({
+        sessionId: r.session_id,
+        sessionTitle: r.session_title,
+        projectId: r.project_id,
+        projectName: r.project_name,
+        tags: r.tags,
+        filesTouched: r.files_touched,
+        snippet: r.snippet,
+        startedAt: r.started_at,
+        outcomeStatus: Database.parseOutcomeStatus(r.outcome_status),
+      }))
       return { results, offset, hasMore }
     } catch {
       return { results: [], offset, hasMore: false }
@@ -1555,7 +1771,7 @@ export class Database {
                 (m.session_id IS NOT NULL AND s.project_id = ?) OR
                 (m.session_id IS NULL AND m.project_id = ?)
               )
-            ORDER BY rank, ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
+            ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, rank, m.id DESC
             LIMIT ?
           `).all(q, projectId, projectId, cappedLimit)
         : this.db.prepare(`
@@ -1563,14 +1779,55 @@ export class Database {
             FROM memories_fts
             JOIN memories m ON m.id = memories_fts.rowid
             WHERE memories_fts MATCH ?
-            ORDER BY rank, ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
+            ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, rank, m.id DESC
             LIMIT ?
           `).all(q, cappedLimit)
-      return (rows as MemoryRow[]).map(mapMemoryRow)
+      const mapped = (rows as MemoryRow[]).map(mapMemoryRow)
+      if (mapped.length === 0 && containsCJK(query)) {
+        return this.queryMemoriesCJKLike(query, cappedLimit, projectId)
+      }
+      return mapped
     } catch (err) {
       // FTS5 errors echo the user-supplied query verbatim; scrub to avoid
       // log injection via control chars.
       console.warn('[memories] queryMemories error:', scrubErrorMessage(err))
+      return []
+    }
+  }
+
+  /** CJK LIKE fallback for queryMemories. Trigram tokenizer cannot match
+   *  queries shorter than 3 chars; LIKE scans content. EFFECTIVE_CONFIDENCE
+   *  (confidence × decay) replaces FTS5 rank as the primary ordering. */
+  private queryMemoriesCJKLike(
+    rawQuery: string,
+    limit: number,
+    projectId: string | null | undefined,
+  ): Memory[] {
+    const pattern = Database.cjkLikePattern(rawQuery)
+    try {
+      const rows = projectId
+        ? this.db.prepare(`
+            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+            FROM memories m
+            LEFT JOIN sessions s ON m.session_id = s.id
+            WHERE m.content LIKE ? ESCAPE '\\'
+              AND (
+                (m.session_id IS NOT NULL AND s.project_id = ?) OR
+                (m.session_id IS NULL AND m.project_id = ?)
+              )
+            ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.created_at DESC, m.id DESC
+            LIMIT ?
+          `).all(pattern, projectId, projectId, limit)
+        : this.db.prepare(`
+            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+            FROM memories m
+            WHERE m.content LIKE ? ESCAPE '\\'
+            ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.created_at DESC, m.id DESC
+            LIMIT ?
+          `).all(pattern, limit)
+      return (rows as MemoryRow[]).map(mapMemoryRow)
+    } catch (err) {
+      console.warn('[memories] queryMemoriesCJKLike error:', scrubErrorMessage(err))
       return []
     }
   }
