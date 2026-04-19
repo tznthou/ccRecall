@@ -298,6 +298,12 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 
 ---
 
+## Changelog
+
+Release notes and version history live in [CHANGELOG.md](CHANGELOG.md). Every tagged version has a matching entry; the `Unreleased` section tracks what's landed on `main` but not yet published to npm.
+
+---
+
 ## License
 
 Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE).
