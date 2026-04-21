@@ -137,9 +137,8 @@ const server = createServer(db, {
 
 故意**不**把具體數字寫死在本文——這種東西壞得快。現況請看：
 
-- Open issues：[#11](https://github.com/tznthou/ccRecall/issues/11)（WAL/VACUUM 物理壓縮）、[#13](https://github.com/tznthou/ccRecall/issues/13)（FTS5 CJK edge cases）
+- Open issues：[#11](https://github.com/tznthou/ccRecall/issues/11)（WAL/VACUUM 物理壓縮——0.2.0 已把 VACUUM 移出 daemon startup，部分緩解）、[#13](https://github.com/tznthou/ccRecall/issues/13)（FTS5 CJK edge cases）
 - Harvest rate gap：實際上有非同小可的 session 明明有 summary 卻被跳過。主要嫌疑犯是 `reason: 'resume'` filter 判太寬；log `reason` 分布在 quick-fix 清單
-- Storage governance：`messages` / `message_archive` / `message_content` / `messages_fts` 四表是 ccRewind 基因遺留——內部 audit 證實砍掉零功能損失。Migration 已排上議程
 
 真實狀態永遠以 `gh issue list` + 專案筆記為準，不是本檔。
 

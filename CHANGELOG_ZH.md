@@ -8,6 +8,74 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.2.0] — 2026-04-21
+
+### 破壞性變更
+
+- **移除四張 messages 系列舊表** ——`messages`、`message_content`、`message_archive`、`messages_fts`（含它們的 FTS5 triggers 與 indexes）全砍掉。這些表是當初從 ccRewind 抽核心模組時帶進來的基因遺留；內部 audit 確認砍了零功能損失。記憶 recall、session 摘要、memories_fts / sessions_fts 的 FTS、harvest 流程一切不動——這些路徑全都走 `memories_fts` / `sessions_fts` / `sessions.summary_text`，從來沒碰 messages 系列。
+- **移除 `Database` 公開 method**：`getMessages`、`getMessageContext`、`search`、`getSessionTokenStats`，以及對應型別 `Message`、`MessageContext`、`SearchPage`、`SearchResult`、`SearchScope`、`SessionTokenStats`。全專案 grep 確認 production 零 caller（hooks / MCP tools / HTTP routes 都沒用），它們只是被自家 test 撐著沒清的死碼。
+- **Schema 升到 v20。**
+
+### 使用者影響
+
+**功能零影響** ——recall 行為完全一樣。差別在磁碟：一個健康的 ccRecall 跑兩週累積到 ~700 MB 的 DB，在 `sqlite3 ~/.ccrecall/ccrecall.db 'VACUUM'` 回收空間後會縮到個位數 MB。長期儲存曲線從每年 ~95 GB 降到十年 ~2 GB。
+
+### Migration
+
+- **首次啟動 daemon 自動跑**。v19 → v20 在單一 SQLite transaction 內完成：
+  1. 執行前 `copyFileSync(dbPath, dbPath + '.pre-v20.bak')`——快照起來，避免 non-SQL 類故障（磁碟滿、segfault、WAL 壞軌）把資料孤立。SQL 層錯誤本來就有 transaction auto-rollback 蓋到。
+  2. 建 `message_uuids (uuid PK, session_id REFERENCES sessions ON DELETE CASCADE)` + `idx_message_uuids_session`。
+  3. 從 `messages` 回填，**依 session 年齡排序**（舊 session 在 replay 時擁有共享 uuid 的 ownership——和原本 dedup 語意一致）。
+  4. 驗 `COUNT(DISTINCT uuid) FROM messages` = `COUNT(*) FROM message_uuids`。不等即 throw 附清楚錯誤訊息；transaction rollback，DB 停在 v19，backup 檔在磁碟上。
+  5. 依相依順序砍四表 + triggers。
+- **Migration 後的 auto-`VACUUM` 拿掉**。成熟的 ~700 MB DB 上它會讓 daemon 啟動卡數分鐘。VACUUM 改為 user-driven：`sqlite3 ~/.ccrecall/ccrecall.db 'VACUUM'`（先停 daemon——`ccmem uninstall-daemon` 或 `launchctl stop com.tznthou.ccrecall`）。
+- 在 Database constructor 加 **`PRAGMA busy_timeout = 5000`**，避免並行 reader（例如使用者另開 `sqlite3` CLI）讓 daemon 吃 SQLITE_BUSY 崩掉。
+
+### 新增
+
+- **`ccmem cleanup --orphans`** CLI ——列出 `session_id` 指向已不存在 session row 的 memories（test fixture、手動 `DELETE FROM sessions`、partial-index race 會留下這種）。預設 dry-run；加 `--yes` 會先跑一次 indexer reconcile（避免把 DB stale 狀態誤判成 orphan），然後 stdin 確認後在單一 transaction 內刪。手動 memory（`session_id IS NULL`）完全不動。
+- **`message_uuids` lookup 表** ——舊 messages 架構唯一存活的部分。`indexSession()` 寫 `{uuid, session_id}` 進去；`getExistingUuids()` 從這裡查 resumed-session replay dedup。表很小：一筆 uuid 一筆 row，不含 content，session_id FK ON DELETE CASCADE。
+
+### 移除
+
+- `search()` 移除後失去呼叫者的 private helpers——`fts5QuoteIfNeeded`、`likePattern`、`hasShortToken`、`VALID_OUTCOMES`、`parseOutcomeStatus`——**保留**，因為 `searchSessions()` 還在用。
+- `deleteSubagentSession()` 拿掉顯式 `DELETE FROM messages`；現在靠 `sessions` 的 FK cascade 自動清 `message_uuids` 跟 `session_files`。
+
+### 測試
+
+- 刪 `tests/fts5-cjk.test.ts`（測 `db.search()`，現已不存在）。
+- 刪 `tests/migration-v19.test.ts` ——其斷言驗的是 v20 馬上會 discard 的 schema 狀態，coverage 合進新的 `tests/migration-v20.test.ts`，後者跑：
+  - 新 DB 狀態（v20 表存在、四舊表消失、`schema_version` 有 row 20、sessions → message_uuids 的 FK CASCADE）。
+  - v19 → v20 升級 happy path（把新 DB rewind 回模擬 v19、seed messages、reopen、驗 backup 檔 + message_uuids 回填 + 舊表被砍）。
+  - 回填順序語意（較舊的 session 擁有共享 uuid）。
+  - 負路徑 abort（回填 count 不等直接 throw、transaction rollback、backup 還在）。
+- 重寫 `tests/database.test.ts` / `tests/indexer.test.ts` 的 `indexSession` / `archiveStaleSessionsExcept` 斷言，改為檢查 `message_uuids` + `session.messageCount`，不再看 message content。
+- 測試數：477 → 451（砍了 31 個針對已移除 code 的斷言；新增 11 個 v20 migration + cleanup CLI 測試）。
+
+### 升級清單
+
+```bash
+# 1. 停 daemon
+ccmem uninstall-daemon   # 或 launchctl stop com.tznthou.ccrecall
+
+# 2. 安裝 0.2.0
+npm i -g @tznthou/ccrecall@0.2.0
+
+# 3. 啟動——首啟跑 migration，backup 會建在 DB 旁邊
+ccmem install-daemon
+tail -f ~/.ccrecall/daemon.log   # 看到 "Pre-v20 backup created at ..." 就是通過
+
+# 4. 回收磁碟（選用，但建議）
+launchctl stop com.tznthou.ccrecall
+sqlite3 ~/.ccrecall/ccrecall.db 'VACUUM'
+launchctl start com.tznthou.ccrecall
+
+# 5. 確認沒問題後刪掉 backup
+rm ~/.ccrecall/ccrecall.db.pre-v20.bak
+```
+
+---
+
 ## [0.1.7] — 2026-04-20
 
 ### 新增

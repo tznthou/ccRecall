@@ -11,6 +11,74 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.2.0] — 2026-04-21
+
+### Breaking
+
+- **Dropped the four legacy message tables** — `messages`, `message_content`, `message_archive`, and `messages_fts` (plus their FTS5 triggers and indexes) are removed. These were inherited when ccRecall forked core modules from ccRewind; an internal audit confirmed zero functional loss from dropping them. Memory recall, session summaries, FTS on memories and sessions, and harvest all continue to work unchanged — all of those paths query `memories_fts` / `sessions_fts` / `sessions.summary_text`, never the messages tables.
+- **Removed public `Database` methods**: `getMessages`, `getMessageContext`, `search`, `getSessionTokenStats`, plus the associated types `Message`, `MessageContext`, `SearchPage`, `SearchResult`, `SearchScope`, `SessionTokenStats`. None had a production caller (verified via grep of the entire repo + all hooks / MCP tools / HTTP routes); they were dead code kept alive only by tests that exercised their own removal.
+- **Schema bumped to v20.**
+
+### User impact
+
+**Zero functional impact** — recall behaves identically. What changes is the on-disk DB: a healthy ccRecall install that accumulated ~700 MB over two weeks under the old schema will collapse to single-digit MB once the user reclaims space with `sqlite3 ~/.ccrecall/ccrecall.db 'VACUUM'`. Projected year-over-year storage drops from ~95 GB/year to a few GB over a decade.
+
+### Migration
+
+- **Automatic on daemon start.** v19 → v20 runs in a single SQLite transaction:
+  1. Pre-flight `copyFileSync(dbPath, dbPath + '.pre-v20.bak')` — captures a snapshot so non-SQL failures (disk full, segfault, corrupted WAL) can't orphan data. SQL-level errors are already covered by transaction auto-rollback.
+  2. Creates `message_uuids (uuid PK, session_id REFERENCES sessions ON DELETE CASCADE)` + `idx_message_uuids_session`.
+  3. Backfills from `messages`, ordered by session age (older sessions own a shared uuid on replay — matches the pre-existing dedup semantics).
+  4. Verifies `COUNT(DISTINCT uuid) FROM messages` equals `COUNT(*) FROM message_uuids`. Mismatch throws with a clear message; transaction rolls back, DB stays at v19, backup file is on disk.
+  5. Drops the four tables + their triggers in dependency order.
+- **Auto-`VACUUM` after migration removed.** On mature ~700 MB DBs it froze daemon startup for multiple minutes. VACUUM is now user-driven: `sqlite3 ~/.ccrecall/ccrecall.db 'VACUUM'` (stop the daemon first — `ccmem uninstall-daemon` or `launchctl stop com.tznthou.ccrecall`).
+- **`PRAGMA busy_timeout = 5000`** added to the Database constructor so concurrent reads (e.g. a stray `sqlite3` CLI) don't crash the daemon with SQLITE_BUSY.
+
+### Added
+
+- **`ccmem cleanup --orphans`** CLI — lists memories whose `session_id` points at a session row that no longer exists (test fixtures, manual `DELETE FROM sessions`, partial-index race). Default is dry-run; `--yes` runs an indexer reconcile first (so stale DB state is not mis-classified) and deletes after stdin confirmation inside a single transaction. Manual memories (`session_id IS NULL`) are left alone.
+- **`message_uuids` lookup table** — the only piece that survives from the messages infrastructure. `indexSession()` writes `{uuid, session_id}` here; `getExistingUuids()` reads from here for resumed-session replay dedup. Tiny table: one row per message with a uuid, no content, session_id FK cascades on delete.
+
+### Removed
+
+- Search-related private helpers that had no remaining callers after `search()` went: `fts5QuoteIfNeeded`, `likePattern`, `hasShortToken`, `VALID_OUTCOMES`, `parseOutcomeStatus` — **kept**, because `searchSessions()` reuses them.
+- `deleteSubagentSession()` stopped issuing `DELETE FROM messages` explicitly — FK cascade from `sessions` now handles `message_uuids` and `session_files`.
+
+### Tests
+
+- Deleted `tests/fts5-cjk.test.ts` (targeted `db.search()`, which no longer exists).
+- Deleted `tests/migration-v19.test.ts` — its assertions test schema state that v20 immediately discards. Coverage folded into the new `tests/migration-v20.test.ts`, which runs:
+  - Fresh-DB state (v20 tables present, 4 legacy tables absent, `schema_version` row = 20, FK CASCADE from sessions → message_uuids).
+  - v19 → v20 upgrade happy path (rewinds a fresh DB to simulate v19, seeds messages, reopens, verifies backup file + backfilled `message_uuids` + dropped tables).
+  - Ordered-backfill semantics (older session owns a shared uuid).
+  - Negative-path abort (backfill count mismatch throws, transaction rolls back, backup intact).
+- Rewrote `indexSession` / `archiveStaleSessionsExcept` asserts in `tests/database.test.ts` / `tests/indexer.test.ts` to check `message_uuids` + `session.messageCount` instead of message content.
+- Test count: 477 → 451 (removed 31 asserts for removed code; added 11 new tests for v20 migration + cleanup CLI).
+
+### Upgrade checklist
+
+```bash
+# 1. Stop the daemon
+ccmem uninstall-daemon   # or launchctl stop com.tznthou.ccrecall
+
+# 2. Install 0.2.0
+npm i -g @tznthou/ccrecall@0.2.0
+
+# 3. Start — migration runs on first boot, backup lands next to the DB
+ccmem install-daemon
+tail -f ~/.ccrecall/daemon.log   # watch for "Pre-v20 backup created at ..."
+
+# 4. Reclaim disk (optional but recommended)
+launchctl stop com.tznthou.ccrecall
+sqlite3 ~/.ccrecall/ccrecall.db 'VACUUM'
+launchctl start com.tznthou.ccrecall
+
+# 5. Once happy, remove the backup
+rm ~/.ccrecall/ccrecall.db.pre-v20.bak
+```
+
+---
+
 ## [0.1.7] — 2026-04-20
 
 ### Added

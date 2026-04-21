@@ -85,7 +85,7 @@ If a scan is running and another event fires, we don't queue it — we set a `di
 
 Independent 5-minute timer, independent single-flight. Its only job: run `CompressionPipeline.runOnce({ batchSize: 50 })` — age memories, compress them in stages (raw → summary → one-liner), and delete those that haven't been accessed in 60 days.
 
-It does *not* share the watcher's single-flight. Here's why: the watcher writes to `sessions/messages/topics`; the coordinator writes to `memories`. Disjoint tables means they can't corrupt each other's state. What they *can* do is contend for the SQLite writer (WAL serializes one writer at a time), but that's a throughput concern, not a correctness one. Keeping the single-flights per-engine means each one's worst case is bounded by itself, not by the other.
+It does *not* share the watcher's single-flight. Here's why: the watcher writes to the session-scoped tables (`sessions` / `sessions_fts` / `session_files` / `message_uuids` / topic tables); the coordinator writes to `memories`. Disjoint tables means they can't corrupt each other's state. What they *can* do is contend for the SQLite writer (WAL serializes one writer at a time), but that's a throughput concern, not a correctness one. Keeping the single-flights per-engine means each one's worst case is bounded by itself, not by the other.
 
 `timer.unref()` — the coordinator's interval does not keep the process alive. The HTTP server is the authoritative keep-alive. This matters in a test harness: when the server closes, the compression timer won't trap the process.
 
@@ -137,9 +137,8 @@ The tradeoff: two concurrent `runIndexer` runs can contend for the writer. In pr
 
 These are deliberately **not** pinned to values in this doc body — they rot fast. Current state lives elsewhere:
 
-- Open issues: [#11](https://github.com/tznthou/ccRecall/issues/11) (WAL/VACUUM physical compaction), [#13](https://github.com/tznthou/ccRecall/issues/13) (FTS5 CJK edge cases)
+- Open issues: [#11](https://github.com/tznthou/ccRecall/issues/11) (WAL/VACUUM physical compaction — partly addressed in 0.2.0 by moving VACUUM out of daemon startup), [#13](https://github.com/tznthou/ccRecall/issues/13) (FTS5 CJK edge cases)
 - Harvest-rate gap: we observe a non-trivial fraction of sessions skipped despite having summaries. The prime suspect is the `reason: 'resume'` filter being over-eager; logging the `reason` distribution is on the quick-fix list.
-- Storage governance: the `messages` / `message_archive` / `message_content` / `messages_fts` tables are ccRewind inheritance — an internal audit confirms zero functional loss from dropping them. The migration is planned.
 
 Authoritative state is always `gh issue list` plus project notes, not this file.
 
