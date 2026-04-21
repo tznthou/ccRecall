@@ -53,9 +53,15 @@ export async function cleanupOrphans(db: Database, opts: CleanupOptions): Promis
 
   const noun = orphans.length === 1 ? 'memory' : 'memories'
   console.log(`Found ${orphans.length} orphan ${noun}:`)
+  // session_id / preview come from JSONL content under ~/.claude/, which an
+  // attacker could in principle plant with ANSI escapes (\x1b[2J, \r, …) to
+  // spoof the terminal and hide rows before the confirm prompt. Strip
+  // C0/DEL control bytes on the way out — cheap defence, local-only blast
+  // radius but high AI-generated-code log-injection rate (88%).
+  const sanitize = (s: string): string => s.replace(/[\x00-\x1f\x7f]/g, '?')
   for (const o of orphans) {
-    const preview = (o.preview ?? '').replace(/\s+/g, ' ').trim()
-    console.log(`  #${o.id} (session: ${o.session_id}) — ${preview}`)
+    const preview = sanitize((o.preview ?? '').replace(/\s+/g, ' ').trim())
+    console.log(`  #${o.id} (session: ${sanitize(o.session_id)}) — ${preview}`)
   }
 
   if (!opts.yes) {
