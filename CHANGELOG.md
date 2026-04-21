@@ -36,7 +36,7 @@ more like an iteration counter than a strict SemVer major).
 
 ### Added
 
-- **`ccmem cleanup --orphans`** CLI — lists memories whose `session_id` points at a session row that no longer exists (test fixtures, manual `DELETE FROM sessions`, partial-index race). Default is dry-run; `--yes` runs an indexer reconcile first (so stale DB state is not mis-classified) and deletes after stdin confirmation inside a single transaction. Manual memories (`session_id IS NULL`) are left alone.
+- **`ccmem cleanup --orphans`** CLI — lists memories whose `session_id` points at a session row that no longer exists (test fixtures, manual `DELETE FROM sessions`, partial-index race). Default is a **read-only dry run** — pure SELECT, safe alongside a live daemon. `--yes` deletes after stdin confirmation in a single transaction. `--reconcile` opt-in runs a full indexer pass first (useful when the DB is known-stale); this is a write path, so stop the daemon first to avoid SQLite writer contention. Manual memories (`session_id IS NULL`) are left alone.
 - **`message_uuids` lookup table** — the only piece that survives from the messages infrastructure. `indexSession()` writes `{uuid, session_id}` here; `getExistingUuids()` reads from here for resumed-session replay dedup. Tiny table: one row per message with a uuid, no content, session_id FK cascades on delete.
 
 ### Removed

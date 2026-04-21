@@ -110,6 +110,38 @@ describe('v20 migration — fresh DB state', () => {
     }
   })
 
+  it('reopen does not resurrect dropped legacy tables (no schema drift)', () => {
+    const dbPath = path.join(tmpDir, 'reopen.db')
+
+    const db1 = new Database(dbPath)
+    expect(db1.getSchemaVersion()).toBe(20)
+    db1.close()
+
+    // On reopen, initSchema re-runs. Legacy messages tables MUST stay dropped —
+    // otherwise the destructive migration silently un-persists.
+    const db2 = new Database(dbPath)
+    try {
+      const tables = db2.rawAll<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+      ).map(r => r.name)
+      expect(tables).toContain('message_uuids')
+      expect(tables).not.toContain('messages')
+      expect(tables).not.toContain('messages_fts')
+      expect(tables).not.toContain('message_content')
+      expect(tables).not.toContain('message_archive')
+
+      const triggers = db2.rawAll<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='trigger'",
+      ).map(r => r.name)
+      expect(triggers).not.toContain('messages_ai')
+      expect(triggers).not.toContain('messages_ad')
+
+      expect(db2.getSchemaVersion()).toBe(20)
+    } finally {
+      db2.close()
+    }
+  })
+
   it('FK CASCADE: deleting a session clears its message_uuids rows', () => {
     const db = new Database(path.join(tmpDir, 'cascade.db'))
     try {

@@ -92,8 +92,9 @@ Usage:
   ccmem install-hooks              Register SessionStart/SessionEnd hooks in ~/.claude/settings.json
   ccmem install-hooks --dry-run    Print merged settings.json without writing
   ccmem uninstall-hooks            Remove ccRecall hook entries from ~/.claude/settings.json
-  ccmem cleanup --orphans          List memories pointing at removed sessions (dry run)
-  ccmem cleanup --orphans --yes    Delete orphan memories after reconcile + confirm
+  ccmem cleanup --orphans          List orphan memories (read-only dry run)
+  ccmem cleanup --orphans --yes    Delete orphan memories after stdin confirmation
+  ccmem cleanup --orphans --reconcile   Run indexer first (writes; stop daemon first)
   ccmem --version                  Print the installed package version
 
 Environment:

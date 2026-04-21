@@ -8,12 +8,14 @@ import { runIndexer } from '../core/indexer.js'
 export interface CleanupOptions {
   /** Actually delete. Without this, only report the orphan list. */
   yes: boolean
-  /** Skip the pre-flight `runIndexer` reconciliation pass. Default false —
-   *  reconcile first so that a stale DB (e.g. Claude Code just restarted) is
-   *  not mis-classified as full of orphans. Exposed for tests; not wired to
-   *  a CLI flag. */
-  skipReconcile?: boolean
-  /** Abort interactive confirmation — for tests. Default false. */
+  /** Run `runIndexer` before scanning for orphans. Default false because
+   *  reconcile is a write path (archives stale sessions, rewrites session
+   *  rows, updates project stats, rewrites message_uuids) and will contend
+   *  with a live daemon over the SQLite writer — so dry-run without this
+   *  flag is a pure SELECT. Opt in with `--reconcile` after stopping the
+   *  daemon when the DB is known-stale. */
+  reconcile?: boolean
+  /** Bypass interactive confirmation — for tests. Default false. */
   assumeConfirmed?: boolean
 }
 
@@ -28,8 +30,11 @@ interface OrphanRow {
  *  index races). Run reconcile first so we do not delete memories whose session
  *  is about to come back via the normal indexer path. */
 export async function cleanupOrphans(db: Database, opts: CleanupOptions): Promise<number> {
-  if (!opts.skipReconcile) {
-    console.log('Reconciling indexer before scanning for orphans...')
+  if (opts.reconcile) {
+    console.log('Reconciling indexer before scanning (writes to sessions / message_uuids / project stats)...')
+    if (opts.yes) {
+      console.log('⚠  Stop the ccRecall daemon first — concurrent writers will contend on the SQLite writer.')
+    }
     await runIndexer(db)
   }
 
@@ -77,20 +82,21 @@ export async function cleanupOrphans(db: Database, opts: CleanupOptions): Promis
 }
 
 /** CLI entry point — opens DB at $CCRECALL_DB_PATH (or default), runs cleanup,
- *  and closes. The daemon must be stopped or the SQLite busy_timeout will kick
- *  in; we do not enforce stop-first because `ccmem cleanup` is usually run
- *  alongside a live daemon for a quick read-only diagnostic (dry-run path). */
+ *  and closes. Default dry-run is a pure SELECT that coexists with a live
+ *  daemon. `--yes` and `--reconcile` both write; users are expected to stop
+ *  the daemon before those paths. */
 export async function runCleanupCli(args: string[]): Promise<number> {
   const isOrphans = args.includes('--orphans')
   if (!isOrphans) {
-    console.error('Usage: ccmem cleanup --orphans [--yes]')
+    console.error('Usage: ccmem cleanup --orphans [--yes] [--reconcile]')
     return 1
   }
   const yes = args.includes('--yes')
+  const reconcile = args.includes('--reconcile')
   const dbPath = process.env.CCRECALL_DB_PATH ?? path.join(os.homedir(), '.ccrecall', 'ccrecall.db')
   const db = new Database(dbPath)
   try {
-    await cleanupOrphans(db, { yes })
+    await cleanupOrphans(db, { yes, reconcile })
     return 0
   } finally {
     db.close()

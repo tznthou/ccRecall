@@ -33,7 +33,7 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ### 新增
 
-- **`ccmem cleanup --orphans`** CLI ——列出 `session_id` 指向已不存在 session row 的 memories（test fixture、手動 `DELETE FROM sessions`、partial-index race 會留下這種）。預設 dry-run；加 `--yes` 會先跑一次 indexer reconcile（避免把 DB stale 狀態誤判成 orphan），然後 stdin 確認後在單一 transaction 內刪。手動 memory（`session_id IS NULL`）完全不動。
+- **`ccmem cleanup --orphans`** CLI ——列出 `session_id` 指向已不存在 session row 的 memories（test fixture、手動 `DELETE FROM sessions`、partial-index race 會留下這種）。預設是**唯讀 dry-run** ——純 SELECT，可與 live daemon 並存。加 `--yes` 在 stdin 確認後於單一 transaction 內刪除。`--reconcile` 是 opt-in，會先跑完整 indexer pass（DB 疑似 stale 時才用）；這是寫入路徑，跑前必須先停 daemon 避免 SQLite writer 爭用。手動 memory（`session_id IS NULL`）完全不動。
 - **`message_uuids` lookup 表** ——舊 messages 架構唯一存活的部分。`indexSession()` 寫 `{uuid, session_id}` 進去；`getExistingUuids()` 從這裡查 resumed-session replay dedup。表很小：一筆 uuid 一筆 row，不含 content，session_id FK ON DELETE CASCADE。
 
 ### 移除

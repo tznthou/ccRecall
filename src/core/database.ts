@@ -676,11 +676,11 @@ const migrations: Migration[] = [
       // SQLite DDL is transactional — a throw here auto-rollbacks the migration
       // (unlike MySQL). runMigrations wraps each migration in db.transaction().
       db.exec(`
-        CREATE TABLE message_uuids (
+        CREATE TABLE IF NOT EXISTS message_uuids (
           uuid TEXT PRIMARY KEY,
           session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE
         );
-        CREATE INDEX idx_message_uuids_session ON message_uuids(session_id);
+        CREATE INDEX IF NOT EXISTS idx_message_uuids_session ON message_uuids(session_id);
       `)
 
       const messagesExists = db.prepare(
@@ -785,6 +785,7 @@ export class Database {
   }
 
   private initSchema(): void {
+    // Tables that exist at every schema version — safe to always CREATE IF NOT EXISTS.
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
@@ -806,30 +807,6 @@ export class Database {
         ended_at TEXT,
         archived INTEGER DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL REFERENCES sessions(id),
-        type TEXT NOT NULL,
-        role TEXT,
-        content_text TEXT,
-        has_tool_use INTEGER DEFAULT 0,
-        has_tool_result INTEGER DEFAULT 0,
-        tool_names TEXT,
-        timestamp TEXT,
-        sequence INTEGER NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS message_content (
-        message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-        content_json TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS message_archive (
-        message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-        raw_json TEXT
       );
 
       CREATE TABLE IF NOT EXISTS session_files (
@@ -855,48 +832,89 @@ export class Database {
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
-      CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sequence);
       CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_session_files_path ON session_files(file_path);
       CREATE INDEX IF NOT EXISTS idx_session_files_session ON session_files(session_id);
       CREATE INDEX IF NOT EXISTS idx_subagent_parent ON subagent_sessions(parent_session_id);
-    `)
 
-    // FTS5 虛擬表不支援 IF NOT EXISTS，先查 sqlite_master
-    const ftsExists = this.db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'",
-    ).get()
-
-    if (!ftsExists) {
-      this.db.exec(`
-        CREATE VIRTUAL TABLE messages_fts USING fts5(
-          content_text,
-          content='messages',
-          content_rowid='id',
-          tokenize='unicode61'
-        );
-
-        CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-          INSERT INTO messages_fts(rowid, content_text) VALUES (new.id, new.content_text);
-        END;
-
-        CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-          INSERT INTO messages_fts(messages_fts, rowid, content_text) VALUES ('delete', old.id, old.content_text);
-        END;
-      `)
-    }
-
-    // schema_version 表
-    this.db.exec(`
       CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL DEFAULT (datetime('now')),
         description TEXT
       );
     `)
+
     const hasBaseline = this.db.prepare('SELECT version FROM schema_version WHERE version = 0').get()
     if (!hasBaseline) {
       this.db.prepare("INSERT INTO schema_version (version, description) VALUES (0, 'baseline')").run()
+    }
+
+    const current = (this.db.prepare(
+      'SELECT MAX(version) AS v FROM schema_version',
+    ).get() as { v: number | null })?.v ?? 0
+
+    if (current < 20) {
+      // Pre-v20 legacy schema — migrations v1..v19 assume these tables exist
+      // (v19 rebuilds messages_fts from messages, etc.). Only create them on
+      // a DB that hasn't yet reached v20. Once v20 runs and drops them,
+      // reopening with `current >= 20` MUST NOT recreate them, or the
+      // destructive migration silently un-persists on every restart.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL REFERENCES sessions(id),
+          type TEXT NOT NULL,
+          role TEXT,
+          content_text TEXT,
+          has_tool_use INTEGER DEFAULT 0,
+          has_tool_result INTEGER DEFAULT 0,
+          tool_names TEXT,
+          timestamp TEXT,
+          sequence INTEGER NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS message_content (
+          message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+          content_json TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS message_archive (
+          message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+          raw_json TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, sequence);
+      `)
+
+      const ftsExists = this.db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'",
+      ).get()
+      if (!ftsExists) {
+        this.db.exec(`
+          CREATE VIRTUAL TABLE messages_fts USING fts5(
+            content_text,
+            content='messages',
+            content_rowid='id',
+            tokenize='unicode61'
+          );
+          CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content_text) VALUES (new.id, new.content_text);
+          END;
+          CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content_text) VALUES ('delete', old.id, old.content_text);
+          END;
+        `)
+      }
+    } else {
+      // v20+ baseline — message_uuids carries the UUID dedup set.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS message_uuids (
+          uuid TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_uuids_session ON message_uuids(session_id);
+      `)
     }
   }
 
@@ -907,12 +925,18 @@ export class Database {
     // v20 destructively drops 4 tables (~700 MB on mature DBs). Snapshot the
     // file before attempting so non-SQL failures (disk full, segfault, WAL
     // corruption) don't orphan data. SQL errors are covered by transaction
-    // auto-rollback; this guards the rest. Only existing DBs at v19 need
-    // guarding — fresh DBs (current=0) race from 0 → 20 on an empty schema
-    // and have nothing worth backing up.
-    if (current === 19 && this.dbPath !== ':memory:') {
+    // auto-rollback; this guards the rest. Guard covers any DB that has run
+    // at least one migration (current > 0) — so a user jumping from v15 or
+    // v18 directly to v20 also gets a backup. Fresh DBs (current === 0)
+    // race from 0 → 20 on an empty schema and have nothing worth saving.
+    if (current > 0 && current < 20 && this.dbPath !== ':memory:') {
       const backupPath = this.dbPath + '.pre-v20.bak'
       if (!existsSync(backupPath)) {
+        // Flush WAL pages into the main file first. `copyFileSync` on its
+        // own misses any committed-but-uncheckpointed pages living in the
+        // -wal sidecar; TRUNCATE checkpoint forces them out so the backup
+        // is a complete, restorable snapshot.
+        this.db.pragma('wal_checkpoint(TRUNCATE)')
         copyFileSync(this.dbPath, backupPath)
         console.log(`[ccRecall] Pre-v20 backup created at ${backupPath}`)
       }

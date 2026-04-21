@@ -35,7 +35,7 @@ function seedOrphan(): void {
 
 describe('cleanupOrphans', () => {
   it('reports 0 when DB has no memories', async () => {
-    const n = await cleanupOrphans(db, { yes: false, skipReconcile: true })
+    const n = await cleanupOrphans(db, { yes: false })
     expect(n).toBe(0)
   })
 
@@ -49,7 +49,7 @@ describe('cleanupOrphans', () => {
     })
     db.saveMemory({ content: 'linked', type: 'decision', sessionId: 'live', messageId: null })
 
-    const n = await cleanupOrphans(db, { yes: false, skipReconcile: true })
+    const n = await cleanupOrphans(db, { yes: false })
     expect(n).toBe(0)
 
     const remaining = db.rawAll<{ c: number }>("SELECT COUNT(*) AS c FROM memories").at(0)?.c
@@ -59,18 +59,29 @@ describe('cleanupOrphans', () => {
   it('dry run lists orphans without deleting', async () => {
     seedOrphan()
 
-    const n = await cleanupOrphans(db, { yes: false, skipReconcile: true })
+    const n = await cleanupOrphans(db, { yes: false })
     expect(n).toBe(0) // 0 deleted in dry run
 
     const remaining = db.rawAll<{ c: number }>("SELECT COUNT(*) AS c FROM memories WHERE content = 'orphan-memo'").at(0)?.c
     expect(remaining).toBe(1)
   })
 
+  it('default (no --reconcile) is read-only — does not rewrite project stats', async () => {
+    db.upsertProject('p1', '/p1')
+    // 人為把 session_count 設成錯的；若預設跑了 runIndexer，updateProjectStats 會修正為 0。
+    // 這條 test 守住「預設 dry-run 是純 SELECT」的語義——未來若改回預設 reconcile 會立刻紅。
+    db.rawExec("UPDATE projects SET session_count = 999 WHERE id = 'p1'")
+
+    await cleanupOrphans(db, { yes: false })
+
+    expect(db.getProjects()[0].sessionCount).toBe(999)
+  })
+
   it('--yes with assumeConfirmed deletes orphans in a single transaction', async () => {
     seedOrphan()
     db.saveMemory({ content: 'manual-keeper', type: 'decision', sessionId: null, messageId: null })
 
-    const n = await cleanupOrphans(db, { yes: true, skipReconcile: true, assumeConfirmed: true })
+    const n = await cleanupOrphans(db, { yes: true, assumeConfirmed: true })
     expect(n).toBe(1)
 
     const orphanGone = db.rawAll<{ c: number }>("SELECT COUNT(*) AS c FROM memories WHERE content = 'orphan-memo'").at(0)?.c
@@ -83,7 +94,7 @@ describe('cleanupOrphans', () => {
 
   it('ignores memories with null session_id even when --yes', async () => {
     db.saveMemory({ content: 'manual', type: 'decision', sessionId: null, messageId: null })
-    const n = await cleanupOrphans(db, { yes: true, skipReconcile: true, assumeConfirmed: true })
+    const n = await cleanupOrphans(db, { yes: true, assumeConfirmed: true })
     expect(n).toBe(0)
     expect(db.rawAll<{ c: number }>("SELECT COUNT(*) AS c FROM memories").at(0)?.c).toBe(1)
   })
