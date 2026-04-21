@@ -58,6 +58,7 @@ export async function cleanupOrphans(db: Database, opts: CleanupOptions): Promis
   // spoof the terminal and hide rows before the confirm prompt. Strip
   // C0/DEL control bytes on the way out — cheap defence, local-only blast
   // radius but high AI-generated-code log-injection rate (88%).
+  // eslint-disable-next-line no-control-regex -- control bytes are the exact target
   const sanitize = (s: string): string => s.replace(/[\x00-\x1f\x7f]/g, '?')
   for (const o of orphans) {
     const preview = sanitize((o.preview ?? '').replace(/\s+/g, ' ').trim())
