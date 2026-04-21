@@ -111,15 +111,9 @@ describe('runIndexer', () => {
     // queue-operation 的 content 優先作為 title
     expect(sessions2[0].title).toBe('Fix the authentication bug')
 
-    // 驗證 messages
-    const msgs1 = db.getMessages('sess-001')
-    expect(msgs1).toHaveLength(2)
-    expect(msgs1[0].contentText).toBe('Help me deploy the app')
-    expect(msgs1[1].hasToolUse).toBe(true)
-    expect(msgs1[1].toolNames).toEqual(['Read'])
-
-    const msgs2 = db.getMessages('sess-002')
-    expect(msgs2).toHaveLength(3)
+    // 驗證 messages 計數（v20 後原文不再索引；留存於 sessions.message_count + message_uuids）
+    expect(sessions1[0].messageCount).toBe(2)
+    expect(sessions2[0].messageCount).toBe(3)
 
     // 驗證 project stats
     const proj1 = projects.find(p => p.id === '-Users-test-proj1')!
@@ -130,10 +124,11 @@ describe('runIndexer', () => {
     expect(last.phase).toBe('done')
     expect(last.progress).toBe(100)
 
-    // 驗證 FTS 可搜尋
-    const page = db.search('deploy')
-    expect(page.results.length).toBeGreaterThanOrEqual(1)
-    expect(page.results[0].sessionId).toBe('sess-001')
+    // 驗證 UUID dedup 表有登記（供 resumed session replay 去重用）
+    const uuidCount = db.rawAll<{ c: number }>(
+      "SELECT COUNT(*) AS c FROM message_uuids WHERE session_id = 'sess-001'",
+    )[0].c
+    expect(uuidCount).toBe(2)
   })
 
   it('incrementalRun → only processes new/modified files', async () => {
@@ -142,7 +137,7 @@ describe('runIndexer', () => {
 
     // 第一次索引
     await runIndexer(db, undefined, baseDir)
-    expect(db.getMessages('sess-001')).toHaveLength(2)
+    expect(db.getSessions('-Users-test-proj1')[0].messageCount).toBe(2)
 
     // 新增一個 session
     await writeFile(
@@ -158,11 +153,12 @@ describe('runIndexer', () => {
     await runIndexer(db, (s) => statuses.push({ ...s }), baseDir)
 
     // 新 session 應被索引
-    expect(db.getMessages('sess-003')).toHaveLength(1)
-    expect(db.getMessages('sess-003')[0].contentText).toBe('New session')
+    const sessions = db.getSessions('-Users-test-proj1')
+    const sess003 = sessions.find(s => s.id === 'sess-003')
+    expect(sess003?.messageCount).toBe(1)
 
     // 舊 session 仍然存在
-    expect(db.getMessages('sess-001')).toHaveLength(2)
+    expect(sessions.find(s => s.id === 'sess-001')?.messageCount).toBe(2)
 
     // total 應只包含新增/修改的 session（不含未變動的）
     const indexingStatuses = statuses.filter(s => s.phase === 'indexing')

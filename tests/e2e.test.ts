@@ -103,12 +103,6 @@ describe('E2E: index → search → HTTP', () => {
     expect(rows[0].c).toBeGreaterThan(0)
   })
 
-  it('FTS5 search returns results for indexed content', () => {
-    const page = db.search('authentication', null, 0, 10)
-    expect(page.results.length).toBeGreaterThan(0)
-    expect(page.results[0].snippet).toContain('authentication')
-  })
-
   it('session search returns results for tags/intent', () => {
     const page = db.searchSessions('auth', null, 0, 10)
     expect(page.results.length).toBeGreaterThan(0)
