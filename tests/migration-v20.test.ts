@@ -6,8 +6,19 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import BetterSqlite3 from 'better-sqlite3'
 import { Database } from '../src/core/database'
+import type { MessageInput } from '../src/core/database'
 
 let tmpDir: string
+
+/** Build a MessageInput with only uuid/sequence varying. */
+function mkMsg(uuid: string, sequence: number, role: 'user' | 'assistant' = 'user'): MessageInput {
+  return {
+    uuid, role, type: role, contentText: null, contentJson: null,
+    hasToolUse: false, hasToolResult: false, toolNames: [], timestamp: null,
+    sequence, rawJson: null, inputTokens: null, outputTokens: null,
+    cacheReadTokens: null, cacheCreationTokens: null, model: null,
+  }
+}
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-mig20-'))
@@ -150,16 +161,7 @@ describe('v20 migration — fresh DB state', () => {
         sessionId: 'sess-casc', projectId: 'p1', projectDisplayName: '/p1',
         title: null, messageCount: 2, filePath: '/tmp/c.jsonl', fileSize: 0,
         fileMtime: '2024-01-01T00:00:00.000Z', startedAt: null, endedAt: null,
-        messages: [
-          { uuid: 'c-u1', role: 'user', type: 'user', contentText: null, contentJson: null,
-            hasToolUse: false, hasToolResult: false, toolNames: [], timestamp: null,
-            sequence: 0, rawJson: null, inputTokens: null, outputTokens: null,
-            cacheReadTokens: null, cacheCreationTokens: null, model: null },
-          { uuid: 'c-a1', role: 'assistant', type: 'assistant', contentText: null, contentJson: null,
-            hasToolUse: false, hasToolResult: false, toolNames: [], timestamp: null,
-            sequence: 1, rawJson: null, inputTokens: null, outputTokens: null,
-            cacheReadTokens: null, cacheCreationTokens: null, model: null },
-        ],
+        messages: [mkMsg('c-u1', 0, 'user'), mkMsg('c-a1', 1, 'assistant')],
       })
       expect(db.rawAll<{ c: number }>(
         "SELECT COUNT(*) AS c FROM message_uuids WHERE session_id = 'sess-casc'",

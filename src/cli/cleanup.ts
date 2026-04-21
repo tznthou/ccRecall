@@ -31,10 +31,10 @@ interface OrphanRow {
  *  is about to come back via the normal indexer path. */
 export async function cleanupOrphans(db: Database, opts: CleanupOptions): Promise<number> {
   if (opts.reconcile) {
+    // reconcile writes regardless of `--yes`; warning must fire for dry-run
+    // reconcile too, otherwise the user thinks they picked a safe path.
     console.log('Reconciling indexer before scanning (writes to sessions / message_uuids / project stats)...')
-    if (opts.yes) {
-      console.log('⚠  Stop the ccRecall daemon first — concurrent writers will contend on the SQLite writer.')
-    }
+    console.log('⚠  Stop the ccRecall daemon first — concurrent writers will contend on the SQLite writer.')
     await runIndexer(db)
   }
 
