@@ -271,6 +271,7 @@ The first three steps take ccRecall fully offline. Skip steps 4–5 if you want 
 ## Going Deeper
 
 - **How it works (10-year-old version)**: [`docs/research/ccrecall-for-kids.md`](./research/ccrecall-for-kids.md) — the five-step pipeline explained via a goldfish-friend metaphor
+- **Architecture rationale**: [`docs/architecture.md`](./architecture.md) — why the daemon runs three engines, why `awaitWriteFinish` is 500ms, why `rescueReindex` bypasses the watcher
 - **AI long-term memory design**: [`docs/research/ai-long-term-memory-design.md`](./research/ai-long-term-memory-design.md) — forgetting curve, compression pipeline
 - **Architectural lineage**: [`docs/research/ccrewind-memory-service-architecture.md`](./research/ccrewind-memory-service-architecture.md) — modules extracted from ccRewind
 

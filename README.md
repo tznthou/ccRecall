@@ -241,6 +241,8 @@ ccRecall/
 │   ├── session-end.mjs           # POST /session/end on SessionEnd
 │   └── README.md                 # Hook installation guide
 ├── docs/
+│   ├── tutorial.md               # End-user walkthrough (install → MCP → usage)
+│   ├── architecture.md           # Daemon design rationale (contributor-oriented)
 │   └── launchd.md                # macOS LaunchAgent install/troubleshoot
 ├── tests/                        # 396 tests across 26 files (parser / scanner /
 │   │                             # summarizer / database / indexer / e2e /

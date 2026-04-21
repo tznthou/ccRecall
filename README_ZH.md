@@ -237,6 +237,8 @@ ccRecall/
 │   ├── session-end.mjs               # SessionEnd 呼叫 /session/end
 │   └── README.md                     # Hook 安裝指南
 ├── docs/
+│   ├── tutorial_zh.md                # 使用者教學（安裝 → MCP → 日常使用）
+│   ├── architecture_zh.md            # Daemon 設計取捨（給 contributor 看）
 │   └── launchd.md                    # macOS LaunchAgent 安裝/troubleshoot
 ├── tests/                            # 396 個測試橫跨 26 檔案(parser /
 │   │                                 # scanner / summarizer / database /

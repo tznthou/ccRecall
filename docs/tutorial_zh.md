@@ -273,6 +273,7 @@ ccmem uninstall-hooks
 ## 想深入？
 
 - **十歲版運作原理**：[`docs/research/ccrecall-for-kids.md`](./research/ccrecall-for-kids.md) — 用金魚腦比喻講五步驟
+- **架構設計為什麼長這樣**：[`docs/architecture_zh.md`](./architecture_zh.md) — daemon 為何三引擎並行、`awaitWriteFinish` 為何 500ms、`rescueReindex` 為何繞過 watcher
 - **AI 長期記憶設計**：[`docs/research/ai-long-term-memory-design.md`](./research/ai-long-term-memory-design.md) — 遺忘曲線、壓縮 pipeline
 - **架構源流**：[`docs/research/ccrewind-memory-service-architecture.md`](./research/ccrewind-memory-service-architecture.md) — 從 ccRewind 抽取的模組設計
 
