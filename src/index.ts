@@ -12,6 +12,7 @@ import { MaintenanceCoordinator } from './core/maintenance-coordinator.js'
 import { JsonlWatcher } from './core/watcher.js'
 import { installDaemon, uninstallDaemon } from './cli/daemon.js'
 import { installHooks, uninstallHooks } from './cli/hooks-installer.js'
+import { runCleanupCli } from './cli/cleanup.js'
 
 /** Read the package.json version shipped next to this bundle. Works across
  *  layouts: src/index.ts (tsx) → ../package.json, dist/index.js → ../package.json,
@@ -61,6 +62,11 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
     console.error(`[ccmem ${subcommand}] ${err.message}`)
     process.exit(1)
   })
+} else if (subcommand === 'cleanup') {
+  runCleanupCli(process.argv.slice(3)).then(code => process.exit(code)).catch((err: Error) => {
+    console.error(`[ccmem cleanup] ${err.message}`)
+    process.exit(1)
+  })
 } else if (subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
   printHelp()
   process.exit(0)
@@ -86,6 +92,8 @@ Usage:
   ccmem install-hooks              Register SessionStart/SessionEnd hooks in ~/.claude/settings.json
   ccmem install-hooks --dry-run    Print merged settings.json without writing
   ccmem uninstall-hooks            Remove ccRecall hook entries from ~/.claude/settings.json
+  ccmem cleanup --orphans          List memories pointing at removed sessions (dry run)
+  ccmem cleanup --orphans --yes    Delete orphan memories after reconcile + confirm
   ccmem --version                  Print the installed package version
 
 Environment:
