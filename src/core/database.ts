@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import BetterSqlite3 from 'better-sqlite3'
-import { mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import type { Project, SessionMeta, Message, MessageContext, SearchPage, SearchOptions, SessionSearchPage, SessionTokenStats, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint } from './types.js'
+import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
 
 /** 寫入 memories 時使用的參數型別 */
@@ -669,52 +669,65 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 20,
+    description: 'drop messages/message_archive/message_content/messages_fts; introduce message_uuids lookup for UUID dedup',
+    up: (db) => {
+      // SQLite DDL is transactional — a throw here auto-rollbacks the migration
+      // (unlike MySQL). runMigrations wraps each migration in db.transaction().
+      db.exec(`
+        CREATE TABLE message_uuids (
+          uuid TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_message_uuids_session ON message_uuids(session_id);
+      `)
+
+      const messagesExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'",
+      ).get()
+      if (!messagesExists) return
+
+      // Ordered backfill: older sessions first, then by sequence, so if two
+      // sessions share a uuid (replay case) the earliest "owns" it via
+      // INSERT OR IGNORE — matches production dedup semantics.
+      db.exec(`
+        INSERT OR IGNORE INTO message_uuids (uuid, session_id)
+        SELECT m.uuid, m.session_id FROM messages m
+        JOIN sessions s ON s.id = m.session_id
+        WHERE m.uuid IS NOT NULL
+        ORDER BY COALESCE(s.file_mtime, s.started_at, m.timestamp, m.created_at), m.sequence, m.id
+      `)
+
+      const oldCount = (db.prepare(
+        "SELECT COUNT(DISTINCT uuid) AS c FROM messages WHERE uuid IS NOT NULL",
+      ).get() as { c: number }).c
+      const newCount = (db.prepare(
+        "SELECT COUNT(*) AS c FROM message_uuids",
+      ).get() as { c: number }).c
+      if (oldCount !== newCount) {
+        throw new Error(
+          `v20 UUID backfill count mismatch (old=${oldCount}, new=${newCount}). ` +
+          'This should not happen; please open a GitHub issue and attach ' +
+          'your ~/.ccrecall/ccrecall.db.pre-v20.bak file.',
+        )
+      }
+
+      db.exec(`
+        DROP TRIGGER IF EXISTS messages_ai;
+        DROP TRIGGER IF EXISTS messages_ad;
+        DROP TABLE IF EXISTS message_content;
+        DROP TABLE IF EXISTS message_archive;
+        DROP TABLE IF EXISTS messages_fts;
+        DROP TABLE IF EXISTS messages;
+      `)
+    },
+  },
 ]
-
-/** DB SELECT messages 的原始行型別 */
-interface MessageRow {
-  id: number
-  session_id: string
-  type: string
-  role: string | null
-  content_text: string | null
-  content_json: string | null
-  has_tool_use: number
-  has_tool_result: number
-  tool_names: string | null
-  timestamp: string | null
-  sequence: number
-  input_tokens: number | null
-  output_tokens: number | null
-  cache_read_tokens: number | null
-  cache_creation_tokens: number | null
-  model: string | null
-}
-
-/** MessageRow → Message 轉換 */
-function mapMessageRow(r: MessageRow): Message {
-  return {
-    id: r.id,
-    sessionId: r.session_id,
-    type: r.type as Message['type'],
-    role: r.role as Message['role'],
-    contentText: r.content_text,
-    contentJson: r.content_json,
-    hasToolUse: r.has_tool_use === 1,
-    hasToolResult: r.has_tool_result === 1,
-    toolNames: r.tool_names ? r.tool_names.split(',') : null,
-    timestamp: r.timestamp,
-    sequence: r.sequence,
-    inputTokens: r.input_tokens,
-    outputTokens: r.output_tokens,
-    cacheReadTokens: r.cache_read_tokens,
-    cacheCreationTokens: r.cache_creation_tokens,
-    model: r.model,
-  }
-}
 
 export class Database {
   private db: BetterSqlite3.Database
+  private readonly dbPath: string
 
   /** Subagent 排除子查詢：用於所有面向使用者的 query，只顯示主 session */
   private static readonly EXCLUDE_SUBAGENTS = 'NOT IN (SELECT id FROM subagent_sessions)'
@@ -734,6 +747,7 @@ export class Database {
   )`
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath
     // :memory: 不需要建目錄
     if (dbPath !== ':memory:') {
       mkdirSync(path.dirname(dbPath), { recursive: true })
@@ -741,6 +755,7 @@ export class Database {
     this.db = new BetterSqlite3(dbPath)
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
+    this.db.pragma('busy_timeout = 5000')
     // Phase 4b: register exp() as a user function for effective-confidence decay
     // in ORDER BY. SQLite's built-in math functions require a special compile flag
     // that better-sqlite3 does not enable by default.
@@ -888,7 +903,21 @@ export class Database {
   /** 依序執行尚未套用的 migrations */
   private runMigrations(): void {
     const current = this.getSchemaVersion()
-    let migrated = false
+
+    // v20 destructively drops 4 tables (~700 MB on mature DBs). Snapshot the
+    // file before attempting so non-SQL failures (disk full, segfault, WAL
+    // corruption) don't orphan data. SQL errors are covered by transaction
+    // auto-rollback; this guards the rest. Only existing DBs at v19 need
+    // guarding — fresh DBs (current=0) race from 0 → 20 on an empty schema
+    // and have nothing worth backing up.
+    if (current === 19 && this.dbPath !== ':memory:') {
+      const backupPath = this.dbPath + '.pre-v20.bak'
+      if (!existsSync(backupPath)) {
+        copyFileSync(this.dbPath, backupPath)
+        console.log(`[ccRecall] Pre-v20 backup created at ${backupPath}`)
+      }
+    }
+
     for (const m of migrations) {
       if (m.version <= current) continue
       const migrate = this.db.transaction(() => {
@@ -896,11 +925,9 @@ export class Database {
         this.db.prepare('INSERT INTO schema_version (version, description) VALUES (?, ?)').run(m.version, m.description)
       })
       migrate()
-      migrated = true
     }
-    if (migrated) {
-      this.db.exec('VACUUM')
-    }
+    // Post-migration VACUUM is user-driven. Auto-VACUUM on a ~700 MB DB froze
+    // daemon startup for minutes; users run `sqlite3 <db> 'VACUUM'` when ready.
   }
 
   /** 取得目前 schema 版本 */
@@ -1078,10 +1105,9 @@ export class Database {
     this.db.prepare('DELETE FROM subagent_sessions WHERE parent_session_id = ?').run(parentSessionId)
   }
 
-  /** 刪除單一 subagent session（含對應的 sessions/messages 資料） */
+  /** 刪除單一 subagent session（session_files / message_uuids 會經 FK CASCADE 清除） */
   deleteSubagentSession(subagentId: string): void {
     const doDelete = this.db.transaction(() => {
-      this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(subagentId)
       this.db.prepare('DELETE FROM session_files WHERE session_id = ?').run(subagentId)
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(subagentId)
       this.db.prepare('DELETE FROM subagent_sessions WHERE id = ?').run(subagentId)
@@ -1120,7 +1146,7 @@ export class Database {
       const chunk = uuids.slice(i, i + 500)
       const placeholders = chunk.map(() => '?').join(',')
       const rows = this.db.prepare(
-        `SELECT uuid FROM messages WHERE session_id != ? AND uuid IN (${placeholders})`,
+        `SELECT uuid FROM message_uuids WHERE session_id != ? AND uuid IN (${placeholders})`,
       ).all(excludeSessionId, ...chunk) as Array<{ uuid: string }>
       for (const r of rows) result.add(r.uuid)
     }
@@ -1131,7 +1157,6 @@ export class Database {
 
   indexSession(params: IndexSessionParams): void {
     const doIndex = this.db.transaction(() => {
-      this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(params.sessionId)
       // 清除 sessions_fts 中的舊資料（external content 模式需手動維護）
       const oldSession = this.db.prepare('SELECT rowid, title, tags, files_touched, summary_text, intent_text FROM sessions WHERE id = ?').get(params.sessionId) as
         { rowid: number; title: string | null; tags: string | null; files_touched: string | null; summary_text: string | null; intent_text: string | null } | undefined
@@ -1180,85 +1205,19 @@ export class Database {
           insertFile.run(params.sessionId, f.filePath, f.operation, f.count, f.firstSeenSeq, f.lastSeenSeq)
         }
       }
-      const insertMsg = this.db.prepare(`
-        INSERT INTO messages (session_id, type, role, content_text, has_tool_use, has_tool_result, tool_names, timestamp, sequence, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, model, uuid)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      const insertContent = this.db.prepare(
-        'INSERT INTO message_content (message_id, content_json) VALUES (?, ?)',
-      )
-      const insertArchive = this.db.prepare(
-        'INSERT INTO message_archive (message_id, raw_json) VALUES (?, ?)',
+      // message_uuids: 寫入 uuid 登記表，供跨 session replay dedup 查詢。
+      // 舊 session row 已由上面的 DELETE FROM sessions 透過 FK CASCADE 自動清除。
+      const insertUuid = this.db.prepare(
+        'INSERT OR IGNORE INTO message_uuids (uuid, session_id) VALUES (?, ?)',
       )
       for (const m of params.messages) {
-        const result = insertMsg.run(
-          params.sessionId, m.type, m.role, m.contentText,
-          m.hasToolUse ? 1 : 0, m.hasToolResult ? 1 : 0,
-          m.toolNames.length > 0 ? m.toolNames.join(',') : null,
-          m.timestamp, m.sequence,
-          m.inputTokens, m.outputTokens, m.cacheReadTokens, m.cacheCreationTokens, m.model,
-          m.uuid,
-        )
-        const msgId = result.lastInsertRowid
-        if (m.contentJson != null) {
-          insertContent.run(msgId, m.contentJson)
-        }
-        if (m.rawJson != null) {
-          insertArchive.run(msgId, m.rawJson)
+        if (m.uuid != null) {
+          insertUuid.run(m.uuid, params.sessionId)
         }
       }
     })
 
     doIndex()
-  }
-
-  // ── Messages ──
-
-  getMessages(sessionId: string): Message[] {
-    const rows = this.db.prepare(`
-      SELECT m.id, m.session_id, m.type, m.role, m.content_text,
-             mc.content_json, m.has_tool_use, m.has_tool_result,
-             m.tool_names, m.timestamp, m.sequence,
-             m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens, m.model
-      FROM messages m
-      LEFT JOIN message_content mc ON mc.message_id = m.id
-      WHERE m.session_id = ?
-      ORDER BY m.sequence
-    `).all(sessionId) as Array<MessageRow>
-
-    return rows.map(mapMessageRow)
-  }
-
-  /** 取得指定訊息及其前後 range 則訊息（搜尋結果上下文預覽） */
-  getMessageContext(messageId: number, range = 2): MessageContext {
-    const msgSelect = `
-      SELECT m.id, m.session_id, m.type, m.role, m.content_text,
-             mc.content_json, m.has_tool_use, m.has_tool_result,
-             m.tool_names, m.timestamp, m.sequence,
-             m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens, m.model
-      FROM messages m
-      LEFT JOIN message_content mc ON mc.message_id = m.id
-    `
-
-    const target = this.db.prepare(`${msgSelect} WHERE m.id = ?`).get(messageId) as MessageRow | undefined
-
-    if (!target) {
-      return { target: null, before: [], after: [] }
-    }
-
-    const beforeRows = this.db.prepare(
-      `${msgSelect} WHERE m.session_id = ? AND m.sequence < ? AND m.sequence >= ? ORDER BY m.sequence`,
-    ).all(target.session_id, target.sequence, target.sequence - range) as MessageRow[]
-
-    const afterRows = this.db.prepare(
-      `${msgSelect} WHERE m.session_id = ? AND m.sequence > ? AND m.sequence <= ? ORDER BY m.sequence`,
-    ).all(target.session_id, target.sequence, target.sequence + range) as MessageRow[]
-
-    return {
-      target: mapMessageRow(target),
-      before: beforeRows.map(mapMessageRow),
-      after: afterRows.map(mapMessageRow),
-    }
   }
 
   // ── FTS5 Search ──
@@ -1289,156 +1248,6 @@ export class Database {
    *  2-char CJK like `記憶`. Gates the LIKE fallback path. */
   private static hasShortToken(query: string): boolean {
     return query.trim().split(/\s+/).some(t => t.length > 0 && t.length < 3)
-  }
-
-  search(query: string, projectId?: string | null, offset = 0, limit = Database.SEARCH_PAGE_SIZE, options?: SearchOptions): SearchPage {
-    limit = Math.min(limit, 100)
-    const rawQuery = query
-    query = Database.fts5QuoteIfNeeded(query)
-    try {
-      let sql = `
-        SELECT
-          m.id AS message_id,
-          m.session_id,
-          s.title AS session_title,
-          s.project_id,
-          p.display_name AS project_name,
-          snippet(messages_fts, 0, x'EE8080', x'EE8081', '...', 128) AS snippet,
-          m.timestamp,
-          s.started_at AS session_started_at
-        FROM messages_fts
-        JOIN messages m ON m.id = messages_fts.rowid
-        JOIN sessions s ON s.id = m.session_id
-        JOIN projects p ON p.id = s.project_id
-        WHERE messages_fts MATCH ?
-          AND m.type NOT IN ('last-prompt', 'queue-operation')
-          AND s.id ${Database.EXCLUDE_SUBAGENTS}
-      `
-      const params: (string | number | null)[] = [query]
-
-      if (projectId) {
-        sql += ' AND s.project_id = ?'
-        params.push(projectId)
-      }
-      if (options?.dateFrom) {
-        sql += ' AND date(s.started_at) >= ?'
-        params.push(options.dateFrom)
-      }
-      if (options?.dateTo) {
-        sql += ' AND date(s.started_at) <= ?'
-        params.push(options.dateTo)
-      }
-
-      sql += options?.sortBy === 'date' ? ' ORDER BY m.timestamp DESC, m.id DESC' : ' ORDER BY rank, m.id DESC'
-      sql += ' LIMIT ? OFFSET ?'
-      params.push(limit + 1, offset) // 多取 1 筆判斷 hasMore
-
-      const rows = this.db.prepare(sql).all(...params) as Array<{
-        message_id: number
-        session_id: string
-        session_title: string | null
-        project_id: string
-        project_name: string
-        snippet: string
-        timestamp: string | null
-        session_started_at: string | null
-      }>
-
-      if (rows.length === 0 && Database.hasShortToken(rawQuery)) {
-        return this.searchMessagesFallback(rawQuery, projectId, offset, limit, options)
-      }
-
-      const hasMore = rows.length > limit
-      if (hasMore) rows.pop()
-      const results = rows.map(r => ({
-        sessionId: r.session_id,
-        sessionTitle: r.session_title,
-        projectId: r.project_id,
-        projectName: r.project_name,
-        messageId: r.message_id,
-        snippet: r.snippet,
-        timestamp: r.timestamp,
-        sessionStartedAt: r.session_started_at,
-      }))
-
-      return { results, offset, hasMore }
-    } catch {
-      // FTS5 查詢失敗（語法錯誤、未關閉的引號等）→ 回傳空頁
-      return { results: [], offset, hasMore: false }
-    }
-  }
-
-  /** Short-token LIKE fallback: trigram tokenizer cannot index any token
-   *  shorter than 3 characters, which hits both CJK (`記憶`) and Latin acronyms
-   *  (`UI` / `DB` / `CI`). LIKE scans content directly. Rank semantics are
-   *  lost; recency (timestamp DESC) proxies relevance. */
-  private searchMessagesFallback(
-    rawQuery: string,
-    projectId: string | null | undefined,
-    offset: number,
-    limit: number,
-    options: SearchOptions | undefined,
-  ): SearchPage {
-    let sql = `
-      SELECT
-        m.id AS message_id,
-        m.session_id,
-        s.title AS session_title,
-        s.project_id,
-        p.display_name AS project_name,
-        m.timestamp,
-        s.started_at AS session_started_at
-      FROM messages m
-      JOIN sessions s ON s.id = m.session_id
-      JOIN projects p ON p.id = s.project_id
-      WHERE m.content_text LIKE ? ESCAPE '\\'
-        AND m.type NOT IN ('last-prompt', 'queue-operation')
-        AND s.id ${Database.EXCLUDE_SUBAGENTS}
-    `
-    const params: (string | number | null)[] = [Database.likePattern(rawQuery)]
-
-    if (projectId) {
-      sql += ' AND s.project_id = ?'
-      params.push(projectId)
-    }
-    if (options?.dateFrom) {
-      sql += ' AND date(s.started_at) >= ?'
-      params.push(options.dateFrom)
-    }
-    if (options?.dateTo) {
-      sql += ' AND date(s.started_at) <= ?'
-      params.push(options.dateTo)
-    }
-
-    sql += ' ORDER BY m.timestamp DESC, m.id DESC LIMIT ? OFFSET ?'
-    params.push(limit + 1, offset)
-
-    try {
-      const rows = this.db.prepare(sql).all(...params) as Array<{
-        message_id: number
-        session_id: string
-        session_title: string | null
-        project_id: string
-        project_name: string
-        timestamp: string | null
-        session_started_at: string | null
-      }>
-      const hasMore = rows.length > limit
-      if (hasMore) rows.pop()
-      const results = rows.map(r => ({
-        sessionId: r.session_id,
-        sessionTitle: r.session_title,
-        projectId: r.project_id,
-        projectName: r.project_name,
-        messageId: r.message_id,
-        snippet: '',
-        timestamp: r.timestamp,
-        sessionStartedAt: r.session_started_at,
-      }))
-      return { results, offset, hasMore }
-    } catch {
-      return { results: [], offset, hasMore: false }
-    }
   }
 
   /** 搜尋 session 標題 / 標籤 / 檔案路徑 / 摘要 / 意圖 */
@@ -1597,75 +1406,6 @@ export class Database {
       return { results, offset, hasMore }
     } catch {
       return { results: [], offset, hasMore: false }
-    }
-  }
-
-  // ── Token Stats ──
-
-  getSessionTokenStats(sessionId: string): SessionTokenStats {
-    const rows = this.db.prepare(`
-      SELECT sequence, timestamp,
-             input_tokens, output_tokens,
-             cache_read_tokens, cache_creation_tokens,
-             has_tool_use, tool_names, model
-      FROM messages
-      WHERE session_id = ? AND input_tokens IS NOT NULL
-      ORDER BY sequence
-    `).all(sessionId) as Array<{
-      sequence: number
-      timestamp: string | null
-      input_tokens: number
-      output_tokens: number
-      cache_read_tokens: number
-      cache_creation_tokens: number
-      has_tool_use: number
-      tool_names: string | null
-      model: string | null
-    }>
-
-    let totalInput = 0
-    let totalOutput = 0
-    let totalCacheRead = 0
-    let totalCacheCreation = 0
-    const modelCounts = new Map<string, number>()
-
-    const turns: SessionTokenStats['turns'] = rows.map(r => {
-      totalInput += r.input_tokens
-      totalOutput += r.output_tokens
-      totalCacheRead += r.cache_read_tokens
-      totalCacheCreation += r.cache_creation_tokens
-      if (r.model) modelCounts.set(r.model, (modelCounts.get(r.model) ?? 0) + 1)
-
-      return {
-        sequence: r.sequence,
-        timestamp: r.timestamp,
-        inputTokens: r.input_tokens,
-        outputTokens: r.output_tokens,
-        cacheReadTokens: r.cache_read_tokens,
-        cacheCreationTokens: r.cache_creation_tokens,
-        contextTotal: r.input_tokens,
-        hasToolUse: r.has_tool_use === 1,
-        toolNames: r.tool_names ? r.tool_names.split(',') : [],
-        model: r.model,
-      }
-    })
-
-    const models = [...modelCounts.keys()]
-    let primaryModel: string | null = null
-    let maxCount = 0
-    for (const [m, c] of modelCounts) {
-      if (c > maxCount) { primaryModel = m; maxCount = c }
-    }
-
-    return {
-      totalInputTokens: totalInput,
-      totalOutputTokens: totalOutput,
-      totalCacheReadTokens: totalCacheRead,
-      totalCacheCreationTokens: totalCacheCreation,
-      cacheHitRate: totalInput > 0 ? totalCacheRead / totalInput : 0,
-      models,
-      primaryModel,
-      turns,
     }
   }
 

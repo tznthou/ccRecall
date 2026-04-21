@@ -115,58 +115,6 @@ export interface SessionMeta {
   totalOutputTokens: number | null
 }
 
-/** 訊息 */
-export interface Message {
-  id: number
-  sessionId: string
-  type: 'user' | 'assistant' | 'queue-operation' | 'last-prompt'
-  role: 'user' | 'assistant' | null
-  contentText: string | null
-  contentJson: string | null
-  hasToolUse: boolean
-  hasToolResult: boolean
-  toolNames: string[] | null
-  timestamp: string | null
-  sequence: number
-  inputTokens: number | null
-  outputTokens: number | null
-  cacheReadTokens: number | null
-  cacheCreationTokens: number | null
-  model: string | null
-}
-
-/** Session Token 統計 */
-export interface SessionTokenStats {
-  totalInputTokens: number
-  totalOutputTokens: number
-  totalCacheReadTokens: number
-  totalCacheCreationTokens: number
-  cacheHitRate: number
-  models: string[]
-  primaryModel: string | null
-  turns: Array<{
-    sequence: number
-    timestamp: string | null
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    cacheCreationTokens: number
-    contextTotal: number
-    hasToolUse: boolean
-    toolNames: string[]
-    model: string | null
-  }>
-}
-
-/** 訊息上下文（搜尋結果預覽用） */
-export interface MessageContext {
-  target: Message | null
-  before: Message[]
-  after: Message[]
-}
-
-/** 搜尋範圍 */
-export type SearchScope = 'messages' | 'sessions'
 export type SearchSortBy = 'rank' | 'date'
 
 /** 搜尋選項 */
@@ -174,25 +122,6 @@ export interface SearchOptions {
   dateFrom?: string
   dateTo?: string
   sortBy?: SearchSortBy
-}
-
-/** 搜尋結果 */
-export interface SearchResult {
-  sessionId: string
-  sessionTitle: string | null
-  projectId: string
-  projectName: string
-  messageId: number
-  snippet: string
-  timestamp: string | null
-  sessionStartedAt: string | null
-}
-
-/** 搜尋分頁回應 */
-export interface SearchPage {
-  results: SearchResult[]
-  offset: number
-  hasMore: boolean
 }
 
 /** Session 層級搜尋結果 */
