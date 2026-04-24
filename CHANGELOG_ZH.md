@@ -8,6 +8,46 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.2.1] — 2026-04-25
+
+### 新增
+
+- **Runtime `PRAGMA integrity_check` 監測器** ——啟動 daemon 時跑一次、之後每 6 小時自動跑一次的 SQLite 健康檢查。專門抓 write-path bug 留下的沈默 index / FTS / B-tree drift——這類異常沒人跑 REINDEX 之前通常不會浮出來。使用的 pragma 是純唯讀的，在 live WAL DB 上跑不會和 reader / writer 爭搶。`setInterval` 的 timer 加了 `unref`，monitor 不會阻止 event loop 結束；正常關閉路徑走 `coordinator.stop()`。
+- **`/health` 新增 `lastIntegrityCheckAt` 和 `lastIntegrityCheckOk`** 兩個欄位 ——讓 liveness probe 拿得到最近一次 tick 的 ISO 時間戳和通過與否。完整的 drift 輸出（多行 `PRAGMA integrity_check` 結果）另寫到 `~/.ccrecall/integrity-alerts/integrity-check-<timestamp>.log`，不塞進 cache ——`/health` 保持輕量 liveness 訊號的定位，不兼任鑑識紀錄存放處。
+- **單飛排程（single-flight）** ——6 小時 interval 觸發時若上一輪還沒跑完，新呼叫直接丟棄，不和還在跑的 pragma 競速。
+
+### 動機
+
+2026-04-24 一次 ad-hoc 的 `PRAGMA integrity_check` 抓到沈默 index drift（`idx_memories_access` 漏了 row 48）——這個 drift 熬過了完整 `VACUUM`，最後靠手動 `REINDEX` 才修掉。這一版是**偵測層**：不會阻止 drift 發生，但把沈默 drift 的最長時間壓到 6 小時。抓到時，alert log 會明確叮嚀**先快照 DB**（`cp ~/.ccrecall/ccrecall.db ~/ccrecall-drift-snapshot.db`）**再**跑任何修復，保留鑑識狀態給後續分析。
+
+### 文件
+
+- 架構文件 / CLAUDE.md 註明 integrity monitor 在治理層的角色（偵測層；Tier 0/1 的 root-cause 工作還在後頭）。
+- 記憶類型文件釐清 liveness 資料（`/health` cache）和鑑識紀錄（磁碟上的 alert files）的分野。
+
+### 測試
+
+- `tests/integrity-monitor.test.ts`（145 行）涵蓋 start/stop 生命週期、single-flight 防護、注入 clock 驗 timer cadence、`/health` 表面、alert file 格式、以及 live WAL DB 的唯讀保證。
+- 測試數：451 → 463。
+
+### 升級清單
+
+```bash
+# 1. 安裝 0.2.1
+npm i -g @tznthou/ccrecall@0.2.1
+
+# 2. 重啟 daemon 讓它吃到新 build
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. 驗證 monitor 有在跑
+curl -s http://127.0.0.1:7749/health | jq '{lastIntegrityCheckAt, lastIntegrityCheckOk}'
+# 預期：最近時間戳 + "lastIntegrityCheckOk": true
+```
+
+如果 `lastIntegrityCheckOk` 出現 `false`，先去 `~/.ccrecall/integrity-alerts/` 看完整 forensic 輸出再決定修復動作。
+
+---
+
 ## [0.2.0] — 2026-04-21
 
 ### 破壞性變更

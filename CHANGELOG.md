@@ -11,6 +11,46 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.2.1] — 2026-04-25
+
+### Added
+
+- **Runtime `PRAGMA integrity_check` monitor** — periodic SQLite health probe that runs once on daemon startup and every six hours thereafter. Surfaces index, FTS, and B-tree drift that silent write-path bugs would otherwise leave dormant until the next manual REINDEX. Read-only pragma, safe against the live WAL database with no reader/writer contention. The `setInterval` timer is `unref`'d so the monitor never holds the event loop alive; `coordinator.stop()` is the clean shutdown path.
+- **`/health` now reports `lastIntegrityCheckAt` and `lastIntegrityCheckOk`** — gives liveness probes the most recent tick's ISO timestamp and pass/fail boolean. The full drift output (multi-line `PRAGMA integrity_check` result) is written to `~/.ccrecall/integrity-alerts/integrity-check-<timestamp>.log` rather than kept in the cache — `/health` stays a lightweight liveness signal, not a forensic store.
+- **Single-flight scheduling** — if the 6-hour interval fires while a prior tick is still running, the new call is dropped instead of racing the in-flight pragma.
+
+### Motivation
+
+On 2026-04-24 an ad-hoc `PRAGMA integrity_check` surfaced a silent index drift (row 48 missing from `idx_memories_access`) that had survived a full `VACUUM`; only a manual `REINDEX` caught it. This release is the detection layer — it does not prevent drift from happening, but it caps silent-drift duration at six hours. When drift is detected, the alert log explicitly instructs snapshotting the DB (`cp ~/.ccrecall/ccrecall.db ~/ccrecall-drift-snapshot.db`) **before** running any repair, so the forensic state is preserved for analysis.
+
+### Docs
+
+- Architecture / CLAUDE.md notes now document the integrity monitor's place in the governance surface (detection layer; Tier 0/1 root-cause work still ahead).
+- Memory types documentation clarified to distinguish liveness data (`/health` cache) from forensic records (alert files on disk).
+
+### Tests
+
+- `tests/integrity-monitor.test.ts` (145 lines) covers start/stop lifecycle, single-flight guard, timer cadence with injected clock, `/health` surface, alert file layout, and the read-only guarantee against a live WAL database.
+- Test count: 451 → 463.
+
+### Upgrade checklist
+
+```bash
+# 1. Install 0.2.1
+npm i -g @tznthou/ccrecall@0.2.1
+
+# 2. Restart daemon so it picks up the new build
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. Verify the monitor is live
+curl -s http://127.0.0.1:7749/health | jq '{lastIntegrityCheckAt, lastIntegrityCheckOk}'
+# Expect: recent ISO timestamp + "lastIntegrityCheckOk": true
+```
+
+If `lastIntegrityCheckOk` ever reports `false`, inspect `~/.ccrecall/integrity-alerts/` for the full forensic output before running any repair.
+
+---
+
 ## [0.2.0] — 2026-04-21
 
 ### Breaking
