@@ -11,6 +11,7 @@ import type {
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
 } from '../core/types.js'
 import { deriveDepth } from '../core/types.js'
+import type { IntegrityCheckRecord } from '../core/integrity-monitor.js'
 
 const VALID_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
   'decision', 'discovery', 'preference', 'pattern', 'feedback',
@@ -172,6 +173,10 @@ export interface RequestHandlerOptions {
    *  writing where they expect. Empty string falls back to the current TODO
    *  behaviour, which matches pre-0.1.3 clients that ignored the field. */
   dbPath?: string
+  /** Cached PRAGMA integrity_check result for /health. Structural type so
+   *  tests can inject a stub without depending on the real class. Omit to
+   *  report null/null (tests or daemons without the monitor attached). */
+  integrityMonitor?: { getLastRecord(): IntegrityCheckRecord | null }
 }
 
 export function createRequestHandler(
@@ -188,6 +193,7 @@ export function createRequestHandler(
 
     // GET /health
     if (req.method === 'GET' && path === '/health') {
+      const integrity = opts.integrityMonitor?.getLastRecord() ?? null
       const result: HealthResult = {
         status: 'ok',
         version: opts.version ?? 'unknown',
@@ -196,6 +202,8 @@ export function createRequestHandler(
         memoryCount: db.getMemoryCount(),
         topicCount: db.getTopicCount(),
         uptime: Math.floor((Date.now() - startTime) / 1000),
+        lastIntegrityCheckAt: integrity?.at ?? null,
+        lastIntegrityCheckOk: integrity?.ok ?? null,
       }
       sendJson(res, 200, result)
       return

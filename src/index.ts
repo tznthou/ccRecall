@@ -9,6 +9,7 @@ import { Database } from './core/database.js'
 import { runIndexer } from './core/indexer.js'
 import { MemoryService } from './core/memory-service.js'
 import { MaintenanceCoordinator } from './core/maintenance-coordinator.js'
+import { IntegrityMonitor } from './core/integrity-monitor.js'
 import { JsonlWatcher } from './core/watcher.js'
 import { installDaemon, uninstallDaemon } from './cli/daemon.js'
 import { installHooks, uninstallHooks } from './cli/hooks-installer.js'
@@ -131,6 +132,13 @@ async function startDaemon(): Promise<void> {
   coordinator.start()
   console.log('Maintenance coordinator started.')
 
+  // Periodic PRAGMA integrity_check — surfaces index / FTS / B-tree drift that
+  // write-path bugs can silently leave behind. Kicks off one tick immediately
+  // (non-blocking) so /health has a fresh value before the first external call.
+  const integrityMonitor = new IntegrityMonitor(db)
+  integrityMonitor.start()
+  console.log('Integrity monitor started.')
+
   // Phase 4e: JSONL watch mode — incremental reindex when Claude Code writes new
   // session files. Complements the hook path; covers resumed sessions too.
   // start() resolves only after chokidar's `ready` event, so ignoreInitial
@@ -150,6 +158,7 @@ async function startDaemon(): Promise<void> {
     rescueReindex: () => runIndexer(db),
     version: readPackageVersion(),
     dbPath: DB_PATH,
+    integrityMonitor,
   })
 
   server.listen(PORT, '127.0.0.1', () => {
@@ -160,6 +169,7 @@ async function startDaemon(): Promise<void> {
     process.on(signal, () => {
       console.log(`\nReceived ${signal}, shutting down...`)
       coordinator.stop()
+      integrityMonitor.stop()
       watcher.stop().catch(() => { /* swallow shutdown errors */ })
       db.close()
       server.close(() => process.exit(0))

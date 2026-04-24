@@ -774,6 +774,14 @@ export class Database {
     this.db.close()
   }
 
+  /** Run `PRAGMA integrity_check`. Returns `['ok']` on a clean DB, otherwise one
+   *  line per issue (e.g. 'row 48 missing from index idx_memories_access').
+   *  Read-only; safe to call on a live WAL DB. Consumed by IntegrityMonitor. */
+  integrityCheck(): string[] {
+    const rows = this.db.pragma('integrity_check') as Array<{ integrity_check: string }>
+    return rows.map(r => r.integrity_check)
+  }
+
   /** ⚠️ 測試專用：接受任意 SQL，禁止接到 IPC handler */
   rawAll<T>(sql: string): T[] {
     return this.db.prepare(sql).all() as T[]

@@ -311,4 +311,12 @@ export interface HealthResult {
   memoryCount: number
   topicCount: number
   uptime: number
+  /** ISO timestamp of last PRAGMA integrity_check tick, or null if the monitor
+   *  has not completed its first run yet (or is not attached — tests use
+   *  createServer(db) without the monitor option). */
+  lastIntegrityCheckAt: string | null
+  /** Result of that tick. null before first tick. True = `['ok']`. False = one
+   *  or more drift/corruption lines; full output is written to the alert dir
+   *  (see IntegrityMonitor). */
+  lastIntegrityCheckOk: boolean | null
 }
