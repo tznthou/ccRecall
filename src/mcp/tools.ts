@@ -371,6 +371,7 @@ export function registerTools(server: McpServer, db: Database): void {
         'the hook will harvest the session independently and duplicate writes',
         'create noise.',
         '',
+        // Keep in sync with README.md + README_ZH.md "Memory types" section
         'Types:',
         '- decision: explicit choice with rationale',
         '- discovery: non-obvious finding',

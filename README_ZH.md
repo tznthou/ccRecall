@@ -121,7 +121,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 
 | 端點 | 方法 | 說明 | 狀態 |
 |------|------|------|------|
-| `/health` | GET | 服務健康 + DB 統計 | 已上線 |
+| `/health` | GET | 服務健康 + DB 統計 + integrity 檢查狀態 | 已上線 |
 | `/memory/query?q=...&limit=...&project=...` | GET | FTS5 跨 session 搜尋，可選 project 過濾 | 已上線 |
 | `/memory/save` | POST | 儲存記憶條目（Origin 驗證） | 已上線 |
 | `/session/end` | POST | 從結束的 session 萃取記憶（idempotent） | 已上線 |
@@ -137,6 +137,14 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `recall_query` | 純 FTS5 關鍵字搜尋 memories |
 | `recall_context` | 按 topic 分組的檢索——normalize keywords、依匹配 topic 分組 memories 並附 depth 訊號，無 topic 匹配時退回 per-keyword FTS |
 | `recall_save` | 儲存新記憶（type：decision / discovery / preference / pattern / feedback） |
+
+**Memory types**（用於 `recall_save`）：
+
+- `decision`（決策）— 有理由的明確選擇
+- `discovery`（發現）— 非顯而易見的洞察
+- `preference`（偏好）— 使用者風格或慣例
+- `pattern`（模式）— 反覆出現的流程或程式碼範本
+- `feedback`（回饋）— 使用者對過往工作的修正
 
 註冊到 Claude Code。`pnpm build` 後 `dist/mcp/server.js` 就是可執行的 MCP server：
 
@@ -201,6 +209,23 @@ installer 的行為：
 
 Linux/Windows 對應版本（systemd unit、Windows service）列在 Phase 5。目前
 Linux 可用 `nohup` 或自選 process manager。
+
+---
+
+## 監控
+
+daemon 啟動時跑一次 `PRAGMA integrity_check`，之後每 6 小時重跑。結果
+（timestamp + 布林值）會 cache 並透過 `/health` 的 `lastIntegrityCheckAt`
+／ `lastIntegrityCheckOk` 欄位回報。偵測到 drift 時，完整 `integrity_check`
+輸出會寫入 `~/.ccrecall/integrity-alerts/` 下含時間戳的檔案。
+
+收到 drift alert 時，**先 snapshot DB，再執行 REINDEX**。REINDEX 修症狀但
+抹掉現場：
+
+```bash
+cp ~/.ccrecall/ccrecall.db ~/ccrecall-drift-snapshot.db
+sqlite3 ~/.ccrecall/ccrecall.db 'REINDEX;'
+```
 
 ---
 

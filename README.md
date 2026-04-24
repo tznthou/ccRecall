@@ -121,7 +121,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 
 | Endpoint | Method | Description | Status |
 |----------|--------|-------------|--------|
-| `/health` | GET | Service health + DB stats | Live |
+| `/health` | GET | Service health + DB stats + integrity check status | Live |
 | `/memory/query?q=...&limit=...&project=...` | GET | FTS5 search across memories with optional project filter | Live |
 | `/memory/save` | POST | Save a memory entry (origin-checked) | Live |
 | `/session/end` | POST | Harvest a finished session's summary into a memory (idempotent) | Live |
@@ -137,6 +137,14 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `recall_query` | Raw FTS5 keyword search across memories |
 | `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
 | `recall_save` | Store a new memory (type: decision / discovery / preference / pattern / feedback) |
+
+**Memory types** (for `recall_save`):
+
+- `decision` — explicit choice with rationale
+- `discovery` — non-obvious finding
+- `preference` — user style or convention
+- `pattern` — recurring workflow or code template
+- `feedback` — user correction on past work
 
 Expose them to Claude Code. After `pnpm build`, the `ccmem-mcp` bin is on
 the repo's `node_modules/.bin` path — point `claude mcp add` at it or at a
@@ -205,6 +213,24 @@ Full manual-install, troubleshooting, and uninstall docs:
 
 Linux/Windows equivalents (systemd unit, Windows service) are planned for
 Phase 5. For now, run under `nohup` or your process manager of choice.
+
+---
+
+## Monitoring
+
+The daemon runs `PRAGMA integrity_check` on startup and every 6 hours. The
+result (timestamp + boolean) is cached and surfaced on `/health` as
+`lastIntegrityCheckAt` / `lastIntegrityCheckOk`. When drift is detected,
+the full `integrity_check` output is written to a timestamped file under
+`~/.ccrecall/integrity-alerts/`.
+
+If you see a drift alert, **snapshot the DB before running REINDEX**.
+REINDEX fixes the symptom but destroys the forensic state:
+
+```bash
+cp ~/.ccrecall/ccrecall.db ~/ccrecall-drift-snapshot.db
+sqlite3 ~/.ccrecall/ccrecall.db 'REINDEX;'
+```
 
 ---
 
