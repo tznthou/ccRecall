@@ -429,6 +429,53 @@ describe('sessions_fts (migration v6)', () => {
     expect(page.results.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('searchSessions LIKE fallback uses AND across short tokens (Case 5)', () => {
+    // `UI` is 2 chars → triggers hasShortToken → falls through to LIKE fallback.
+    // The fallback must AND each token's per-column OR so a session matches
+    // only if every token appears in some column.
+    db.indexSession({
+      sessionId: 'fb-both', projectId: 'proj-fb', projectDisplayName: '/test/fb',
+      title: 'UI 元件改進', messageCount: 0, filePath: '/tmp/fb1.jsonl', fileSize: 0,
+      fileMtime: '2024-01-01T00:00:00.000Z', startedAt: null, endedAt: null,
+      tags: '記憶,refactor', messages: [],
+    })
+    db.indexSession({
+      sessionId: 'fb-ui-only', projectId: 'proj-fb', projectDisplayName: '/test/fb',
+      title: 'Pure UI work', messageCount: 0, filePath: '/tmp/fb2.jsonl', fileSize: 0,
+      fileMtime: '2024-01-01T00:00:00.000Z', startedAt: null, endedAt: null,
+      tags: 'frontend', messages: [],
+    })
+    db.indexSession({
+      sessionId: 'fb-mem-only', projectId: 'proj-fb', projectDisplayName: '/test/fb',
+      title: '記憶系統', messageCount: 0, filePath: '/tmp/fb3.jsonl', fileSize: 0,
+      fileMtime: '2024-01-01T00:00:00.000Z', startedAt: null, endedAt: null,
+      tags: 'backend', messages: [],
+    })
+
+    const page = db.searchSessions('UI 記憶')
+    const ids = page.results.map(r => r.sessionId).sort()
+    expect(ids).toEqual(['fb-both'])
+  })
+
+  it('searchSessions LIKE fallback escapes wildcards in tokens', () => {
+    db.indexSession({
+      sessionId: 'fb-pct', projectId: 'proj-fb', projectDisplayName: '/test/fb',
+      title: 'UI 100% complete', messageCount: 0, filePath: '/tmp/pct.jsonl', fileSize: 0,
+      fileMtime: '2024-01-01T00:00:00.000Z', startedAt: null, endedAt: null,
+      messages: [],
+    })
+    db.indexSession({
+      sessionId: 'fb-clean', projectId: 'proj-fb', projectDisplayName: '/test/fb',
+      title: 'UI standard', messageCount: 0, filePath: '/tmp/clean.jsonl', fileSize: 0,
+      fileMtime: '2024-01-01T00:00:00.000Z', startedAt: null, endedAt: null,
+      messages: [],
+    })
+
+    const page = db.searchSessions('UI %')
+    const ids = page.results.map(r => r.sessionId)
+    expect(ids).toEqual(['fb-pct'])
+  })
+
   it('re-index updates sessions_fts', () => {
     db.indexSession({
       sessionId: 'sfts-upd', projectId: 'proj-upd', projectDisplayName: '/upd',

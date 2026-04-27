@@ -1363,7 +1363,12 @@ export class Database {
   /** Short-token LIKE fallback for searchSessions. Scans all FTS5-indexed
    *  columns (title, tags, files_touched, summary_text, intent_text) since a
    *  short query could match any of them, and trigram cannot tokenize tokens
-   *  shorter than 3 characters. */
+   *  shorter than 3 characters.
+   *
+   *  Multi-token queries AND each token's per-column OR — every token must
+   *  appear in some column, but tokens may live in different columns (e.g.
+   *  `UI auth` could match a session whose title has UI and whose tags have
+   *  auth). Substring-on-the-whole-query would lose those cross-column hits. */
   private searchSessionsFallback(
     rawQuery: string,
     projectId: string | null | undefined,
@@ -1371,7 +1376,17 @@ export class Database {
     limit: number,
     options: SearchOptions | undefined,
   ): SessionSearchPage {
-    const pattern = Database.likePattern(rawQuery)
+    const tokens = rawQuery.trim().split(/\s+/).filter(Boolean)
+    if (tokens.length === 0) return { results: [], offset, hasMore: false }
+    const patterns = tokens.map(t => Database.likePattern(t))
+    const tokenClause = tokens.map(() => `(
+        s.title LIKE ? ESCAPE '\\'
+        OR s.tags LIKE ? ESCAPE '\\'
+        OR s.files_touched LIKE ? ESCAPE '\\'
+        OR s.summary_text LIKE ? ESCAPE '\\'
+        OR s.intent_text LIKE ? ESCAPE '\\'
+      )`).join(' AND ')
+
     let sql = `
       SELECT
         s.id AS session_id,
@@ -1384,16 +1399,13 @@ export class Database {
         s.outcome_status
       FROM sessions s
       JOIN projects p ON p.id = s.project_id
-      WHERE (
-        s.title LIKE ? ESCAPE '\\'
-        OR s.tags LIKE ? ESCAPE '\\'
-        OR s.files_touched LIKE ? ESCAPE '\\'
-        OR s.summary_text LIKE ? ESCAPE '\\'
-        OR s.intent_text LIKE ? ESCAPE '\\'
-      )
+      WHERE ${tokenClause}
         AND s.id ${Database.EXCLUDE_SUBAGENTS}
     `
-    const params: (string | number | null)[] = [pattern, pattern, pattern, pattern, pattern]
+    const params: (string | number | null)[] = []
+    for (const p of patterns) {
+      params.push(p, p, p, p, p)
+    }
 
     if (projectId) {
       sql += ' AND s.project_id = ?'
@@ -1575,34 +1587,42 @@ export class Database {
 
   /** Short-token LIKE fallback for queryMemories. Trigram tokenizer cannot
    *  match queries shorter than 3 chars; LIKE scans content. EFFECTIVE_CONFIDENCE
-   *  (confidence × decay) replaces FTS5 rank as the primary ordering. */
+   *  (confidence × decay) replaces FTS5 rank as the primary ordering.
+   *
+   *  Multi-token queries (e.g. mixed Latin acronyms + CJK like `UI 記憶`) AND
+   *  each token's LIKE clause so a doc must contain every token somewhere.
+   *  Substring-on-the-whole-query would silently lose `UI 元件設計優化記憶`
+   *  for query `UI 記憶`. */
   private queryMemoriesFallback(
     rawQuery: string,
     limit: number,
     projectId: string | null | undefined,
   ): Memory[] {
-    const pattern = Database.likePattern(rawQuery)
+    const tokens = rawQuery.trim().split(/\s+/).filter(Boolean)
+    if (tokens.length === 0) return []
+    const patterns = tokens.map(t => Database.likePattern(t))
+    const where = tokens.map(() => "m.content LIKE ? ESCAPE '\\'").join(' AND ')
     try {
       const rows = projectId
         ? this.db.prepare(`
             SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
             FROM memories m
             LEFT JOIN sessions s ON m.session_id = s.id
-            WHERE m.content LIKE ? ESCAPE '\\'
+            WHERE ${where}
               AND (
                 (m.session_id IS NOT NULL AND s.project_id = ?) OR
                 (m.session_id IS NULL AND m.project_id = ?)
               )
             ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.created_at DESC, m.id DESC
             LIMIT ?
-          `).all(pattern, projectId, projectId, limit)
+          `).all(...patterns, projectId, projectId, limit)
         : this.db.prepare(`
             SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
             FROM memories m
-            WHERE m.content LIKE ? ESCAPE '\\'
+            WHERE ${where}
             ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.created_at DESC, m.id DESC
             LIMIT ?
-          `).all(pattern, limit)
+          `).all(...patterns, limit)
       return (rows as MemoryRow[]).map(mapMemoryRow)
     } catch (err) {
       console.warn('[memories] queryMemoriesFallback error:', scrubErrorMessage(err))
