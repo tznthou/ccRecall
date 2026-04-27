@@ -161,6 +161,20 @@ describe('queryMemories LIKE fallback (short tokens)', () => {
     expect(results.length).toBe(1)
   })
 
+  it('caps token count to bound SQL prepare cost (DoS guard)', () => {
+    db.saveMemory(mem({ content: 'UI memory only', confidence: 0.9 }))
+    // Generate a giant query: 1000 unique short tokens. Without the cap this
+    // would build a 1000-clause SQL string (~hundreds of KB of SQL text + 1000
+    // bind params) on the synchronous event loop.
+    const giant = Array.from({ length: 1000 }, (_, i) => `t${i}`).join(' ')
+    const before = Date.now()
+    expect(() => db.queryMemories(giant, 10)).not.toThrow()
+    const elapsed = Date.now() - before
+    // Loose ceiling — capped query stays well under 100ms. Without the cap
+    // this regularly exceeds 500ms or hits SQLITE_RANGE.
+    expect(elapsed).toBeLessThan(500)
+  })
+
   it('LIKE wildcards in tokens are escaped (security)', () => {
     db.saveMemory(mem({ content: 'UI percent% sign', confidence: 0.9 }))
     db.saveMemory(mem({ content: 'UI no special', confidence: 0.8 }))
