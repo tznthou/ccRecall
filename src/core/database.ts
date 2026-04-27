@@ -1256,6 +1256,12 @@ export class Database {
 
   static readonly SEARCH_PAGE_SIZE = 30
 
+  /** Cap for short-token LIKE fallback. Each token contributes 1 (memories)
+   *  or 5 (sessions) bind params; an unbounded query would let a caller pass
+   *  N=10000 tokens and stall the event loop in `prepare()` or hit
+   *  SQLITE_MAX_VARIABLE_NUMBER. 20 covers any realistic search query. */
+  private static readonly MAX_FALLBACK_TOKENS = 20
+
   private static readonly VALID_OUTCOMES = new Set(['committed', 'tested', 'in-progress', 'quick-qa'])
   private static parseOutcomeStatus(v: string | null): OutcomeStatus {
     return v && Database.VALID_OUTCOMES.has(v) ? v as OutcomeStatus : null
@@ -1376,7 +1382,7 @@ export class Database {
     limit: number,
     options: SearchOptions | undefined,
   ): SessionSearchPage {
-    const tokens = rawQuery.trim().split(/\s+/).filter(Boolean)
+    const tokens = rawQuery.trim().split(/\s+/).filter(Boolean).slice(0, Database.MAX_FALLBACK_TOKENS)
     if (tokens.length === 0) return { results: [], offset, hasMore: false }
     const patterns = tokens.map(t => Database.likePattern(t))
     const tokenClause = tokens.map(() => `(
@@ -1598,7 +1604,7 @@ export class Database {
     limit: number,
     projectId: string | null | undefined,
   ): Memory[] {
-    const tokens = rawQuery.trim().split(/\s+/).filter(Boolean)
+    const tokens = rawQuery.trim().split(/\s+/).filter(Boolean).slice(0, Database.MAX_FALLBACK_TOKENS)
     if (tokens.length === 0) return []
     const patterns = tokens.map(t => Database.likePattern(t))
     const where = tokens.map(() => "m.content LIKE ? ESCAPE '\\'").join(' AND ')
