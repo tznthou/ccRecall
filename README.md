@@ -29,6 +29,7 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/cc
 |---------|-------------|
 | **Rule-based summarization** | Extracts intent, activity, outcome, and tags from sessions — no LLM calls, zero API cost |
 | **FTS5 full-text search** | Sub-100ms keyword search across all conversation history, fast enough for hook injection |
+| **CJK / mixed-script search** | Trigram tokenizer indexes Chinese / Japanese / Korean text; per-token AND LIKE fallback handles short queries like `UI 記憶` that trigram alone can't match |
 | **Incremental indexing** | Only re-indexes sessions that changed (mtime diffing), handles resumed sessions via UUID dedup |
 | **Metacognition** | `knowledge_map` aggregates topic mentions from sessions + memories. Depth derived from mention count (shallow / medium / deep). Exposed via `/metacognition/check` and MCP `recall_context` |
 | **Forgetting curve** | Memories compress over time: raw → summary → one-liner → deleted. Confidence decays on unused memories. Background maintenance tick runs every 5 min |
@@ -52,7 +53,7 @@ flowchart TB
         Parser["Parser<br/>parse conversations"]
         Summarizer["Summarizer<br/>rule-based extraction"]
         DB["SQLite + FTS5<br/>index & search"]
-        API["HTTP API<br/>7 endpoints"]
+        API["HTTP API<br/>8 endpoints"]
     end
 
     subgraph Consumers["Context Injection"]
@@ -74,10 +75,10 @@ flowchart TB
 |------------|---------|-------|
 | Node.js 20–22 + TypeScript | Runtime | ES modules, strict mode |
 | better-sqlite3 | Database | Synchronous API, zero external deps |
-| FTS5 | Full-text search | Built into SQLite, unicode61 tokenizer |
+| FTS5 | Full-text search | Built into SQLite, trigram tokenizer with LIKE fallback for short CJK / mixed-script queries |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
 | chokidar | Filesystem watcher | Cross-platform JSONL change detection with 2 s debounce + single-flight |
-| vitest | Testing | 396 tests across 26 files, integration-style |
+| vitest | Testing | 475 tests across 32 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
@@ -270,15 +271,10 @@ ccRecall/
 │   ├── tutorial.md               # End-user walkthrough (install → MCP → usage)
 │   ├── architecture.md           # Daemon design rationale (contributor-oriented)
 │   └── launchd.md                # macOS LaunchAgent install/troubleshoot
-├── tests/                        # 396 tests across 26 files (parser / scanner /
-│   │                             # summarizer / database / indexer / e2e /
-│   │                             # memories / mcp / session-end / compression /
-│   │                             # lint / watcher / bin-smoke / cli-daemon /
-│   │                             # migration-v18 / decay / maintenance-coordinator /
-│   │                             # memory-service / memory-project-scope / touch /
-│   │                             # hooks-session-start / hooks-session-end /
-│   │                             # knowledge-map / topic-extractor / metacognition /
-│   │                             # session-checkpoint)
+├── tests/                        # 475 tests across 32 files (parser, scanner,
+│   │                             # summarizer, database, indexer, e2e, MCP,
+│   │                             # memories, hooks, watcher, CLI, migrations,
+│   │                             # FTS5 CJK edge cases, integrity monitor, ...)
 │   └── fixtures/                 # Sample JSONL + shared test helpers
 ├── .mcp.json.example             # MCP client config template
 ├── NOTICE / SECURITY.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
