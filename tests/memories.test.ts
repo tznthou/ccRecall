@@ -110,6 +110,68 @@ describe('queryMemories', () => {
   })
 })
 
+describe('queryMemories LIKE fallback (short tokens)', () => {
+  // Trigram tokenizer cannot index tokens shorter than 3 chars. The fallback
+  // path runs LIKE on raw memory content. Single-token queries keep the simple
+  // substring behavior; multi-token queries (e.g. mixed Latin acronyms + CJK
+  // like `UI 記憶`, `DB 查詢`) AND each token, so a doc only matches when every
+  // token appears somewhere in content.
+
+  it('single short CJK token still hits via single-LIKE', () => {
+    db.saveMemory(mem({ content: '記憶系統設計', confidence: 0.8 }))
+    db.saveMemory(mem({ content: '無關內容', confidence: 0.8 }))
+    const results = db.queryMemories('記憶', 10)
+    expect(results.map(r => r.content)).toEqual(['記憶系統設計'])
+  })
+
+  it('single short Latin acronym still hits via single-LIKE', () => {
+    db.saveMemory(mem({ content: 'UI element refactor', confidence: 0.8 }))
+    db.saveMemory(mem({ content: 'unrelated', confidence: 0.8 }))
+    const results = db.queryMemories('UI', 10)
+    expect(results.map(r => r.content)).toEqual(['UI element refactor'])
+  })
+
+  it('mixed Latin + CJK uses AND across tokens (Case 5)', () => {
+    db.saveMemory(mem({ content: 'UI 元件設計優化記憶', confidence: 0.9 }))
+    db.saveMemory(mem({ content: '後台 API 跟前台 UI 的記憶共用', confidence: 0.85 }))
+    db.saveMemory(mem({ content: '純 UI 改動，沒動到資料層', confidence: 0.8 }))
+    db.saveMemory(mem({ content: '記憶系統的單元測試覆蓋率', confidence: 0.8 }))
+
+    const results = db.queryMemories('UI 記憶', 10)
+    const contents = results.map(r => r.content).sort()
+    expect(contents).toEqual([
+      'UI 元件設計優化記憶',
+      '後台 API 跟前台 UI 的記憶共用',
+    ].sort())
+  })
+
+  it('token order in query does not matter (AND is commutative)', () => {
+    db.saveMemory(mem({ content: 'UI 元件設計優化記憶', confidence: 0.9 }))
+    db.saveMemory(mem({ content: '純 UI 改動', confidence: 0.8 }))
+
+    const a = db.queryMemories('UI 記憶', 10)
+    const b = db.queryMemories('記憶 UI', 10)
+    expect(a.map(r => r.content)).toEqual(b.map(r => r.content))
+    expect(a.length).toBe(1)
+  })
+
+  it('extra whitespace between tokens is normalized', () => {
+    db.saveMemory(mem({ content: 'UI 元件設計記憶', confidence: 0.9 }))
+    const results = db.queryMemories('UI    記憶', 10)
+    expect(results.length).toBe(1)
+  })
+
+  it('LIKE wildcards in tokens are escaped (security)', () => {
+    db.saveMemory(mem({ content: 'UI percent% sign', confidence: 0.9 }))
+    db.saveMemory(mem({ content: 'UI no special', confidence: 0.8 }))
+
+    const results = db.queryMemories('UI %', 10)
+    // The literal `%` token must match only the doc that actually contains `%`,
+    // not match every doc as it would if `%` were treated as a wildcard.
+    expect(results.map(r => r.content)).toEqual(['UI percent% sign'])
+  })
+})
+
 describe('getMemoryCount', () => {
   it('returns 0 on empty', () => {
     expect(db.getMemoryCount()).toBe(0)
