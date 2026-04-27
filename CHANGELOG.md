@@ -11,6 +11,41 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.2.2] — 2026-04-27
+
+### Fixed
+
+- **CJK case 5: LIKE fallback now uses AND across short tokens**. The short-token fallback (any whitespace-split token under 3 characters, gating the LIKE path because the trigram tokenizer cannot index <3-char tokens) was wrapping the entire raw query in `%...%`. That collapsed AND semantics into substring match: `queryMemories('UI 記憶')` only hit documents where `UI` was immediately followed by ` 記憶` as a contiguous substring. Mixed Latin + CJK queries (the most common shape — `UI 記憶`, `DB 查詢`, `API 路由`, `CI 流程`) silently dropped any document where the tokens were separated. The fallback now splits on whitespace and ANDs each token's LIKE clause; `searchSessionsFallback` keeps the per-column OR within each token. Pure single-token short queries (bare `記憶`, `UI`) reduce to the prior single-LIKE behavior with no observable change.
+
+### Security
+
+- **Cap LIKE fallback token count at 20** to bound SQL prepare cost. Without the cap, a caller could pass `'a b c d e ...'` with 10 000 tokens and either stall the synchronous `prepare()` pass or hit `SQLITE_MAX_VARIABLE_NUMBER` (each token contributes 1 bind param in `queryMemoriesFallback`, 5 in `searchSessionsFallback`). 20 covers any realistic search query. Maps to OWASP A10 (mishandling exceptional conditions, unbounded resource consumption) and AI-vuln #5 (missing input validation).
+
+### Motivation
+
+All five deferred CJK edge cases tracked in #13 were reproduced locally. Case 5 was the highest-impact false-negative for end users — recall returned 0 hits with no signal that anything was wrong — and the only one fixable without an ingest re-index. Cases 1 / 2 / 4 (full-width punctuation, NFC↔NFD divergence, halfwidth ↔ fullwidth katakana) need NFKC normalization at both ingest and query boundaries and stay deferred until the storage governance work converges. Case 3 (snippet boundary under the trigram tokenizer) is UX-only and stays deferred.
+
+### Tests
+
+- 9 new tests across `tests/memories.test.ts` (7) and `tests/database.test.ts` (2): single-token unchanged behavior, mixed Latin+CJK AND, token order independence, whitespace normalization, wildcard escape, and the DoS token-cap guard.
+- Test count: 463 → 472.
+
+### Upgrade checklist
+
+```bash
+# 1. Install 0.2.2
+npm i -g @tznthou/ccrecall@0.2.2
+
+# 2. Restart daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. Verify
+curl -s http://127.0.0.1:7749/health | jq .version
+# Expect: "0.2.2"
+```
+
+---
+
 ## [0.2.1] — 2026-04-25
 
 ### Added

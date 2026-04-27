@@ -8,6 +8,41 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.2.2] — 2026-04-27
+
+### 修復
+
+- **CJK case 5：LIKE fallback 改用 per-token AND**。短 token fallback（query 任一 whitespace-split token 不到 3 字元時觸發；trigram tokenizer 對 <3 字元 token 沒辦法 index，所以走 LIKE）本來把整個 raw query 包成 `%...%`——AND 語義被吃掉、變成 substring match：`queryMemories('UI 記憶')` 只會命中文檔字面上 `UI` 後面緊跟一個空格再接 `記憶` 的連續字串。混合中英查詢（最常見的 query 形狀——`UI 記憶`、`DB 查詢`、`API 路由`、`CI 流程`）只要兩個 token 中間隔著別的字就 silent false negative——使用者完全不知道自己漏抓。修正後 fallback 改 split on whitespace、對每個 token 各跑一次 LIKE 再 AND 起來；`searchSessionsFallback` 在每個 token 內仍保留跨 5 個 FTS 欄位的 OR。純單 token 的短查詢（`記憶`、`UI` 自己）退化成原本的 single-LIKE，行為不變。
+
+### 安全
+
+- **LIKE fallback token 數上限 20**，防 SQL prepare 階段資源爆炸。沒這個 cap 的話，呼叫端可以丟 `'a b c d e ...'` 一萬個 token，要嘛把同步 `prepare()` 卡到 event loop stall，要嘛撞到 `SQLITE_MAX_VARIABLE_NUMBER`（`queryMemoriesFallback` 每 token 1 個 bind param，`searchSessionsFallback` 每 token 5 個）。20 對任何真實 search query 都很夠。對應 OWASP A10（例外狀況處理失當，資源消耗無上限）和 AI 漏洞 #5（缺少輸入驗證）。
+
+### 動機
+
+#13 追蹤的 5 個 deferred CJK edge case 全部本機重現過，**Case 5 對使用者衝擊最大**——recall 出現 silent false negative，沒有任何訊號讓使用者知道漏抓——而且也是唯一不用做 ingest re-index 就能修的。Case 1（全形標點切斷 trigram）/ Case 2（NFC ↔ NFD divergence）/ Case 4（半形 ↔ 全形片假名）需要在 ingest 和 query 兩端都做 NFKC normalization，先擱著等儲存治理收斂。Case 3（trigram tokenizer 下的 snippet 邊界）純 UX 問題，繼續 deferred。
+
+### 測試
+
+- 9 個新測試，分布 `tests/memories.test.ts`（7）和 `tests/database.test.ts`（2）——單 token 行為不變、混合中英 AND、token 順序無關、whitespace normalize、wildcard escape、DoS token-cap 防護。
+- 測試數：463 → 472。
+
+### 升級清單
+
+```bash
+# 1. 安裝 0.2.2
+npm i -g @tznthou/ccrecall@0.2.2
+
+# 2. 重啟 daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. 驗證
+curl -s http://127.0.0.1:7749/health | jq .version
+# 預期: "0.2.2"
+```
+
+---
+
 ## [0.2.1] — 2026-04-25
 
 ### 新增
