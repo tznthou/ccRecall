@@ -6,6 +6,7 @@ import type { Database, MemoryInput } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
 import { runLint } from '../core/lint.js'
 import { scrubErrorMessage } from '../core/log-safe.js'
+import { isHarvestNoise } from '../core/harvester-filter.js'
 import type {
   HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
@@ -14,7 +15,7 @@ import { deriveDepth } from '../core/types.js'
 import type { IntegrityCheckRecord } from '../core/integrity-monitor.js'
 
 const VALID_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
-  'decision', 'discovery', 'preference', 'pattern', 'feedback',
+  'decision', 'discovery', 'preference', 'pattern', 'feedback', 'query',
 ])
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
@@ -72,11 +73,6 @@ function validateSessionEndBody(
   return { sessionId: b.sessionId, dryRun: b.dryRun === true }
 }
 
-export function inferMemoryType(outcome: OutcomeStatus): MemoryType {
-  if (outcome === 'committed') return 'decision'
-  return 'discovery'
-}
-
 export function inferConfidence(outcome: OutcomeStatus): number {
   if (outcome === 'committed') return 0.9
   if (outcome === 'tested') return 0.8
@@ -86,15 +82,19 @@ export function inferConfidence(outcome: OutcomeStatus): number {
 export function buildMemoryFromSession(session: SessionMeta): MemoryInput | null {
   const summary = session.summaryText?.trim()
   if (!summary) return null
+  const intent = session.intentText?.trim() ?? null
+  if (isHarvestNoise(intent, summary)) return null
   const parts: string[] = []
-  const intent = session.intentText?.trim()
   if (intent) parts.push(`[intent] ${intent}`)
   parts.push(summary)
   return {
     sessionId: session.id,
     messageId: null,
     content: parts.join('\n'),
-    type: inferMemoryType(session.outcomeStatus),
+    // Hook auto-harvest 抓的是 first user prompt——本質是 query，不是 decision/discovery。
+    // outcome=committed 只代表這次 session 有 commit，跟 prompt 內容是不是知識無關。
+    // 真正的 decision/discovery 由手動 recall_save 寫入。
+    type: 'query',
     confidence: inferConfidence(session.outcomeStatus),
   }
 }

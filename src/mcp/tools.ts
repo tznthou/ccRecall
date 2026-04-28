@@ -17,7 +17,7 @@ import {
 // selecting memory rows, so final text respects the maxTokens target.
 const TRAILER_RESERVE_TOKENS = 20
 
-const MEMORY_TYPES = ['decision', 'discovery', 'preference', 'pattern', 'feedback'] as const
+const MEMORY_TYPES = ['decision', 'discovery', 'preference', 'pattern', 'feedback', 'query'] as const
 
 type McpTextResult = {
   content: Array<{ type: 'text'; text: string }>

@@ -8,7 +8,6 @@ import { Database } from '../src/core/database.js'
 import { runIndexer } from '../src/core/indexer.js'
 import { createServer } from '../src/api/server.js'
 import {
-  inferMemoryType,
   inferConfidence,
   buildMemoryFromSession,
 } from '../src/api/routes.js'
@@ -270,16 +269,6 @@ describe('session-end helpers (unit)', () => {
     totalOutputTokens: null,
   }
 
-  it('inferMemoryType: committed → decision', () => {
-    expect(inferMemoryType('committed')).toBe('decision')
-  })
-
-  it('inferMemoryType: tested / in-progress / null → discovery', () => {
-    expect(inferMemoryType('tested')).toBe('discovery')
-    expect(inferMemoryType('in-progress')).toBe('discovery')
-    expect(inferMemoryType(null)).toBe('discovery')
-  })
-
   it('inferConfidence: committed 0.9, tested 0.8, else 0.7', () => {
     expect(inferConfidence('committed')).toBe(0.9)
     expect(inferConfidence('tested')).toBe(0.8)
@@ -305,13 +294,26 @@ describe('session-end helpers (unit)', () => {
     expect(result!.content).toBe('Fixed auth bug; tests green.')
   })
 
-  it('buildMemoryFromSession: applies inferred type and confidence', () => {
+  it('buildMemoryFromSession: hook auto-harvest is always type=query, confidence varies by outcome', () => {
     const committed = buildMemoryFromSession({ ...baseSession, outcomeStatus: 'committed' })
-    expect(committed!.type).toBe('decision')
+    expect(committed!.type).toBe('query')
     expect(committed!.confidence).toBe(0.9)
 
     const tested = buildMemoryFromSession({ ...baseSession, outcomeStatus: 'tested' })
-    expect(tested!.type).toBe('discovery')
+    expect(tested!.type).toBe('query')
     expect(tested!.confidence).toBe(0.8)
+  })
+
+  it('buildMemoryFromSession: skips noise prompts (slash command / progress shell / reflection)', () => {
+    expect(buildMemoryFromSession({ ...baseSession, intentText: '/clear', summaryText: '/clear | Edit×1' })).toBeNull()
+    expect(buildMemoryFromSession({ ...baseSession, intentText: '繼續我們的進度', summaryText: '繼續我們的進度 | Edit×3' })).toBeNull()
+    expect(buildMemoryFromSession({ ...baseSession, intentText: '我們剛是不是討論到 X', summaryText: 's' })).toBeNull()
+  })
+
+  it('buildMemoryFromSession: keeps audit query carrying concrete technical detail', () => {
+    const intent = '確認一下工作進度,以及目前我們在CCRecall的MCP裡面,現在存了多少筆記憶,容量又是多少?'
+    const result = buildMemoryFromSession({ ...baseSession, intentText: intent, summaryText: 'audit summary' })
+    expect(result).not.toBeNull()
+    expect(result!.type).toBe('query')
   })
 })

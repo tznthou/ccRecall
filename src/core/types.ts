@@ -205,7 +205,7 @@ export interface SessionSummary {
 // ── ccRecall 新增：記憶層型別 ──
 
 /** 記憶類型 */
-export type MemoryType = 'decision' | 'discovery' | 'preference' | 'pattern' | 'feedback'
+export type MemoryType = 'decision' | 'discovery' | 'preference' | 'pattern' | 'feedback' | 'query'
 
 /** 記憶條目 */
 export interface Memory {
