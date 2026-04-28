@@ -56,6 +56,51 @@ describe('isHarvestNoise — reflections', () => {
   })
 })
 
+describe('isHarvestNoise — English progress shells', () => {
+  it('flags pure English status/progress queries', () => {
+    expect(isHarvestNoise('status?', 's')).toBe(true)
+    expect(isHarvestNoise('any progress?', 's')).toBe(true)
+    expect(isHarvestNoise('any updates', 's')).toBe(true)
+    expect(isHarvestNoise("what's next", 's')).toBe(true)
+    expect(isHarvestNoise("what's next?", 's')).toBe(true)
+    expect(isHarvestNoise('where are we', 's')).toBe(true)
+    expect(isHarvestNoise('where are we?', 's')).toBe(true)
+    expect(isHarvestNoise('are we done', 's')).toBe(true)
+    expect(isHarvestNoise('are we done yet?', 's')).toBe(true)
+    expect(isHarvestNoise('are we good', 's')).toBe(true)
+  })
+
+  it('flags pure English continue/control directives', () => {
+    expect(isHarvestNoise('continue', 's')).toBe(true)
+    expect(isHarvestNoise('keep going', 's')).toBe(true)
+    expect(isHarvestNoise('proceed', 's')).toBe(true)
+    expect(isHarvestNoise('carry on', 's')).toBe(true)
+    expect(isHarvestNoise("let's continue", 's')).toBe(true)
+    expect(isHarvestNoise('done?', 's')).toBe(true)
+    expect(isHarvestNoise('all good?', 's')).toBe(true)
+  })
+
+  it('case-insensitive', () => {
+    expect(isHarvestNoise('STATUS?', 's')).toBe(true)
+    expect(isHarvestNoise('Continue', 's')).toBe(true)
+    expect(isHarvestNoise("What's next", 's')).toBe(true)
+  })
+
+  it('does NOT flag English progress prefix carrying concrete technical detail', () => {
+    expect(isHarvestNoise("what's next on the roadmap", 's')).toBe(false)
+    expect(isHarvestNoise('continue with the auth refactor', 's')).toBe(false)
+    expect(isHarvestNoise('status of the migration?', 's')).toBe(false)
+    expect(isHarvestNoise('are we done with the deploy', 's')).toBe(false)
+    expect(isHarvestNoise('keep going on the FTS5 fix', 's')).toBe(false)
+  })
+
+  it('does NOT add English reflection pattern (too ambiguous)', () => {
+    // `did we just X` could be pure speculation OR concrete inquiry — leave it
+    expect(isHarvestNoise('did we just commit the migration?', 's')).toBe(false)
+    expect(isHarvestNoise("didn't we just discuss this", 's')).toBe(false)
+  })
+})
+
 describe('isHarvestNoise — fallbacks and edges', () => {
   it('uses summary head when intent is null', () => {
     // summary 形如 "繼續我們的進度 | Edit×33, Write×4 ..."

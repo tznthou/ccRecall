@@ -20,6 +20,21 @@ const REFLECTION_RES: ReadonlyArray<RegExp> = [
 // （API name、metric、技術名詞）都會讓字串不全 match，自動保留具體 audit query
 const PROGRESS_VOCAB_RE = /^[\s我們這個專案目前現在的工作進度如何怎樣看一下繼續確認更新?？!！。.,，]+$/
 
+// 英文進度殼／控制指令——全句 anchor + `$` 確保是純殼（後接技術名詞「on the roadmap」
+// 「with auth」就不 match）。不加英文 reflection（`did we just X` 對「具體 issue 詢問」
+// 跟「純推測」兩義都會 match，誤殺風險高，等同 0.2.3 砍掉中文 `^我們剛剛` 的理由）
+const ENGLISH_PROGRESS_RES: ReadonlyArray<RegExp> = [
+  /^\s*(status|update|progress)\s*[?!.]*\s*$/i,
+  /^\s*any\s+(progress|updates?)\s*[?!.]*\s*$/i,
+  /^\s*what'?s?\s+(next|new|up|the\s+status)\s*[?!.]*\s*$/i,
+  /^\s*where\s+(are|were)\s+we\s*[?!.]*\s*$/i,
+  /^\s*are\s+we\s+(done|good|all\s+good|ready)(\s+yet)?\s*[?!.]*\s*$/i,
+  /^\s*(continue|carry\s+on|keep\s+going|proceed|go\s+on)\s*[?!.]*\s*$/i,
+  /^\s*let'?s\s+continue\s*[?!.]*\s*$/i,
+  /^\s*done\s*[?!.]*\s*$/i,
+  /^\s*all\s+good\s*[?!.]*\s*$/i,
+]
+
 export function isHarvestNoise(intent: string | null, summary: string): boolean {
   const probe = pickProbeText(intent, summary)
   if (!probe) return false
@@ -31,8 +46,16 @@ export function isHarvestNoise(intent: string | null, summary: string): boolean 
 }
 
 function isProgressShell(text: string): boolean {
+  return isCjkProgressShell(text) || isEnglishProgressShell(text)
+}
+
+function isCjkProgressShell(text: string): boolean {
   if (!text.includes('進度')) return false
   return PROGRESS_VOCAB_RE.test(text)
+}
+
+function isEnglishProgressShell(text: string): boolean {
+  return ENGLISH_PROGRESS_RES.some(p => p.test(text))
 }
 
 function pickProbeText(intent: string | null, summary: string): string {
