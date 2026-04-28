@@ -9,10 +9,11 @@ const SHORT_NOISE_LEN = 30
 
 const SLASH_COMMAND_RE = /^\s*\/[a-zA-Z][\w-]*\s*$/
 
-// 反思開頭：assistant 視角的對話流回顧，不限長度都該擋
+// 反思開頭：純推測式反思（「我們剛是不是 X」）才是 high-signal noise；
+// 「我們剛剛 X」「我剛剛 X」「你剛 X」是 ambiguous prefix，常見於具體 issue 詢問
+// （例：「我們剛剛 github 沒有發 tag ？」），擋了會吃掉真實問題
 const REFLECTION_RES: ReadonlyArray<RegExp> = [
-  /^我們剛(剛|是不是)?/,
-  /^(我|你)剛剛?/,
+  /^我們剛是不是/,
 ]
 
 // 進度查詢殼用 vocabulary-only 檢測比 alternation 穩——任何超出 vocab 的字元

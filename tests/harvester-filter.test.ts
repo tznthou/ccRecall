@@ -37,15 +37,20 @@ describe('isHarvestNoise — progress shells', () => {
 })
 
 describe('isHarvestNoise — reflections', () => {
-  it('flags conversational self-reflection openings', () => {
+  it('flags pure speculative reflection (我們剛是不是 ...)', () => {
     expect(isHarvestNoise('我們剛是不是討論到要測試 pi-plan', 's')).toBe(true)
-    expect(isHarvestNoise('我剛剛說錯了', 's')).toBe(true)
-    expect(isHarvestNoise('你剛說的那個', 's')).toBe(true)
+  })
+
+  it('does NOT flag concrete inquiry opening with weak reflection prefix', () => {
+    // 真實 case：id 86「我們剛剛 github 沒有發 tag ？」是具體 issue 詢問，
+    // 帶具名技術詞（github、tag），不該被當對話流回顧丟掉
+    expect(isHarvestNoise('我們剛剛 github 沒有發 tag ？', 's')).toBe(false)
+    expect(isHarvestNoise('我剛剛說錯了', 's')).toBe(false)
+    expect(isHarvestNoise('你剛說的那個', 's')).toBe(false)
   })
 
   it('reflection prefix wins even for long text', () => {
-    // 反思類即使長度過 short-text cap 也應視為噪音——這類 prompt 多半是
-    // 對話流回顧，不是要記住的事實
+    // 推測式反思即使長度過 short-text cap 也應視為噪音
     const long = '我們剛是不是討論到要測試 pi-plan，但好像 hook 那邊沒接好，然後就跳到別的話題了'
     expect(isHarvestNoise(long, 's')).toBe(true)
   })
