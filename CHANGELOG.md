@@ -11,6 +11,46 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.2.3] — 2026-04-28
+
+### Added
+
+- **Harvest noise filter** (`isHarvestNoise()` in `src/core/harvester-filter.ts`). Hook auto-harvest now skips conversation-control noise before writing to the memories table: bare slash commands (`/clear`, `/model`, `/compact`, `/save-t`), pure-CJK progress query shells (`繼續我們的進度`, `確認我們現在的進度`, `這個專案進度如何?`), and speculative self-reflection openings (`我們剛是不是 …`). False-positive guards: short-text 30-char cap on slash and progress detection so audit queries carrying concrete technical detail still pass; reflection narrowed to the high-signal `^我們剛是不是` prefix so concrete inquiries like `我們剛剛 github 沒有發 tag ？` are kept.
+- **`'query'` MemoryType** added to the union, MCP `MEMORY_TYPES` enum, and HTTP `VALID_MEMORY_TYPES` set. Hook-harvested memories now always carry `type='query'` regardless of session outcome — the prompt itself is a query, not a decision or discovery, even when the underlying session ended in a commit. `decision` / `discovery` / `feedback` / `preference` / `pattern` are reserved for explicit `recall_save` writes.
+
+### Changed
+
+- **`buildMemoryFromSession()` no longer uses outcome to infer memory type**. Outcome (`committed` / `tested` / `null`) still drives `confidence` (0.9 / 0.8 / 0.7 — the certainty signal is genuine), but conflating outcome with knowledge category was forcing every committed work session into `decision` even when the prompt was just a progress query.
+
+### Removed
+
+- `inferMemoryType()` (sole caller deleted, no public API).
+
+### Motivation
+
+A live-DB audit showed 84% of hook-harvested memories were never recalled. Tracing the bottom-quartile entries surfaced the actual cost: bare `/clear` / `/model` invocations, repeated 「確認進度」 shells, and conversational reflection were all being written as if they were `discovery`- or `decision`-grade memories. The topic system (1,767 memory↔topic links across 89 memories — average 19.9 topics each) was further inflating top-topic hit rates above 80% because the noise wrote to the same generic English `topic_keys` (`docs`, `bug-fix`, `testing`) the rest of the corpus shared. A dry-run of the new filter against the live 89 entries flagged 23 (25.8%) as noise — almost exactly the bottom-quartile recall cohort. Reclassifying the rest as `query` separates "user asked X at time T" from "we learned Y" so a future filter pass on `recall_query` can opt out of returning queries-as-memories. No backfill of existing entries — historical records keep their original type to preserve audit history.
+
+### Tests
+
+- 12 new cases in `tests/harvester-filter.test.ts` (slash / progress / reflection / fallback / false-positive guards) + 2 integration cases in `tests/session-end.test.ts` covering noise skip and audit-query preservation.
+- Test count: 475 → 487.
+
+### Upgrade checklist
+
+```bash
+# 1. Install 0.2.3
+npm i -g @tznthou/ccrecall@0.2.3
+
+# 2. Restart daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. Verify
+curl -s http://127.0.0.1:7749/health | jq .version
+# Expect: "0.2.3"
+```
+
+---
+
 ## [0.2.2] — 2026-04-27
 
 ### Fixed

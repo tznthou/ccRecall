@@ -8,6 +8,46 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.2.3] — 2026-04-28
+
+### 新增
+
+- **Harvest 噪音過濾器**（`isHarvestNoise()`，`src/core/harvester-filter.ts`）。Hook auto-harvest 寫進 memories table 之前會先擋掉對話操控類噪音：純 slash 指令（`/clear`、`/model`、`/compact`、`/save-t`）、純中文進度查詢殼（`繼續我們的進度`、`確認我們現在的進度`、`這個專案進度如何?`）、推測式自我反思開頭（`我們剛是不是 …`）。誤殺防護：slash 跟 progress 偵測都有 30 字短文本上限，帶具體技術細節的 audit query 仍會被保留；reflection 只留 `^我們剛是不是` 一條 high-signal pattern，所以「我們剛剛 github 沒有發 tag ？」這種具體 issue 詢問還是會進去。
+- **新增 `'query'` MemoryType**——加進 union、MCP `MEMORY_TYPES` enum、HTTP `VALID_MEMORY_TYPES` set。Hook 抓進來的記憶從此一律標 `type='query'`，不再看 session outcome——prompt 本身就是查詢，不是 decision 也不是 discovery，就算這次 session 真的 commit 了也一樣。`decision` / `discovery` / `feedback` / `preference` / `pattern` 留給 `recall_save` 手動寫入用。
+
+### 變更
+
+- **`buildMemoryFromSession()` 不再用 outcome 推 memory type**。outcome（`committed` / `tested` / `null`）仍驅動 `confidence`（0.9 / 0.8 / 0.7——確定度的訊號是真的），但把 outcome 直接當分類依據的設計，會把每一個有 commit 的 session 都硬塞成 `decision`，即使 prompt 只是查進度殼。
+
+### 移除
+
+- `inferMemoryType()`——sole caller 已砍，不是 public API。
+
+### 動機
+
+線上 DB audit 顯示 hook 抓的記憶有 84% 從未被 recall。往下看底層 entries 才知道真正的成本：純 `/clear`、`/model` 指令、反覆的「確認進度」殼、對話反思——全都當 `discovery` 或 `decision` 級記憶寫進去。Topic 系統（89 筆 memory 對應 1,767 條 memory↔topic link，平均每筆 19.9 個 topic）進一步把 top-topic 命中率推到 80% 以上，因為噪音記憶都灌到 `docs`、`bug-fix`、`testing` 這些通用英文 `topic_key`——跟整個 corpus 撞同一組 tag。新 filter 對線上 89 筆既有資料 dry-run，flagged 23 筆（25.8%）為噪音——幾乎正好就是底部四分位的 recall cohort。剩下的全標 `query` 切開「user 在時點 T 問了 X」跟「我們學到了 Y」這兩件事，未來在 `recall_query` 加一層 filter 就能 opt out「query 當記憶回」。既有 89 筆不做 backfill——歷史記錄保留原 type，audit history 不動。
+
+### 測試
+
+- `tests/harvester-filter.test.ts` 12 條新測試（slash / progress / reflection / fallback / false-positive guard）+ `tests/session-end.test.ts` 加 2 條 integration case 覆蓋噪音 skip 跟 audit-query 保留。
+- 測試數：475 → 487。
+
+### 升級清單
+
+```bash
+# 1. 安裝 0.2.3
+npm i -g @tznthou/ccrecall@0.2.3
+
+# 2. 重啟 daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. 驗證
+curl -s http://127.0.0.1:7749/health | jq .version
+# 預期: "0.2.3"
+```
+
+---
+
 ## [0.2.2] — 2026-04-27
 
 ### 修復
