@@ -11,6 +11,42 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.2.4] — 2026-04-28
+
+### Added
+
+- **English progress / control noise patterns** in `isProgressShell()`. The 0.2.3 noise filter caught language-neutral slash commands but only CJK progress shells and CJK speculative reflection — English-language adopters would re-introduce ~25-30% of the noise the CJK filter had just removed. The new `ENGLISH_PROGRESS_RES` list covers `status?` / `any progress?` / `what's next` / `where are we` / `are we done yet?` / `continue` / `keep going` / `proceed` / `done?` / `all good?` and the case-insensitive variants. All entries are `^...$`-anchored so concrete inquiries carrying topic detail (e.g. `what's next on the roadmap`, `continue with the auth refactor`) are still kept. Closes #17.
+
+### Motivation
+
+0.2.3 was shipped on a CJK-only audit corpus (n=89). The filter design was tested against the live data we had, but the filter itself encoded a dataset bias: progress and reflection patterns were CJK-specific, leaving English-language usage entirely unfiltered. Slash commands were already language-neutral, but `status?` / `continue` / `where are we` are exactly the same kind of conversation-control shell — short, recurring, zero knowledge value.
+
+### Out of scope
+
+- **English reflection patterns deliberately not added.** `did we just X` and `didn't we just Y` are too ambiguous between pure speculation (correct to filter) and concrete inquiry like `did we just commit the migration?` (wrong to filter). Same trap that forced dropping `^我們剛剛` in 0.2.3 — there's no high-signal English subset to anchor on, so the safer behavior is to keep all English reflections.
+- Other CJK languages (Japanese 進捗, Korean 진행) — wait for real adopters before extending vocab.
+
+### Tests
+
+- 5 new test cases in `tests/harvester-filter.test.ts` covering the English shell flag-positives, case-insensitivity, false-positive guards (concrete topic suffixes), and the deliberate non-coverage of English reflection.
+- Test count: 487 → 492.
+
+### Upgrade checklist
+
+```bash
+# 1. Install 0.2.4
+npm i -g @tznthou/ccrecall@0.2.4
+
+# 2. Restart daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. Verify
+curl -s http://127.0.0.1:7749/health | jq .version
+# Expect: "0.2.4"
+```
+
+---
+
 ## [0.2.3] — 2026-04-28
 
 ### Added

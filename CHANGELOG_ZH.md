@@ -8,6 +8,42 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.2.4] — 2026-04-28
+
+### 新增
+
+- **英文進度殼 / 控制指令噪音規則**——加進 `isProgressShell()`。0.2.3 的 noise filter slash command 是 language-neutral 沒問題，但 progress shell 跟反思 pattern 都只擋中文——英文使用者會把 0.2.3 砍掉的 25-30% 噪音原樣帶回來。新的 `ENGLISH_PROGRESS_RES` 列表涵蓋 `status?` / `any progress?` / `what's next` / `where are we` / `are we done yet?` / `continue` / `keep going` / `proceed` / `done?` / `all good?` 跟 case-insensitive 變體。所有 pattern 都 `^...$` anchor，帶具體技術名詞的詢問（例：`what's next on the roadmap`、`continue with the auth refactor`）仍會被保留。Closes #17。
+
+### 動機
+
+0.2.3 的 audit corpus（n=89）全是中文 prompts。filter 設計上是針對手上的 live data 測過，但設計本身把 dataset bias 寫進規則裡——progress 跟 reflection 都做成中文專屬，英文使用者完全裸奔。Slash command 本來就跨語言，但 `status?` / `continue` / `where are we` 跟中文「確認進度」「繼續」是同一類對話操控殼——短、反覆、零知識價值。
+
+### 不做的部分
+
+- **英文 reflection pattern 故意不加**。`did we just X` 跟 `didn't we just Y` 對「純推測」跟「具體詢問」（例：`did we just commit the migration?`）兩個語意都會 match，誤殺風險高。0.2.3 砍掉中文 `^我們剛剛` 是同一個陷阱——英文沒有像中文 `^我們剛是不是` 那樣 high-signal 的純推測 subset 可以 anchor，安全做法是英文 reflection 全保留。
+- 其他 CJK 語言（日文 進捗、韓文 진행）——等真實使用者出現再擴 vocab。
+
+### 測試
+
+- `tests/harvester-filter.test.ts` 新增 5 條測試覆蓋英文殼正向命中、case-insensitive、false-positive guard（具體 topic 後綴不擋）、英文 reflection 故意不擋的設計決策。
+- 測試數：487 → 492。
+
+### 升級清單
+
+```bash
+# 1. 安裝 0.2.4
+npm i -g @tznthou/ccrecall@0.2.4
+
+# 2. 重啟 daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. 驗證
+curl -s http://127.0.0.1:7749/health | jq .version
+# 預期: "0.2.4"
+```
+
+---
+
 ## [0.2.3] — 2026-04-28
 
 ### 新增
