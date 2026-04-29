@@ -228,6 +228,17 @@ cp ~/.ccrecall/ccrecall.db ~/ccrecall-drift-snapshot.db
 sqlite3 ~/.ccrecall/ccrecall.db 'REINDEX;'
 ```
 
+### WAL 維護
+
+Indexer 每個 batch 結束時會跑 `PRAGMA wal_checkpoint(TRUNCATE)`，所以
+`ccrecall.db-wal` sidecar 在每次 reindex 跑完都會被重設為 0 bytes。長期
+運行的 daemon 上，WAL 大多時間會貼近 0，只在 batch 跑的當下短暫飆高。
+
+如果發現 WAL 無界增長（接近主檔大小），檢查 stderr 是否有
+`[indexer] WAL checkpoint busy` 警告——這代表有 reader 連續好幾個 batch
+都把 snapshot hold 過了 `busy_timeout`，truncate 一直 defer。找出元凶
+client 後，下一個乾淨 batch 就會回收磁碟空間。
+
 ---
 
 ## 專案結構

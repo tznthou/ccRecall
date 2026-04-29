@@ -8,6 +8,62 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.2.5] — 2026-04-29
+
+### 修正
+
+- **長 uptime daemon 的 WAL 檔無界增長**（issue #11）。`runIndexer` 現在會以 `PRAGMA wal_checkpoint(TRUNCATE)` 收尾——這是唯一一個會把 WAL 檔在磁碟上實際縮回 0 bytes 的 checkpoint 模式。先前 WAL 會在 SQLite 兩次 passive auto-checkpoint 之間累積到接近主檔大小——issue #11 證據顯示 8.4 小時 uptime 撐到 624 MB。PASSIVE / FULL 模式被排除：它們只把 frame 標記為可重用，磁碟檔大小不變，看 `du` 的 operator 會以為 fix 沒生效。
+
+### 動機
+
+ccRecall 跑 22.9 小時 uptime 在真實 workload 下，WAL sidecar 累到 6.8 MB——數字小但上限無界，issue #11 那次 624 MB 的觀察證明上限實際就是主檔大小。我們評估三種做法選一：
+
+| 方案 | 真縮磁碟檔 | 阻塞 reader | 結論 |
+|------|----------|-----------|------|
+| 調 `wal_autocheckpoint` 閾值 | 否（passive） | 否 | 解不了 disk 可見的成長 |
+| 背景 timer | 是 | 短暫 stall | 多了 timer 生命週期跟 race surface |
+| **Batch 結束 TRUNCATE** | **是** | **batch 結束時很安全** | 選這個 |
+
+Indexer batch 結束沒併發 indexer 寫入、HTTP query 讀都是毫秒級，stall 影響可忽略。萬一有 long-running reader 撐住 snapshot 超過 `busy_timeout`，SQLite 回 `busy=1`，下次 batch 自然再試——`console.warn` 把這個狀況打出來給 operator 知道。
+
+### 為什麼不只在 SIGTERM 加 checkpoint
+
+原本草稿的 quick-fix 是「SIGTERM handler 加 `wal_checkpoint(TRUNCATE)`」。隔離復現實驗證實 `db.close()` 已經觸發 SQLite last-connection truncate（200 sessions 寫入 → close → WAL 4.1 MB → 0 bytes），所以 SIGTERM hook 是 redundant，而且不能解 issue #11 真正關心的「daemon 跑期間累積」。
+
+### 測試
+
+- `tests/wal-checkpoint.test.ts` 新增 3 條測試：method 自身行為（200 sessions 寫入 → TRUNCATE → 0 bytes）、空 WAL 上 idempotent、indexer 整合（50 sessions batch → `runIndexer` 跑完 WAL = 0）。
+- 測試數：492 → 495。
+
+### 品質流水線
+
+- Codex review（1 Medium 修了）：`busy=1` 被吞掉沒 log，現在會 `console.warn`「`[indexer] WAL checkpoint busy — readers held snapshot; deferred to next batch`」。
+- Simplifier（2 處精簡）：拿掉不會走到的 nullish fallback（`PRAGMA wal_checkpoint` 的 contract 保證一定回一 row）、多餘的 comment 收緊。
+- Security review：C:0 H:0 M:0 L:2——兩個 Low 都是 log message 診斷精度議題，依 gogo 規則不修。
+- Final verify：build / typecheck / lint / 495 tests 全綠。
+
+### 升級清單
+
+```bash
+# 1. 安裝 0.2.5
+npm i -g @tznthou/ccrecall@0.2.5
+
+# 2. 重啟 daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. 驗證
+curl -s http://127.0.0.1:7749/health | jq .version
+# 預期: "0.2.5"
+
+# 4. 下一次 indexer batch 跑完後看 WAL
+ls -lah ~/.ccrecall/ccrecall.db-wal
+# 預期：通常 0 bytes（或近 0，如果 checkpoint 那當下剛好有 reader 在 hold snapshot）
+```
+
+Closes [#11](https://github.com/tznthou/ccRecall/issues/11)。
+
+---
+
 ## [0.2.4] — 2026-04-28
 
 ### 新增

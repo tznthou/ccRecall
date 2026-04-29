@@ -233,6 +233,19 @@ cp ~/.ccrecall/ccrecall.db ~/ccrecall-drift-snapshot.db
 sqlite3 ~/.ccrecall/ccrecall.db 'REINDEX;'
 ```
 
+### WAL maintenance
+
+Each indexer batch ends with `PRAGMA wal_checkpoint(TRUNCATE)` so the
+`ccrecall.db-wal` sidecar is reset to 0 bytes after every reindex. On a
+long-running daemon you should see WAL hovering near 0 most of the time,
+spiking briefly while a batch runs.
+
+If you ever see WAL growing unboundedly (close to the size of the main
+DB), check stderr for `[indexer] WAL checkpoint busy` warnings — that
+means a reader has been holding a snapshot past `busy_timeout` across
+several consecutive batches and the truncate keeps deferring. Identify
+the offending client and the next clean batch will reclaim the space.
+
 ---
 
 ## Project Structure

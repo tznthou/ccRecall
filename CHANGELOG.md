@@ -11,6 +11,62 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.2.5] — 2026-04-29
+
+### Fixed
+
+- **WAL file growth on long-uptime daemons** (issue #11). `runIndexer` now ends with `PRAGMA wal_checkpoint(TRUNCATE)`, the only checkpoint mode that actually resets the WAL file to 0 bytes on disk. Previously the WAL drifted up to ~1:1 with the main DB between SQLite's passive auto-checkpoints — observed at 624 MB after 8 hours of uptime (issue #11 evidence). PASSIVE/FULL modes were ruled out: they mark frames for reuse but never shrink the on-disk file, so disk-watching operators would still see the growth.
+
+### Motivation
+
+When ccRecall ran 22.9 hours uptime against a real workload, the WAL sidecar reached 6.8 MB — small in absolute terms but unbounded in principle, and the original 8.4-hour / 624 MB observation in issue #11 proved the upper bound was effectively the main DB size. We considered three approaches and picked one:
+
+| Option | Disk shrink | Blocks readers | Verdict |
+|--------|-------------|---------------|---------|
+| Tune `wal_autocheckpoint` smaller | No (passive) | No | Doesn't solve disk visibility |
+| Background timer | Yes | Brief stall | Adds timer lifecycle + race surface |
+| **End-of-batch TRUNCATE** | **Yes** | **Brief, safe at batch end** | Chosen |
+
+Indexer batch end has no concurrent indexer write and HTTP query reads are millisecond-scale, so the brief reader stall is acceptable. If a long-running reader holds a snapshot past `busy_timeout`, SQLite returns `busy=1` and the next batch retries — `console.warn` surfaces this so operators know.
+
+### Why not SIGTERM-only checkpoint
+
+The original quick-fix sketch was "add `wal_checkpoint(TRUNCATE)` to the SIGTERM handler." A standalone reproduction confirmed `db.close()` already triggers SQLite's last-connection truncate (200-session WAL: 4.1 MB → 0 bytes on close), so a SIGTERM hook would have been redundant and would not have addressed the *during-uptime* growth that issue #11 actually documents.
+
+### Tests
+
+- 3 new test cases in `tests/wal-checkpoint.test.ts` covering the method itself (200-session write → TRUNCATE → 0 bytes), idempotency on a clean WAL, and end-to-end indexer integration (50-session batch → WAL = 0 after `runIndexer`).
+- Test count: 492 → 495.
+
+### Quality pipeline
+
+- Codex review (1 Medium fixed): `busy=1` was silently swallowed; now logs `[indexer] WAL checkpoint busy — readers held snapshot; deferred to next batch`.
+- Simplifier (2 fixes): unreachable nullish fallback dropped (`PRAGMA wal_checkpoint` contract guarantees one row); redundant comment block tightened.
+- Security review: C:0 H:0 M:0 L:2 — both Low (log-message diagnostic precision); not fixed per gogo policy.
+- Final verify: build / typecheck / lint / 495 tests all green.
+
+### Upgrade checklist
+
+```bash
+# 1. Install 0.2.5
+npm i -g @tznthou/ccrecall@0.2.5
+
+# 2. Restart daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 3. Verify
+curl -s http://127.0.0.1:7749/health | jq .version
+# Expect: "0.2.5"
+
+# 4. Inspect WAL after the next indexer batch fires
+ls -lah ~/.ccrecall/ccrecall.db-wal
+# Expect: typically 0 bytes (or near-0 if a reader was active during checkpoint)
+```
+
+Closes [#11](https://github.com/tznthou/ccRecall/issues/11).
+
+---
+
 ## [0.2.4] — 2026-04-28
 
 ### Added
