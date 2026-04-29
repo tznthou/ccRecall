@@ -774,6 +774,19 @@ export class Database {
     this.db.close()
   }
 
+  /** Run `PRAGMA wal_checkpoint(TRUNCATE)`. Flushes WAL frames into the main
+   *  DB and resets the WAL file to 0 bytes — this is the only checkpoint mode
+   *  that actually shrinks the WAL file on disk (PASSIVE/FULL leave the file
+   *  at its peak size for frame reuse). Briefly waits for active readers to
+   *  release their snapshots, so call from write-batch boundaries (e.g. end
+   *  of `runIndexer`) where short reader stalls are acceptable. Bounds WAL
+   *  growth on long-uptime daemons (issue #11). */
+  checkpointTruncate(): { busy: number; checkpointed: number } {
+    const rows = this.db.pragma('wal_checkpoint(TRUNCATE)') as Array<{ busy: number; log: number; checkpointed: number }>
+    const r = rows[0] ?? { busy: 0, log: 0, checkpointed: 0 }
+    return { busy: r.busy, checkpointed: r.checkpointed }
+  }
+
   /** Run `PRAGMA integrity_check`. Returns `['ok']` on a clean DB, otherwise one
    *  line per issue (e.g. 'row 48 missing from index idx_memories_access').
    *  Read-only; safe to call on a live WAL DB. Consumed by IntegrityMonitor. */

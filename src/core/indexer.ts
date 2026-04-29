@@ -258,5 +258,17 @@ export async function runIndexer(
     db.rebuildKnowledgeMap(project.projectId)
   }
 
+  // 6. CHECKPOINT — bound WAL growth on long-uptime daemons. TRUNCATE is the
+  // only mode that resets the WAL file to 0 bytes on disk; PASSIVE/FULL leave
+  // it at peak size for frame reuse. Brief reader stall here is acceptable —
+  // batch end has no concurrent indexer write, and HTTP query reads are ms-
+  // scale. Without this, WAL drifts up to ~624 MB after 8h uptime (issue #11).
+  // SQLite returns busy=1 if a reader still holds a snapshot past busy_timeout;
+  // in that rare case TRUNCATE is a no-op and the next batch retries.
+  const cp = db.checkpointTruncate()
+  if (cp.busy !== 0) {
+    console.warn(`[indexer] WAL checkpoint busy — readers held snapshot; deferred to next batch`)
+  }
+
   onProgress?.({ phase: 'done', progress: 100, total, current: total })
 }
