@@ -782,9 +782,8 @@ export class Database {
    *  of `runIndexer`) where short reader stalls are acceptable. Bounds WAL
    *  growth on long-uptime daemons (issue #11). */
   checkpointTruncate(): { busy: number; checkpointed: number } {
-    const rows = this.db.pragma('wal_checkpoint(TRUNCATE)') as Array<{ busy: number; log: number; checkpointed: number }>
-    const r = rows[0] ?? { busy: 0, log: 0, checkpointed: 0 }
-    return { busy: r.busy, checkpointed: r.checkpointed }
+    const rows = this.db.pragma('wal_checkpoint(TRUNCATE)') as Array<{ busy: number; checkpointed: number }>
+    return { busy: rows[0].busy, checkpointed: rows[0].checkpointed }
   }
 
   /** Run `PRAGMA integrity_check`. Returns `['ok']` on a clean DB, otherwise one
