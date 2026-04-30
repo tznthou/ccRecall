@@ -96,6 +96,23 @@ describe('extractOutcome — candidateText', () => {
   it('returns null on empty session', () => {
     expect(extractOutcome([])).toEqual({ candidateText: null, hasCommitInvoked: false, filesTouched: [] })
   })
+
+  it('treats short plain-text outcome as substantial when scorer threshold reached', () => {
+    // Short (<200 chars) plain text without markdown structure — would be dropped
+    // by the length / structural gate alone. Scorer fallback rescues it via
+    // cause-effect + impl-facts + validation hits.
+    const text = 'Root cause: token expiry not propagated in src/auth.ts:42. 495/495 tests pass.'
+    expect(text.length).toBeLessThan(200)
+    const msgs = [makeMsg({ role: 'assistant', contentText: text })]
+    expect(extractOutcome(msgs).candidateText).toBe(text)
+  })
+
+  it('still drops short text that scorer rejects (single weak signal)', () => {
+    // Single category match (decision-language only) — under threshold, no rescue.
+    const text = '我們決定先吃飯'
+    const msgs = [makeMsg({ role: 'assistant', contentText: text })]
+    expect(extractOutcome(msgs).candidateText).toBeNull()
+  })
 })
 
 describe('extractOutcome — commit + files evidence', () => {

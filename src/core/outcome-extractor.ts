@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { ParsedLine } from './types.js'
+import { scoreKnowledgeBearing, KNOWLEDGE_THRESHOLD } from './outcome-scorer.js'
 
 // 從 session 抓「可作為記憶候選的 assistant 文字」+ 結構化證據(filesTouched /
 // hasCommitInvoked),餵 outcome-scorer.ts 評分。與 summarizer.ts inferOutcome 區別：
@@ -33,9 +34,13 @@ function pickLastSubstantialAssistant(messages: ParsedLine[]): string | null {
   return null
 }
 
+// length / markdown 結構是廉價 fast-path;短而高 signal 的純文字結語(例「Root cause:
+// x.ts:42。495/495 tests pass.」)走 scorer 兜底——避免 length gate 在 scorer 之前就濾掉
+// plan 想抓的真實 outcome。summarizer 仍會再跑 scorer 確認 score>=threshold 才 persist。
 function isSubstantial(text: string): boolean {
   if (text.length >= SUBSTANTIAL_MIN_CHARS) return true
-  return STRUCTURAL_RE.test(text)
+  if (STRUCTURAL_RE.test(text)) return true
+  return scoreKnowledgeBearing(text).score >= KNOWLEDGE_THRESHOLD
 }
 
 function collectToolEvidence(messages: ParsedLine[]): { hasCommitInvoked: boolean; filesTouched: string[] } {
