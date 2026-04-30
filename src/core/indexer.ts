@@ -177,6 +177,7 @@ export async function runIndexer(
         tags: summary.tags,
         filesTouched: summary.filesTouched,
         toolsUsed: summary.toolsUsed,
+        harvestText: summary.harvestText,
         sessionFiles,
         messages: toMessageInputs(messages),
       })

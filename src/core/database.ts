@@ -60,6 +60,7 @@ export interface IndexSessionParams {
   tags?: string | null
   filesTouched?: string | null
   toolsUsed?: string | null
+  harvestText?: string | null
   sessionFiles?: SessionFileInput[]
   messages: MessageInput[]
 }
@@ -67,7 +68,7 @@ export interface IndexSessionParams {
 /** sessions 資料表的完整欄位 SELECT 子句（getSessions / getSessionById 共用） */
 const SESSION_SELECT_COLUMNS = `id, project_id, title, message_count, started_at, ended_at, archived,
        summary_text, intent_text, outcome_status, duration_seconds, active_duration_seconds, summary_version,
-       tags, files_touched, tools_used, total_input_tokens, total_output_tokens`
+       tags, files_touched, tools_used, total_input_tokens, total_output_tokens, harvest_text`
 
 interface SessionRow {
   id: string
@@ -88,6 +89,7 @@ interface SessionRow {
   tools_used: string | null
   total_input_tokens: number | null
   total_output_tokens: number | null
+  harvest_text: string | null
 }
 
 function mapSessionRow(r: SessionRow): SessionMeta {
@@ -110,6 +112,7 @@ function mapSessionRow(r: SessionRow): SessionMeta {
     toolsUsed: r.tools_used,
     totalInputTokens: r.total_input_tokens,
     totalOutputTokens: r.total_output_tokens,
+    harvestText: r.harvest_text,
   }
 }
 
@@ -723,6 +726,15 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 21,
+    description: 'add harvest_text column to sessions (issue #18 outcome-based harvesting)',
+    up: (db) => {
+      const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+      if (cols.some(c => c.name === 'harvest_text')) return
+      db.exec('ALTER TABLE sessions ADD COLUMN harvest_text TEXT;')
+    },
+  },
 ]
 
 export class Database {
@@ -1222,8 +1234,8 @@ export class Database {
       const insertResult = this.db.prepare(`
         INSERT INTO sessions (id, project_id, title, message_count, file_path, file_size, file_mtime, started_at, ended_at,
           summary_text, intent_text, outcome_status, outcome_signals, duration_seconds, active_duration_seconds, summary_version,
-          tags, files_touched, tools_used, total_input_tokens, total_output_tokens)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          tags, files_touched, tools_used, total_input_tokens, total_output_tokens, harvest_text)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         params.sessionId, params.projectId, params.title, params.messageCount,
         params.filePath, params.fileSize, params.fileMtime,
@@ -1234,6 +1246,7 @@ export class Database {
         params.tags ?? null,
         params.filesTouched ?? null, params.toolsUsed ?? null,
         totalInput || null, totalOutput || null,
+        params.harvestText ?? null,
       )
       // 新增 sessions_fts 條目（用 INSERT 回傳的 rowid 避免多餘查詢）
       this.db.prepare(
