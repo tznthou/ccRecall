@@ -1,0 +1,129 @@
+// SPDX-License-Identifier: Apache-2.0
+import { describe, it, expect } from 'vitest'
+import { scoreKnowledgeBearing, KNOWLEDGE_THRESHOLD } from '../src/core/outcome-scorer'
+
+describe('scoreKnowledgeBearing — noise short-circuit', () => {
+  it('flags pure short ack tokens (CJK)', () => {
+    expect(scoreKnowledgeBearing('完成').reasons).toEqual(['noise'])
+    expect(scoreKnowledgeBearing('搞定。').reasons).toEqual(['noise'])
+    expect(scoreKnowledgeBearing('好的').reasons).toEqual(['noise'])
+  })
+
+  it('flags pure short ack tokens (EN)', () => {
+    expect(scoreKnowledgeBearing('done').reasons).toEqual(['noise'])
+    expect(scoreKnowledgeBearing('Done.').reasons).toEqual(['noise'])
+    expect(scoreKnowledgeBearing('OK').reasons).toEqual(['noise'])
+  })
+
+  it('does NOT flag long substantive text starting with "done"', () => {
+    const text = 'done — but the migration left orphan rows we need to backfill before cutover'
+    const result = scoreKnowledgeBearing(text)
+    expect(result.reasons).not.toContain('noise')
+  })
+
+  it('does NOT flag short text that is not in the noise vocabulary', () => {
+    expect(scoreKnowledgeBearing('我們改用 SQLite').reasons).not.toContain('noise')
+  })
+})
+
+describe('scoreKnowledgeBearing — decision-language', () => {
+  it('hits CJK decision verbs', () => {
+    expect(scoreKnowledgeBearing('我們決定改用 SQLite 而非 LMDB').reasons).toContain('decision-language')
+    expect(scoreKnowledgeBearing('拍板採用 OIDC trusted publishing').reasons).toContain('decision-language')
+  })
+
+  it('hits EN decision verbs', () => {
+    expect(scoreKnowledgeBearing('We decided to drop the cache layer').reasons).toContain('decision-language')
+    expect(scoreKnowledgeBearing('I chose Option B for migration').reasons).toContain('decision-language')
+  })
+})
+
+describe('scoreKnowledgeBearing — impl-facts', () => {
+  it('hits file:line references', () => {
+    expect(scoreKnowledgeBearing('see src/core/database.ts:1552 for the dedup').reasons).toContain('impl-facts')
+  })
+
+  it('hits commit hash references', () => {
+    expect(scoreKnowledgeBearing('shipped in commit a845338').reasons).toContain('impl-facts')
+  })
+
+  it('hits "wrote/added X.ts" patterns', () => {
+    expect(scoreKnowledgeBearing('Added src/core/outcome-extractor.ts').reasons).toContain('impl-facts')
+  })
+})
+
+describe('scoreKnowledgeBearing — constraints', () => {
+  it('hits CJK constraint verbs', () => {
+    expect(scoreKnowledgeBearing('絕不允許 mock DB').reasons).toContain('constraints')
+    expect(scoreKnowledgeBearing('必須走 OIDC,不可用 token').reasons).toContain('constraints')
+  })
+
+  it('hits EN invariants', () => {
+    expect(scoreKnowledgeBearing('Must not commit .env files').reasons).toContain('constraints')
+    expect(scoreKnowledgeBearing('Never bypass --no-verify').reasons).toContain('constraints')
+  })
+})
+
+describe('scoreKnowledgeBearing — cause-effect', () => {
+  it('hits CJK because/root-cause', () => {
+    expect(scoreKnowledgeBearing('根本原因是 epoch ms 套 TEXT 欄位').reasons).toContain('cause-effect')
+    expect(scoreKnowledgeBearing('因為 ranking 在短文本不穩').reasons).toContain('cause-effect')
+  })
+
+  it('hits EN root cause', () => {
+    expect(scoreKnowledgeBearing('Root cause: WAL never truncates').reasons).toContain('cause-effect')
+    expect(scoreKnowledgeBearing('failed because the FK was broken').reasons).toContain('cause-effect')
+  })
+})
+
+describe('scoreKnowledgeBearing — validation', () => {
+  it('hits CJK 驗證 / 測試 patterns', () => {
+    expect(scoreKnowledgeBearing('已驗證通過,/health 回 ok').reasons).toContain('validation')
+    expect(scoreKnowledgeBearing('測試完成,沒問題').reasons).toContain('validation')
+  })
+
+  it('hits EN test count + verified phrases', () => {
+    expect(scoreKnowledgeBearing('495/495 tests pass').reasons).toContain('validation')
+    expect(scoreKnowledgeBearing('all tests pass after rebase').reasons).toContain('validation')
+    expect(scoreKnowledgeBearing('Verified: WAL stays at 0 bytes').reasons).toContain('validation')
+  })
+})
+
+describe('scoreKnowledgeBearing — threshold + accumulation', () => {
+  it('exposes threshold constant >= 2', () => {
+    expect(KNOWLEDGE_THRESHOLD).toBe(2)
+  })
+
+  it('returns score 0 for plain narrative (no signals)', () => {
+    const text = 'I read three files and looked at the schema migration history.'
+    const result = scoreKnowledgeBearing(text)
+    expect(result.score).toBe(0)
+    expect(result.reasons).toEqual([])
+  })
+
+  it('accumulates score across multiple categories', () => {
+    const text =
+      'We decided to use SQLite. Root cause of the previous failure: WAL never truncates. ' +
+      'Verified: 495/495 tests pass after the change to src/core/database.ts:1552.'
+    const result = scoreKnowledgeBearing(text)
+    expect(result.score).toBeGreaterThanOrEqual(KNOWLEDGE_THRESHOLD)
+    expect(result.reasons).toContain('decision-language')
+    expect(result.reasons).toContain('cause-effect')
+    expect(result.reasons).toContain('validation')
+    expect(result.reasons).toContain('impl-facts')
+  })
+
+  it('scores 1 when only a single category fires (sub-threshold)', () => {
+    const text = '因為這個原因我們才停下來想一下下一步該怎麼走。'
+    const result = scoreKnowledgeBearing(text)
+    expect(result.score).toBe(1)
+    expect(result.reasons).toEqual(['cause-effect'])
+  })
+
+  it('reasons stay unique per category (no double-fire from same category)', () => {
+    const text = '我們決定 + 拍板 + we decided + I chose all in one paragraph'
+    const result = scoreKnowledgeBearing(text)
+    const uniq = new Set(result.reasons)
+    expect(uniq.size).toBe(result.reasons.length)
+  })
+})
