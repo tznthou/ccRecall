@@ -44,18 +44,30 @@ function postJson(
   })
 }
 
-describe('POST /session/end', () => {
+// Outcome-bearing fixture (issue #18 step 3): user prompt → tool work → git
+// commit invocation → last substantial assistant message with cause-effect
+// + impl-facts + validation signals. Designed to clear scorer threshold (>=2).
+const outcomeSession = [
+  { type: 'user', uuid: 'o1', timestamp: '2026-04-15T10:00:00Z', message: { role: 'user', content: 'Fix the login bug in auth.ts' } },
+  { type: 'assistant', uuid: 'o2', timestamp: '2026-04-15T10:01:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Edit', input: { file_path: '/src/auth.ts' } }] } },
+  { type: 'assistant', uuid: 'o3', timestamp: '2026-04-15T10:02:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'git commit -m "fix(auth): propagate token expiry to refresh handler"' } }] } },
+  { type: 'assistant', uuid: 'o4', timestamp: '2026-04-15T10:03:00Z', message: { role: 'assistant', content: '## Auth fix shipped\n\nRoot cause: token expiry was not propagated to the refresh handler in /src/auth.ts:42. After first session expiry the silent fail looked like a stale UI bug.\n\nFix verified: 495/495 tests pass.' } },
+]
+
+// Sub-threshold fixture: short Q&A, no structural markers, no high-signal
+// patterns, no git commit. Indexer must still write the session row, but
+// buildMemoryFromSession must skip the memory.
+const subThresholdSession = [
+  { type: 'user', uuid: 's1', timestamp: '2026-04-15T11:00:00Z', message: { role: 'user', content: 'What time is it' } },
+  { type: 'assistant', uuid: 's2', timestamp: '2026-04-15T11:00:30Z', message: { role: 'assistant', content: 'I cannot tell time directly.' } },
+]
+
+describe('POST /session/end — outcome-bearing session', () => {
   let tmpDir: string
   let db: Database
   let server: http.Server
   let port: number
-  const sessionId = 'test-session-end-001'
-
-  const sampleSession = [
-    { type: 'user', uuid: 'u1', timestamp: '2026-04-15T10:00:00Z', message: { role: 'user', content: 'Fix the login bug in auth.ts' } },
-    { type: 'assistant', uuid: 'u2', timestamp: '2026-04-15T10:01:00Z', message: { role: 'assistant', content: [{ type: 'text', text: 'I will fix the login.' }, { type: 'tool_use', name: 'Edit', input: { file_path: '/src/auth.ts' } }] } },
-    { type: 'assistant', uuid: 'u3', timestamp: '2026-04-15T10:02:00Z', message: { role: 'assistant', content: 'Login bug fixed.' } },
-  ]
+  const sessionId = 'test-session-end-outcome'
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-sessend-'))
@@ -63,7 +75,7 @@ describe('POST /session/end', () => {
     await mkdir(projectDir, { recursive: true })
     await writeFile(
       path.join(projectDir, `${sessionId}.jsonl`),
-      sampleSession.map(l => JSON.stringify(l)).join('\n'),
+      outcomeSession.map(l => JSON.stringify(l)).join('\n'),
     )
 
     db = new Database(path.join(tmpDir, 'test.db'))
@@ -115,7 +127,7 @@ describe('POST /session/end', () => {
     expect((body as { error: string }).error).toMatch(/not found/)
   })
 
-  it('saves a memory from session summary on success', async () => {
+  it('saves a memory whose content is the outcome cluster (NOT the user prompt)', async () => {
     const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
       sessionId,
     })
@@ -125,9 +137,13 @@ describe('POST /session/end', () => {
     expect(b.memoriesSaved).toHaveLength(1)
     expect(b.dryRun).toBe(false)
 
-    const saved = db.queryMemories('auth', 10)
+    const saved = db.queryMemories('Auth fix shipped', 10)
     expect(saved.length).toBeGreaterThan(0)
     expect(saved[0].sessionId).toBe(sessionId)
+    expect(saved[0].content).toContain('Root cause')
+    expect(saved[0].content).not.toContain('[intent]')
+    expect(saved[0].content).not.toContain('Fix the login bug in auth.ts')
+    expect(saved[0].type).toBe('query')
   })
 
   it('is idempotent: repeat call returns existing memory id', async () => {
@@ -157,10 +173,58 @@ describe('POST /session/end', () => {
     }
     expect(b.memoriesSaved).toHaveLength(0)
     expect(b.dryRun).toBe(true)
-    expect(b.candidate.content).toBeTruthy()
+    expect(b.candidate.content).toContain('Root cause')
     expect(db.getMemoryCount()).toBe(0)
   })
+})
 
+describe('POST /session/end — sub-threshold session (no harvest)', () => {
+  let tmpDir: string
+  let db: Database
+  let server: http.Server
+  let port: number
+  const sessionId = 'test-session-end-subthreshold'
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-sessend-sub-'))
+    const projectDir = path.join(tmpDir, 'projects', '-test-project-sub')
+    await mkdir(projectDir, { recursive: true })
+    await writeFile(
+      path.join(projectDir, `${sessionId}.jsonl`),
+      subThresholdSession.map(l => JSON.stringify(l)).join('\n'),
+    )
+
+    db = new Database(path.join(tmpDir, 'test.db'))
+    await runIndexer(db, undefined, path.join(tmpDir, 'projects'))
+
+    server = createServer(db)
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        port = (server.address() as { port: number }).port
+        resolve()
+      })
+    })
+  })
+
+  afterEach(async () => {
+    server.close()
+    db.close()
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('skips memory but keeps session row when no candidate clears threshold', async () => {
+    const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId,
+    })
+    expect(status).toBe(200)
+    const b = body as { ok: boolean; memoriesSaved: number[]; reason?: string }
+    expect(b.ok).toBe(true)
+    expect(b.memoriesSaved).toHaveLength(0)
+    expect(b.reason).toBeTruthy()
+
+    expect(db.getSessionById(sessionId)).not.toBeNull()
+    expect(db.getMemoryCount()).toBe(0)
+  })
 })
 
 describe('POST /session/end — rescue reindex (fresh session race)', () => {
@@ -170,11 +234,6 @@ describe('POST /session/end — rescue reindex (fresh session race)', () => {
   let port: number
   const freshSessionId = 'fresh-session-rescue-001'
 
-  const sampleSession = [
-    { type: 'user', uuid: 'r1', timestamp: '2026-04-17T10:00:00Z', message: { role: 'user', content: 'Deploy to staging' } },
-    { type: 'assistant', uuid: 'r2', timestamp: '2026-04-17T10:01:00Z', message: { role: 'assistant', content: 'Deploy complete.' } },
-  ]
-
   beforeEach(async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-rescue-'))
     const projectsDir = path.join(tmpDir, 'projects')
@@ -182,7 +241,7 @@ describe('POST /session/end — rescue reindex (fresh session race)', () => {
     await mkdir(projectDir, { recursive: true })
     await writeFile(
       path.join(projectDir, `${freshSessionId}.jsonl`),
-      sampleSession.map(l => JSON.stringify(l)).join('\n'),
+      outcomeSession.map(l => JSON.stringify(l)).join('\n'),
     )
 
     db = new Database(path.join(tmpDir, 'test.db'))
@@ -229,7 +288,6 @@ describe('POST /session/end — rescue reindex (fresh session race)', () => {
   it('rescue failure does not crash: returns 404 if session still missing', async () => {
     server.close()
     await new Promise(resolve => server.on('close', resolve))
-    // Replace server with one whose rescue throws — mimics indexer error.
     server = createServer(db, {
       rescueReindex: async () => { throw new Error('indexer failed') },
     })
@@ -252,21 +310,22 @@ describe('session-end helpers (unit)', () => {
     id: 's1',
     projectId: 'p1',
     title: 't',
-    messageCount: 3,
+    messageCount: 4,
     startedAt: '2026-04-15T10:00:00Z',
     endedAt: '2026-04-15T10:05:00Z',
     archived: false,
-    summaryText: 'Fixed auth bug; tests green.',
-    intentText: 'fix login',
-    outcomeStatus: null,
+    summaryText: 'Fix shipped | Edit×1, Bash×1, 1 files | → committed',
+    intentText: 'Fix the login bug in auth.ts',
+    outcomeStatus: 'committed',
     durationSeconds: 300,
     activeDurationSeconds: 250,
-    summaryVersion: 1,
+    summaryVersion: 2,
     tags: null,
-    filesTouched: null,
-    toolsUsed: null,
+    filesTouched: '/src/auth.ts',
+    toolsUsed: 'Edit:1,Bash:1',
     totalInputTokens: null,
     totalOutputTokens: null,
+    harvestText: '## Auth fix shipped\n\nRoot cause: token expiry not propagated. Fix verified: 495/495 tests pass at /src/auth.ts:42.',
   }
 
   it('inferConfidence: committed 0.9, tested 0.8, else 0.7', () => {
@@ -276,30 +335,28 @@ describe('session-end helpers (unit)', () => {
     expect(inferConfidence(null)).toBe(0.7)
   })
 
-  it('buildMemoryFromSession: returns null when summary empty', () => {
-    expect(buildMemoryFromSession({ ...baseSession, summaryText: null })).toBeNull()
-    expect(buildMemoryFromSession({ ...baseSession, summaryText: '   ' })).toBeNull()
+  it('buildMemoryFromSession: returns null when harvestText empty', () => {
+    expect(buildMemoryFromSession({ ...baseSession, harvestText: null })).toBeNull()
+    expect(buildMemoryFromSession({ ...baseSession, harvestText: '   ' })).toBeNull()
   })
 
-  it('buildMemoryFromSession: uses intent + summary in content', () => {
+  it('buildMemoryFromSession: content is harvestText verbatim — no [intent] prefix, no summary join', () => {
     const result = buildMemoryFromSession(baseSession)
     expect(result).not.toBeNull()
-    expect(result!.content).toBe('[intent] fix login\nFixed auth bug; tests green.')
+    expect(result!.content).toBe(baseSession.harvestText!.trim())
+    expect(result!.content).not.toContain('[intent]')
+    expect(result!.content).not.toContain('Fix the login bug in auth.ts')
+    expect(result!.content).not.toContain('| Edit×1')
     expect(result!.sessionId).toBe('s1')
     expect(result!.messageId).toBeNull()
   })
 
-  it('buildMemoryFromSession: omits intent when empty', () => {
-    const result = buildMemoryFromSession({ ...baseSession, intentText: null })
-    expect(result!.content).toBe('Fixed auth bug; tests green.')
-  })
-
   it('buildMemoryFromSession: type=query invariant across ALL outcomes (Issue #19), confidence varies', () => {
-    // Pre-0.2.5 harvester used outcome→decision/discovery classification, producing
-    // semantically meaningless labels (`/model` stored as both decision and discovery
-    // across sessions). 0.2.5 hard-coded type='query' to drop classification entirely.
-    // This test guards against regression to outcome-based typing — auto-harvest
-    // type must be 'query' for every outcome value.
+    // Pre-0.2.5 harvester used outcome→decision/discovery classification. 0.2.5
+    // hard-coded type='query' to drop classification; #18 keeps that invariant
+    // unchanged while switching the source from intent to harvestText. Auto-
+    // harvest type must remain 'query' for every outcome value — semantic kind
+    // (decision/discovery) stays the realm of explicit recall_save until #21.
     const cases: Array<[OutcomeStatus, number]> = [
       ['committed', 0.9],
       ['tested', 0.8],
@@ -313,16 +370,16 @@ describe('session-end helpers (unit)', () => {
     }
   })
 
-  it('buildMemoryFromSession: skips noise prompts (slash command / progress shell / reflection)', () => {
-    expect(buildMemoryFromSession({ ...baseSession, intentText: '/clear', summaryText: '/clear | Edit×1' })).toBeNull()
-    expect(buildMemoryFromSession({ ...baseSession, intentText: '繼續我們的進度', summaryText: '繼續我們的進度 | Edit×3' })).toBeNull()
-    expect(buildMemoryFromSession({ ...baseSession, intentText: '我們剛是不是討論到 X', summaryText: 's' })).toBeNull()
-  })
-
-  it('buildMemoryFromSession: keeps audit query carrying concrete technical detail', () => {
-    const intent = '確認一下工作進度,以及目前我們在CCRecall的MCP裡面,現在存了多少筆記憶,容量又是多少?'
-    const result = buildMemoryFromSession({ ...baseSession, intentText: intent, summaryText: 'audit summary' })
-    expect(result).not.toBeNull()
-    expect(result!.type).toBe('query')
+  it('buildMemoryFromSession: ignores intent / summary / outcome when harvestText is null', () => {
+    // Old source (intentText + summaryText) MUST NOT leak back as a fallback —
+    // otherwise the 60-80% planned write reduction collapses.
+    const result = buildMemoryFromSession({
+      ...baseSession,
+      harvestText: null,
+      intentText: 'A real-looking decision intent',
+      summaryText: 'A summary that would have passed isHarvestNoise',
+      outcomeStatus: 'committed',
+    })
+    expect(result).toBeNull()
   })
 })
