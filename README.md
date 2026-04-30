@@ -11,6 +11,16 @@ A local memory service for Claude Code — indexes your conversation history, re
 
 ---
 
+> ⚠️ **v0.2.6 — English coverage caveat**
+>
+> The harvester's knowledge-bearing scorer (introduced in v0.2.6) was corpus-validated against Mandarin Chinese sessions only. Each of the 5 signal categories ships with 1–3 anchor patterns per language as plan-time scaffolding. **English-language sessions may see a higher skip rate than expected** — the harvester will write fewer new memories until pattern coverage expands.
+>
+> If you observe English outcome sessions failing to harvest, please contribute a redacted excerpt at [issue #23](https://github.com/tznthou/ccRecall/issues/23) — that's the corpus we need to expand coverage deliberately rather than by guesswork.
+>
+> Memories accumulated pre-v0.2.6 are preserved; a separate cleanup release will purge legacy noise after a 7-day observation window.
+
+---
+
 ## Core Concept
 
 Every time you start a new Claude Code session, the AI forgets everything. The architecture you spent 20 minutes explaining, the bug you debugged together, the decisions you made — all gone. You start over.

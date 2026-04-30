@@ -8,6 +8,74 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.2.6] — 2026-04-30
+
+### 變更
+
+- **Harvester 抓取來源由「first user prompt」翻為「outcome cluster」**（closes #18）。0.2.6 之前的 harvester 抓 user 第一句 prompt 標 `type='query'`——線上 audit（n=104）顯示 94% 雜訊、**自動 harvester 抓的 100 筆裡 0 筆是真實知識**;4 筆高品質寫入全來自 manual `recall_save`。新 pipeline 改抓 session 內最後一段 substantial assistant text,過 5 類規則式 scorer（decision-language / impl-facts / constraints / cause-effect / validation,門檻 ≥ 2）才寫入。
+
+### 新增
+
+- `src/core/outcome-extractor.ts`——挑出 session 內最後一段 substantial assistant text。`isSubstantial()` 三條 branch:長度 ≥ 200 chars、markdown 結構（header / fenced code / bullet / checkbox）、或過 scorer 門檻。
+- `src/core/outcome-scorer.ts`——5 類 regex scorer,內建 noise short-circuit（`done` / `完成` / `ok` 等短 ack token 直接歸 0,避免被 weak signal 累計湊到門檻）。
+- Schema migration **v21**:`sessions` 表加 `harvest_text TEXT` 欄。Idempotent ALTER TABLE,forward-only——既有 sessions 的 `harvest_text` 維持 NULL（by design）。
+- `MAX_HARVEST_LEN = 2000` 截斷上限,寫入前 trim,對齊讀取端的 `<300 tokens per memory` 注入預算。
+
+### ⚠️ 已知限制——英文覆蓋率
+
+Scorer 的 pattern set 只在**繁中 session 上做過 corpus 實測**（維護者自己 dogfood 的 ccRecall DB):
+
+- A 組:91 筆 noise sub-threshold(90/91 = 98.9%)
+- B 組:50 筆 outcome session(49/50 sub-threshold = 98%)
+
+每個 category 起手 1-3 個 anchor pattern 是 plan-time scaffolding。**英文 session 過門檻機率比 plan-target 60-80% skip rate 暗示的還低**——對純英文 user 來說,在 pattern 覆蓋擴充之前,harvester 寫進來的新記憶會比預期少。
+
+追蹤:[issue #23](https://github.com/tznthou/ccRecall/issues/23)。如果觀察到英文 session 該抓的 outcome 沒被抓到,請去那條 issue 留 redacted 對話片段。當 3+ 條 report 收斂到同一 category 的 gap,我們會擴 anchor patterns 並用該 corpus 重做驗證,而不是靠猜。
+
+### Migration notes
+
+- Migration v21 是 **forward-only**。0.2.6 之前 indexed 的 sessions `harvest_text` 維持 NULL,不進新 harvest pipeline。Indexer 重 fire 只看 `mtime` 變化(`indexer.ts:95`),`SUMMARY_VERSION` 1→2 刻意不觸發歷史 sessions 全 reindex。
+- 0.2.6 之前累積的 memories **保留**。另一個 cleanup release 會清掉 `[intent]` 前綴的舊雜訊(條件:`access_count = 0 AND type = 'query' AND content LIKE '[intent]%'`),配 backup table 跟 7 天觀察期。
+- `buildMemoryFromSession` 嚴格 no-fallback contract:`harvestText` 為 NULL 時,`intentText` / `summaryText` / `outcomeStatus` 全部忽略,回 `null`,`/session/end` 回 `reason: 'session has no summary'`。
+
+### 測試
+
+- 34 條新 unit test 涵蓋 extractor(10)+ scorer(20)+ `tests/session-end.test.ts` 4 條 no-fallback contract test。
+- 測試數:528 → 524(淨 -4;新增 34、刪掉 6 條 dead `collectToolEvidence` evidence test、其他併整)。
+- 沒有為了通過測試軟化斷言——`session-end.test.ts` fixture 重寫的 commit message 寫清「sample session 換成 outcome cluster 是需求變更(issue #18 翻 source 後 invariant 翻轉),不是改測試符合實作」。
+
+### 品質流水線
+
+- **Codex review**(2 中修 1):M1 `isSubstantial()` 加 scorer fallback,讓短純文字 outcome(<200 chars 無 markdown)如「Root cause: x.ts:42. 495/495 tests pass.」不會在 scorer 之前就被 length gate 砍掉。M2(把 `hasCommitInvoked`/`filesTouched` 包進 `harvestText`)decline——minimal `{lastAssistantText}` payload 是 plan-critic round 2 刻意設計,避免結構化雜訊污染 FTS5 ranking。
+- **Simplify**(7 中採 4):砍 dead `collectToolEvidence` + evidence tests(grep 全 src/ 無 downstream consumer);structural regex 改成 `ReadonlyArray<RegExp>` 對齊 codebase idiom;`IMPL_FACTS` 副檔名清單對齊 + 加 `\b`;trim 掉指向已移除 `isHarvestNoise` overlap 的過時 comment。3 條 decline:`harvester-filter.ts` orphan 出 scope、其餘 JSON.parse consolidation 是 pre-existing。
+- **Security review**(Critical:0 High:0 Medium:2 Low:2):兩條 Medium 一處解——A10 `harvest_text` 寫入 DB 沒上限 + A09 dry-run `candidate.content` 在 response JSON 沒截斷,都靠 `MAX_HARVEST_LEN = 2000` cap 解掉。兩條 Low report 不修(gogo policy)。
+- **Final verify**:build / typecheck / lint / 524 tests 全綠。
+
+### 升版步驟
+
+```bash
+# 1. Migration v21 之前先備份(建議——Code Protection Protocol)
+cp ~/.ccrecall/ccrecall.db ~/.ccrecall/ccrecall.db.pre-issue18.$(date +%Y%m%d).bak
+
+# 2. 安裝 0.2.6
+npm i -g @tznthou/ccrecall@0.2.6
+
+# 3. 重啟 daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 4. 驗證版本 + integrity
+curl -s http://127.0.0.1:7749/health | jq .
+# 期望:version="0.2.6"、lastIntegrityCheckOk=true
+# (sessions 表多了 harvest_text 欄,既有 row 為 NULL by design)
+
+# 5. 7 天觀察期後手動清 backup
+rm ~/.ccrecall/ccrecall.db.pre-issue18.*.bak
+```
+
+Closes [#18](https://github.com/tznthou/ccRecall/issues/18)。追蹤限制:[#23](https://github.com/tznthou/ccRecall/issues/23)。
+
+---
+
 ## [0.2.5] — 2026-04-29
 
 ### 修正

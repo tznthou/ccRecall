@@ -11,6 +11,74 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.2.6] — 2026-04-30
+
+### Changed
+
+- **Harvester source-of-truth switched from "first user prompt" to "outcome cluster"** (closes #18). The pre-0.2.6 harvester captured the first user prompt and labeled it `type='query'` — a live audit (n=104) showed 94% noise and **zero genuine knowledge entries from the auto-harvester**; all 4 high-quality entries came from manual `recall_save`. The new pipeline picks the last substantial assistant message from a session and gates harvest on a 5-category rule-based scorer (decision-language / impl-facts / constraints / cause-effect / validation), threshold ≥ 2.
+
+### Added
+
+- `src/core/outcome-extractor.ts` — picks the last substantial assistant text. `isSubstantial()` has three branches: length ≥ 200 chars, markdown structure (header / fenced code / bullet / checkbox), or scorer threshold reached.
+- `src/core/outcome-scorer.ts` — 5-category regex scorer with internal noise short-circuit (drops bare ack tokens like `done` / `完成` / `ok` before they accumulate weak signals).
+- Schema migration **v21**: adds `harvest_text TEXT` column to the `sessions` table. Idempotent ALTER TABLE, forward-only — existing sessions keep `harvest_text = NULL` by design.
+- `MAX_HARVEST_LEN = 2000` truncation cap on harvested text before persistence (aligned with the read-side `<300 tokens per memory` injection budget).
+
+### ⚠️ Known limitation — English coverage
+
+The scorer's pattern set was corpus-validated against **Mandarin Chinese sessions only** (the maintainer's own dogfooded ccRecall DB):
+
+- Group A: 91 noise sub-threshold (90/91 = 98.9%)
+- Group B: 50 outcome sessions (49/50 sub-threshold = 98%)
+
+Each of the 5 categories ships with 1–3 anchor patterns per language as plan-time scaffolding. **English-language sessions are likely to clear the threshold less often than the plan-target 60–80% skip rate suggests** — the harvester will write fewer new memories than expected for English-only adopters until pattern coverage expands.
+
+Tracking: [issue #23](https://github.com/tznthou/ccRecall/issues/23). Contribute a redacted excerpt of an English session that should have harvested but didn't, and we'll extend anchors deliberately when 3+ corroborating reports converge on a category gap.
+
+### Migration notes
+
+- Migration v21 is **forward-only**. Sessions indexed before v0.2.6 keep `harvest_text = NULL` and stay outside the new harvest pipeline. The indexer fires only when `mtime` changes (`indexer.ts:95`), and the SUMMARY_VERSION bump 1→2 deliberately does not trigger a full reindex of historical sessions.
+- Existing memories from pre-v0.2.6 versions are **preserved**. A separate cleanup release will purge `[intent]`-prefixed legacy noise (matching `access_count = 0 AND type = 'query' AND content LIKE '[intent]%'`) with a backup table and 7-day observation window.
+- Strict no-fallback contract in `buildMemoryFromSession`: when `harvestText` is `NULL`, `intentText` / `summaryText` / `outcomeStatus` are all ignored. Returns `null` so `/session/end` reports `reason: 'session has no summary'`.
+
+### Tests
+
+- 34 new unit tests covering extractor (10) + scorer (20) + 4 in `tests/session-end.test.ts` for the no-fallback contract.
+- Test count: 528 → 524 (–4 net; +34 new, –6 dead `collectToolEvidence` evidence tests deleted during simplify, plus other consolidations).
+- No assertion softening — `session-end.test.ts` fixture rewrites are documented as needs change driven by issue #18 (outcome cluster replaces intent+summary), not silent test softening.
+
+### Quality pipeline
+
+- **Codex review** (1 of 2 fixed): M1 `isSubstantial()` scorer fallback added so short plain-text outcomes (< 200 chars, no markdown) like `Root cause: x.ts:42. 495/495 tests pass.` are not silently dropped before scoring. M2 (folding `hasCommitInvoked`/`filesTouched` into `harvestText`) declined — minimal `{lastAssistantText}` payload was a deliberate plan-critic round-2 design to avoid structural noise polluting FTS5 ranking.
+- **Simplify** (4 of 7 applied): drop unused `collectToolEvidence` + evidence tests (verified zero downstream consumers via grep); align structural regex to the project's `ReadonlyArray<RegExp>` idiom; align `IMPL_FACTS` extension list and add trailing `\b`; trim stale comment that referenced no-longer-existing `isHarvestNoise` overlap. 3 declined: `harvester-filter.ts` orphaning is out-of-scope, remaining JSON.parse consolidation is pre-existing.
+- **Security review** (Critical:0 High:0 Medium:2 Low:2): both Mediums solved at one change point — A10 unbounded `harvest_text` write to DB and A09 dry-run `candidate.content` exposure — by the `MAX_HARVEST_LEN = 2000` cap. Two Lows reported but not fixed per gogo policy.
+- **Final verify**: build / typecheck / lint / 524 tests all green.
+
+### Upgrade checklist
+
+```bash
+# 1. Back up the DB before migration v21 (recommended — Code Protection Protocol)
+cp ~/.ccrecall/ccrecall.db ~/.ccrecall/ccrecall.db.pre-issue18.$(date +%Y%m%d).bak
+
+# 2. Install 0.2.6
+npm i -g @tznthou/ccrecall@0.2.6
+
+# 3. Restart daemon
+launchctl kickstart -k gui/$(id -u)/com.tznthou.ccrecall
+
+# 4. Verify version + integrity
+curl -s http://127.0.0.1:7749/health | jq .
+# Expect: version="0.2.6", lastIntegrityCheckOk=true
+# (sessions table now has harvest_text column; existing rows are NULL by design)
+
+# 5. After 7 days of clean operation, remove the backup
+rm ~/.ccrecall/ccrecall.db.pre-issue18.*.bak
+```
+
+Closes [#18](https://github.com/tznthou/ccRecall/issues/18). Tracking limitation: [#23](https://github.com/tznthou/ccRecall/issues/23).
+
+---
+
 ## [0.2.5] — 2026-04-29
 
 ### Fixed

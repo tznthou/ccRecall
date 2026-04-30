@@ -11,6 +11,16 @@ Claude Code 的本地記憶服務——索引你的對話歷史，按需召回�
 
 ---
 
+> ⚠️ **v0.2.6 — 英文覆蓋率說明**
+>
+> v0.2.6 引入的 outcome scorer 採用「5 類訊號 × 每語言 1–3 個 anchor pattern」的規則式評分,但 corpus 實測只跑過繁中 session（維護者自己 dogfood 的 dataset）。**英文 session 的 skip rate 可能高於預期**——直到 pattern 覆蓋擴充之前,harvester 會寫進來的新記憶較少。
+>
+> 如果觀察到英文 session 該抓的 outcome 沒被抓到,請到 [issue #23](https://github.com/tznthou/ccRecall/issues/23) 留 redacted 對話片段——這是我們擴充 corpus 唯一需要的資訊,讓 pattern 依證據成長而不是靠猜。
+>
+> v0.2.6 之前累積的 memories 會保留;另一個 cleanup release 會在 7 天觀察期後清掉舊雜訊。
+
+---
+
 ## 核心概念
 
 每次開一個新的 Claude Code session，AI 就完全失憶。花 20 分鐘講清楚的架構、一起 debug 的那個 bug、做過的決策——全部歸零，下次重來。
