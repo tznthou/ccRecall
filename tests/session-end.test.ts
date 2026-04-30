@@ -11,7 +11,7 @@ import {
   inferConfidence,
   buildMemoryFromSession,
 } from '../src/api/routes.js'
-import type { SessionMeta } from '../src/core/types.js'
+import type { OutcomeStatus, SessionMeta } from '../src/core/types.js'
 
 function postJson(
   url: string,
@@ -294,14 +294,23 @@ describe('session-end helpers (unit)', () => {
     expect(result!.content).toBe('Fixed auth bug; tests green.')
   })
 
-  it('buildMemoryFromSession: hook auto-harvest is always type=query, confidence varies by outcome', () => {
-    const committed = buildMemoryFromSession({ ...baseSession, outcomeStatus: 'committed' })
-    expect(committed!.type).toBe('query')
-    expect(committed!.confidence).toBe(0.9)
-
-    const tested = buildMemoryFromSession({ ...baseSession, outcomeStatus: 'tested' })
-    expect(tested!.type).toBe('query')
-    expect(tested!.confidence).toBe(0.8)
+  it('buildMemoryFromSession: type=query invariant across ALL outcomes (Issue #19), confidence varies', () => {
+    // Pre-0.2.5 harvester used outcome→decision/discovery classification, producing
+    // semantically meaningless labels (`/model` stored as both decision and discovery
+    // across sessions). 0.2.5 hard-coded type='query' to drop classification entirely.
+    // This test guards against regression to outcome-based typing — auto-harvest
+    // type must be 'query' for every outcome value.
+    const cases: Array<[OutcomeStatus, number]> = [
+      ['committed', 0.9],
+      ['tested', 0.8],
+      ['in-progress', 0.7],
+      [null, 0.7],
+    ]
+    for (const [outcome, expectedConfidence] of cases) {
+      const result = buildMemoryFromSession({ ...baseSession, outcomeStatus: outcome })
+      expect(result!.type).toBe('query')
+      expect(result!.confidence).toBe(expectedConfidence)
+    }
   })
 
   it('buildMemoryFromSession: skips noise prompts (slash command / progress shell / reflection)', () => {
