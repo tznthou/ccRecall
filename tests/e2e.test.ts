@@ -59,10 +59,14 @@ describe('E2E: index → search → HTTP', () => {
   let server: http.Server
   let port: number
 
+  // issue #18: harvest source switched from first user prompt to scored outcome
+  // cluster — sample needs commit invocation + a last assistant message that
+  // clears scorer threshold (cause-effect + impl-facts + validation = 3 cats).
   const sampleSession = [
     { type: 'user', uuid: 'u1', timestamp: '2026-04-15T10:00:00Z', message: { role: 'user', content: 'Fix the authentication bug in login.ts' } },
-    { type: 'assistant', uuid: 'u2', timestamp: '2026-04-15T10:01:00Z', message: { role: 'assistant', content: [{ type: 'text', text: 'I will fix the authentication issue.' }, { type: 'tool_use', name: 'Edit', input: { file_path: '/src/login.ts' } }] } },
-    { type: 'assistant', uuid: 'u3', timestamp: '2026-04-15T10:02:00Z', message: { role: 'assistant', content: 'The authentication bug has been fixed.' } },
+    { type: 'assistant', uuid: 'u2', timestamp: '2026-04-15T10:01:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Edit', input: { file_path: '/src/login.ts' } }] } },
+    { type: 'assistant', uuid: 'u3', timestamp: '2026-04-15T10:02:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'git commit -m "fix(auth): propagate token in login flow"' } }] } },
+    { type: 'assistant', uuid: 'u4', timestamp: '2026-04-15T10:03:00Z', message: { role: 'assistant', content: '## Authentication fix shipped\n\nRoot cause: login flow at /src/login.ts:88 was not propagating the session token. Fix verified: 495/495 tests pass.' } },
   ]
 
   beforeEach(async () => {
