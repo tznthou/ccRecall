@@ -9,8 +9,8 @@
 // 每類的 patterns 數量會在 commit 1 corpus(線上 89 筆 + 10 outcome session)實測後決定擴增,
 // 避免上線一發就靠拍腦袋。
 //
-// 內部 noise short-circuit 取代獨立 isAssistantNoise 檔——避免 routes 層 isHarvestNoise 跟
-// 此處 noise filter 邏輯重疊。Pattern 仿 harvester-filter.ts(先中後英、明確 anchor)。
+// 內部 noise short-circuit:assistant 端短 ack token(done / 完成 / ok)單獨命中時直接歸 0,
+// 避免被下面的 weak-signal 累計湊到 threshold。Pattern 採 anchored-only 設計,長文本不誤殺。
 
 const NOISE_MAX_LEN = 50
 
@@ -36,8 +36,8 @@ const DECISION_LANGUAGE: SignalCategory = {
 const IMPL_FACTS: SignalCategory = {
   name: 'impl-facts',
   patterns: [
-    /[`\w./_-]+\.(?:ts|tsx|js|jsx|py|go|rs|sql|md):\d+/,
-    /\b(?:added|created|wrote|implemented)\s+[`\w./_-]+\.(?:ts|tsx|js|py|go|rs)/i,
+    /[`\w./_-]+\.(?:tsx|ts|jsx|js|py|go|rs|sql|md):\d+/,
+    /\b(?:added|created|wrote|implemented)\s+[`\w./_-]+\.(?:tsx|ts|jsx|js|py|go|rs|sql|md)\b/i,
     /\bcommit\s+[a-f0-9]{6,}\b/i,
   ],
 }
