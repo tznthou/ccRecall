@@ -10,6 +10,11 @@ const MAX_INTENT_LEN = 120
 const MAX_SUMMARY_LEN = 300
 const MAX_ACTIVITY_LEN = 80
 const MAX_FILES = 30
+// Truncation cap for harvested assistant text before persisting to sessions.harvest_text
+// (and downstream memories.content via buildMemoryFromSession). Aligns with the
+// "<300 tokens per memory" injection budget — 2000 chars covers mixed CJK/EN at
+// ~500-1000 tokens, leaving headroom for budget guards on the read side.
+const MAX_HARVEST_LEN = 2000
 
 // ── Noise Filter ──
 
@@ -433,7 +438,7 @@ export function summarizeSession(
   if (extraction.candidateText) {
     const result = scoreKnowledgeBearing(extraction.candidateText)
     if (result.score >= KNOWLEDGE_THRESHOLD) {
-      harvestText = extraction.candidateText
+      harvestText = truncate(extraction.candidateText, MAX_HARVEST_LEN)
     }
   }
 
