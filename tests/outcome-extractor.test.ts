@@ -27,18 +27,6 @@ function makeMsg(opts: Partial<ParsedLine>): ParsedLine {
   }
 }
 
-function toolUseMsg(blocks: Array<{ name: string; input: Record<string, unknown> }>): ParsedLine {
-  const json = JSON.stringify(
-    blocks.map(b => ({ type: 'tool_use', name: b.name, input: b.input })),
-  )
-  return makeMsg({
-    role: 'assistant',
-    hasToolUse: true,
-    contentJson: json,
-    toolNames: blocks.map(b => b.name),
-  })
-}
-
 describe('extractOutcome — candidateText', () => {
   it('picks last assistant message with >=200 chars', () => {
     const long = 'x'.repeat(250)
@@ -94,7 +82,7 @@ describe('extractOutcome — candidateText', () => {
   })
 
   it('returns null on empty session', () => {
-    expect(extractOutcome([])).toEqual({ candidateText: null, hasCommitInvoked: false, filesTouched: [] })
+    expect(extractOutcome([])).toEqual({ candidateText: null })
   })
 
   it('treats short plain-text outcome as substantial when scorer threshold reached', () => {
@@ -112,54 +100,5 @@ describe('extractOutcome — candidateText', () => {
     const text = '我們決定先吃飯'
     const msgs = [makeMsg({ role: 'assistant', contentText: text })]
     expect(extractOutcome(msgs).candidateText).toBeNull()
-  })
-})
-
-describe('extractOutcome — commit + files evidence', () => {
-  it('detects git commit invocation in Bash tool_use', () => {
-    const msgs = [toolUseMsg([{ name: 'Bash', input: { command: 'git commit -m "feat: x"' } }])]
-    expect(extractOutcome(msgs).hasCommitInvoked).toBe(true)
-  })
-
-  it('does not flag git status / git diff as commit', () => {
-    const msgs = [toolUseMsg([{ name: 'Bash', input: { command: 'git status && git diff' } }])]
-    expect(extractOutcome(msgs).hasCommitInvoked).toBe(false)
-  })
-
-  it('collects file_path from Edit and Write tools, dedups', () => {
-    const msgs = [
-      toolUseMsg([{ name: 'Edit', input: { file_path: '/a/b.ts', old_string: '', new_string: '' } }]),
-      toolUseMsg([{ name: 'Write', input: { file_path: '/c/d.ts', content: '' } }]),
-      toolUseMsg([{ name: 'Edit', input: { file_path: '/a/b.ts', old_string: 'x', new_string: 'y' } }]),
-    ]
-    const result = extractOutcome(msgs)
-    expect(result.filesTouched.sort()).toEqual(['/a/b.ts', '/c/d.ts'])
-  })
-
-  it('ignores Read / Grep / Bash for filesTouched', () => {
-    const msgs = [
-      toolUseMsg([{ name: 'Read', input: { file_path: '/should-not-count.ts' } }]),
-      toolUseMsg([{ name: 'Grep', input: { pattern: 'foo', path: '/x' } }]),
-      toolUseMsg([{ name: 'Bash', input: { command: 'cat foo' } }]),
-    ]
-    expect(extractOutcome(msgs).filesTouched).toEqual([])
-  })
-
-  it('survives malformed contentJson without throwing', () => {
-    const msgs = [
-      makeMsg({ role: 'assistant', hasToolUse: true, contentJson: '{not valid json' }),
-      toolUseMsg([{ name: 'Bash', input: { command: 'git commit -m "ok"' } }]),
-    ]
-    const result = extractOutcome(msgs)
-    expect(result.hasCommitInvoked).toBe(true)
-  })
-
-  it('survives non-array contentJson without throwing', () => {
-    const msgs = [
-      makeMsg({ role: 'assistant', hasToolUse: true, contentJson: '{"type":"text"}' }),
-    ]
-    const result = extractOutcome(msgs)
-    expect(result.hasCommitInvoked).toBe(false)
-    expect(result.filesTouched).toEqual([])
   })
 })

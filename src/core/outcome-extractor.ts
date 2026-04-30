@@ -2,25 +2,25 @@
 import type { ParsedLine } from './types.js'
 import { scoreKnowledgeBearing, KNOWLEDGE_THRESHOLD } from './outcome-scorer.js'
 
-// 從 session 抓「可作為記憶候選的 assistant 文字」+ 結構化證據(filesTouched /
-// hasCommitInvoked),餵 outcome-scorer.ts 評分。與 summarizer.ts inferOutcome 區別：
-// inferOutcome 推 OutcomeStatus(committed/tested/...),本檔挑 last substantial assistant
-// text 並收集旁證——commit 訊號是 ctx,不解 git commit -m 內容(留 follow-up)。
+// 從 session 挑「last substantial assistant text」作為記憶候選,餵 outcome-scorer.ts 評分。
+// 與 summarizer.ts inferOutcome 區別:inferOutcome 推 OutcomeStatus(committed/tested/...),
+// 本檔只解候選文字。Tool 旁證(git commit / files touched)走 inferOutcome 既有路徑——
+// 這裡不重複 parse,避免 summarizeSession 三重 JSON.parse。
 
 export interface OutcomeExtraction {
   candidateText: string | null
-  hasCommitInvoked: boolean
-  filesTouched: string[]
 }
 
 const SUBSTANTIAL_MIN_CHARS = 200
-const STRUCTURAL_RE = /(?:^#{1,6}\s|```|^[-*]\s|\[\s?[xX ]?\s?\])/m
-const GIT_COMMIT_RE = /\bgit\s+commit\b/
+const STRUCTURAL_RES: ReadonlyArray<RegExp> = [
+  /^#{1,6}\s/m,         // markdown header
+  /```/,                // fenced code
+  /^[-*]\s/m,           // bullet list
+  /\[\s?[xX ]?\s?\]/,   // checkbox
+]
 
 export function extractOutcome(messages: ParsedLine[]): OutcomeExtraction {
-  const candidateText = pickLastSubstantialAssistant(messages)
-  const { hasCommitInvoked, filesTouched } = collectToolEvidence(messages)
-  return { candidateText, hasCommitInvoked, filesTouched }
+  return { candidateText: pickLastSubstantialAssistant(messages) }
 }
 
 function pickLastSubstantialAssistant(messages: ParsedLine[]): string | null {
@@ -39,41 +39,6 @@ function pickLastSubstantialAssistant(messages: ParsedLine[]): string | null {
 // plan 想抓的真實 outcome。summarizer 仍會再跑 scorer 確認 score>=threshold 才 persist。
 function isSubstantial(text: string): boolean {
   if (text.length >= SUBSTANTIAL_MIN_CHARS) return true
-  if (STRUCTURAL_RE.test(text)) return true
+  if (STRUCTURAL_RES.some(p => p.test(text))) return true
   return scoreKnowledgeBearing(text).score >= KNOWLEDGE_THRESHOLD
-}
-
-function collectToolEvidence(messages: ParsedLine[]): { hasCommitInvoked: boolean; filesTouched: string[] } {
-  let hasCommitInvoked = false
-  const files = new Set<string>()
-
-  for (const msg of messages) {
-    if (!msg.hasToolUse || !msg.contentJson) continue
-    let blocks: unknown
-    try {
-      blocks = JSON.parse(msg.contentJson)
-    } catch {
-      continue
-    }
-    if (!Array.isArray(blocks)) continue
-
-    for (const block of blocks) {
-      if (typeof block !== 'object' || block === null) continue
-      const b = block as Record<string, unknown>
-      if (b.type !== 'tool_use') continue
-      const name = b.name
-      const input = b.input as Record<string, unknown> | undefined
-      if (!input) continue
-
-      if (name === 'Bash') {
-        const cmd = (input.command as string) ?? ''
-        if (GIT_COMMIT_RE.test(cmd)) hasCommitInvoked = true
-      } else if (name === 'Edit' || name === 'Write') {
-        const fp = input.file_path
-        if (typeof fp === 'string' && fp.length > 0) files.add(fp)
-      }
-    }
-  }
-
-  return { hasCommitInvoked, filesTouched: Array.from(files) }
 }
