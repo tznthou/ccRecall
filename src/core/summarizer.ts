@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { ParsedLine, SessionSummary, OutcomeSignals, OutcomeStatus, FileOperation, SessionFileInput } from './types.js'
+import { extractOutcome } from './outcome-extractor.js'
+import { scoreKnowledgeBearing, KNOWLEDGE_THRESHOLD } from './outcome-scorer.js'
 
 /** 摘要引擎版本（每次規則改動時遞增，讓 backfill 可追蹤） */
-export const SUMMARY_VERSION = 1
+export const SUMMARY_VERSION = 2
 
 const MAX_INTENT_LEN = 120
 const MAX_SUMMARY_LEN = 300
@@ -388,6 +390,7 @@ export function summarizeSession(
     summaryVersion: SUMMARY_VERSION,
     durationSeconds: null,
     activeDurationSeconds: null,
+    harvestText: null,
   }
 
   if (messages.length === 0) {
@@ -423,6 +426,16 @@ export function summarizeSession(
 
   // ── Outcome ──
   const { status: outcomeStatus, signals: outcomeSignals } = inferOutcome(messages)
+
+  // ── Harvest candidate (issue #18: last substantial assistant, scored knowledge-bearing) ──
+  const extraction = extractOutcome(messages)
+  let harvestText: string | null = null
+  if (extraction.candidateText) {
+    const result = scoreKnowledgeBearing(extraction.candidateText)
+    if (result.score >= KNOWLEDGE_THRESHOLD) {
+      harvestText = extraction.candidateText
+    }
+  }
 
   // ── Tags（多信號交叉） ──
   const tagSet = new Set<string>()
@@ -470,6 +483,7 @@ export function summarizeSession(
       summaryVersion: SUMMARY_VERSION,
       durationSeconds,
       activeDurationSeconds,
+      harvestText,
     },
     sessionFiles,
   }

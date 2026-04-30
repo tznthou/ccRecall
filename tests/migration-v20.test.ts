@@ -33,7 +33,10 @@ afterEach(async () => {
  *  on-disk result mirrors what an existing v0.1.7 user's DB looks like before
  *  upgrading to 0.2.0. */
 function rewindToV19(db: Database, seedSql?: string): void {
-  db.rawExec(`DELETE FROM schema_version WHERE version = 20`)
+  // Strip every migration row >= 20 (not just 20) so future migrations stay in
+  // sync. Otherwise reopen sees max version >= 20 and skips v20's destructive
+  // migration (the on-disk legacy tables would never get dropped).
+  db.rawExec(`DELETE FROM schema_version WHERE version >= 20`)
   db.rawExec(`DROP TABLE message_uuids`)
   db.rawExec(`
     CREATE TABLE messages (
@@ -79,7 +82,7 @@ describe('v20 migration — fresh DB state', () => {
   it('new DB arrives at v20 with message_uuids and no legacy message tables', () => {
     const db = new Database(path.join(tmpDir, 'fresh.db'))
     try {
-      expect(db.getSchemaVersion()).toBe(20)
+      expect(db.getSchemaVersion()).toBeGreaterThanOrEqual(20)
 
       const tables = db.rawAll<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
@@ -125,7 +128,7 @@ describe('v20 migration — fresh DB state', () => {
     const dbPath = path.join(tmpDir, 'reopen.db')
 
     const db1 = new Database(dbPath)
-    expect(db1.getSchemaVersion()).toBe(20)
+    expect(db1.getSchemaVersion()).toBeGreaterThanOrEqual(20)
     db1.close()
 
     // On reopen, initSchema re-runs. Legacy messages tables MUST stay dropped —
@@ -147,7 +150,7 @@ describe('v20 migration — fresh DB state', () => {
       expect(triggers).not.toContain('messages_ai')
       expect(triggers).not.toContain('messages_ad')
 
-      expect(db2.getSchemaVersion()).toBe(20)
+      expect(db2.getSchemaVersion()).toBeGreaterThanOrEqual(20)
     } finally {
       db2.close()
     }
@@ -198,7 +201,7 @@ describe('v20 migration — upgrade from simulated v19', () => {
 
     const dbB = new Database(dbPath)
     try {
-      expect(dbB.getSchemaVersion()).toBe(20)
+      expect(dbB.getSchemaVersion()).toBeGreaterThanOrEqual(20)
       expect(existsSync(dbPath + '.pre-v20.bak')).toBe(true)
 
       const uuids = dbB.rawAll<{ uuid: string; session_id: string }>(
@@ -261,7 +264,7 @@ describe('v20 migration — upgrade from simulated v19', () => {
     `)
     // Rewind to a corrupt state: one message row points to a session_id that does
     // not exist in `sessions`, so the backfill JOIN drops it and the count check trips.
-    dbA.rawExec(`DELETE FROM schema_version WHERE version = 20`)
+    dbA.rawExec(`DELETE FROM schema_version WHERE version >= 20`)
     dbA.rawExec(`DROP TABLE message_uuids`)
     dbA.rawExec(`
       CREATE TABLE messages (

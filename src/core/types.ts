@@ -113,6 +113,7 @@ export interface SessionMeta {
   toolsUsed: string | null
   totalInputTokens: number | null
   totalOutputTokens: number | null
+  harvestText: string | null
 }
 
 export type SearchSortBy = 'rank' | 'date'
@@ -200,6 +201,7 @@ export interface SessionSummary {
   summaryVersion: number
   durationSeconds: number | null
   activeDurationSeconds: number | null
+  harvestText: string | null
 }
 
 // ── ccRecall 新增：記憶層型別 ──
