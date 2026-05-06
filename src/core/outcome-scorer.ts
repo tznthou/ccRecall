@@ -19,6 +19,13 @@ const NOISE_RES: ReadonlyArray<RegExp> = [
   /^\s*(?:對|不對|是的|沒錯|好的|yes|no|yep|nope)\s*[.!。!]*\s*$/i,
 ]
 
+// dogfood corpus 實證(2026-05-06): 39 筆 v=2 committed/tested sessions 全部 sub-threshold,
+// 因為 last substantial assistant 抓到 save-t 收尾報告(process meta)而非真實 outcome。
+// Anchor 在開頭(^),長文本 mid-text 提及 save-t 不誤殺。
+const PROCESS_REPORT_RES: ReadonlyArray<RegExp> = [
+  /^[#\s💾🟢✅_*-]*save[\s-]?t\s+(?:完成|流程|done|finished|complete|完整)/iu,
+]
+
 interface SignalCategory {
   readonly name: string
   readonly patterns: ReadonlyArray<RegExp>
@@ -85,6 +92,7 @@ export interface ScoreResult {
 export function scoreKnowledgeBearing(text: string): ScoreResult {
   const trimmed = text.trim()
   if (isAssistantNoise(trimmed)) return { score: 0, reasons: ['noise'] }
+  if (isProcessReport(trimmed)) return { score: 0, reasons: ['process-report'] }
 
   const reasons: string[] = []
   let score = 0
@@ -100,4 +108,8 @@ export function scoreKnowledgeBearing(text: string): ScoreResult {
 function isAssistantNoise(text: string): boolean {
   if (text.length > NOISE_MAX_LEN) return false
   return NOISE_RES.some(p => p.test(text))
+}
+
+export function isProcessReport(text: string): boolean {
+  return PROCESS_REPORT_RES.some(p => p.test(text))
 }
