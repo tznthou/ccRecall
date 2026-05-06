@@ -7,51 +7,7 @@ import http from 'node:http'
 import { Database } from '../src/core/database'
 import { runIndexer } from '../src/core/indexer'
 import { createServer } from '../src/api/server'
-
-function fetch(url: string): Promise<{ status: number; body: unknown }> {
-  return new Promise((resolve, reject) => {
-    http.get(url, (res) => {
-      const chunks: Buffer[] = []
-      res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString())
-        resolve({ status: res.statusCode!, body })
-      })
-      res.on('error', reject)
-    }).on('error', reject)
-  })
-}
-
-function postJson(
-  url: string,
-  payload: unknown,
-  extraHeaders: Record<string, string> = {},
-): Promise<{ status: number; body: unknown }> {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url)
-    const data = JSON.stringify(payload)
-    const req = http.request({
-      hostname: u.hostname, port: u.port, path: u.pathname + u.search,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data),
-        ...extraHeaders,
-      },
-    }, (res) => {
-      const chunks: Buffer[] = []
-      res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString())
-        resolve({ status: res.statusCode!, body })
-      })
-      res.on('error', reject)
-    })
-    req.on('error', reject)
-    req.write(data)
-    req.end()
-  })
-}
+import { postJson, fetchJson as fetch } from './fixtures/helpers.js'
 
 describe('E2E: index → search → HTTP', () => {
   let tmpDir: string

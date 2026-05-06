@@ -3,7 +3,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint, JournalEntry, JournalEntryInput, JournalStatus } from './types.js'
+import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint, JournalEntry, JournalEntryInput, JournalEntryPreview, JournalStatus } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
 
 /** 寫入 memories 時使用的參數型別 */
@@ -200,6 +200,60 @@ function mapCheckpointRow(r: CheckpointRow): SessionCheckpoint {
     sessionId: r.session_id,
     projectId: r.project_id,
     snapshotText: r.snapshot_text,
+    createdAt: r.created_at,
+  }
+}
+
+interface JournalRow {
+  id: number
+  session_id: string | null
+  message_id: string | null
+  content: string
+  content_hash: string
+  score: number
+  reasons_json: string | null
+  status: string
+  expires_at: string | null
+  promoted_memory_id: number | null
+  project_id: string | null
+  created_at: string
+}
+
+function mapJournalRow(r: JournalRow): JournalEntry {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    messageId: r.message_id,
+    content: r.content,
+    contentHash: r.content_hash,
+    score: r.score,
+    reasonsJson: r.reasons_json,
+    status: r.status as JournalStatus,
+    expiresAt: r.expires_at,
+    promotedMemoryId: r.promoted_memory_id,
+    projectId: r.project_id,
+    createdAt: r.created_at,
+  }
+}
+
+interface JournalPreviewRow {
+  id: number
+  session_id: string | null
+  score: number
+  reasons_json: string | null
+  content_preview: string
+  project_id: string | null
+  created_at: string
+}
+
+function mapJournalPreviewRow(r: JournalPreviewRow): JournalEntryPreview {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    score: r.score,
+    reasonsJson: r.reasons_json,
+    contentPreview: r.content_preview,
+    projectId: r.project_id,
     createdAt: r.created_at,
   }
 }
@@ -1669,35 +1723,8 @@ export class Database {
              reasons_json, status, expires_at, promoted_memory_id,
              project_id, created_at
       FROM session_journal WHERE id = ?
-    `).get(id) as {
-      id: number
-      session_id: string | null
-      message_id: string | null
-      content: string
-      content_hash: string
-      score: number
-      reasons_json: string | null
-      status: string
-      expires_at: string | null
-      promoted_memory_id: number | null
-      project_id: string | null
-      created_at: string
-    } | undefined
-    if (!row) return null
-    return {
-      id: row.id,
-      sessionId: row.session_id,
-      messageId: row.message_id,
-      content: row.content,
-      contentHash: row.content_hash,
-      score: row.score,
-      reasonsJson: row.reasons_json,
-      status: row.status as JournalStatus,
-      expiresAt: row.expires_at,
-      promotedMemoryId: row.promoted_memory_id,
-      projectId: row.project_id,
-      createdAt: row.created_at,
-    }
+    `).get(id) as JournalRow | undefined
+    return row ? mapJournalRow(row) : null
   }
 
   /** 升級 journal entry 為 promoted; caller 已透過 saveMemory 寫入 memories table
@@ -1715,15 +1742,7 @@ export class Database {
   /** List pending journal entries (newest first) with content preview for
    *  surfacing on the manual promotion path. content 截 200 chars 避免 response
    *  blob 過大; caller 想看完整內容可走 promote 看 memories 或直接 sqlite3。 */
-  getPendingJournalEntries(limit: number): Array<{
-    id: number
-    sessionId: string | null
-    score: number
-    reasonsJson: string | null
-    contentPreview: string
-    projectId: string | null
-    createdAt: string
-  }> {
+  getPendingJournalEntries(limit: number): JournalEntryPreview[] {
     const cappedLimit = Math.min(Math.max(limit, 1), 100)
     const rows = this.db.prepare(`
       SELECT id, session_id, score, reasons_json,
@@ -1733,24 +1752,8 @@ export class Database {
       WHERE status = 'pending'
       ORDER BY created_at DESC, id DESC
       LIMIT ?
-    `).all(cappedLimit) as Array<{
-      id: number
-      session_id: string | null
-      score: number
-      reasons_json: string | null
-      content_preview: string
-      project_id: string | null
-      created_at: string
-    }>
-    return rows.map(r => ({
-      id: r.id,
-      sessionId: r.session_id,
-      score: r.score,
-      reasonsJson: r.reasons_json,
-      contentPreview: r.content_preview,
-      projectId: r.project_id,
-      createdAt: r.created_at,
-    }))
+    `).all(cappedLimit) as JournalPreviewRow[]
+    return rows.map(mapJournalPreviewRow)
   }
 
   /** 標記 entry 為 rejected, expires_at 設為 now+7d (decay sweep 才真的刪除)。

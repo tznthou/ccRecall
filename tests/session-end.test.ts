@@ -12,37 +12,7 @@ import {
   buildJournalCandidate,
 } from '../src/api/routes.js'
 import type { SessionMeta } from '../src/core/types.js'
-
-function postJson(
-  url: string,
-  payload: unknown,
-  extraHeaders: Record<string, string> = {},
-): Promise<{ status: number; body: unknown }> {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url)
-    const data = JSON.stringify(payload)
-    const req = http.request({
-      hostname: u.hostname, port: u.port, path: u.pathname + u.search,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data),
-        ...extraHeaders,
-      },
-    }, (res) => {
-      const chunks: Buffer[] = []
-      res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString())
-        resolve({ status: res.statusCode!, body })
-      })
-      res.on('error', reject)
-    })
-    req.on('error', reject)
-    req.write(data)
-    req.end()
-  })
-}
+import { postJson } from './fixtures/helpers.js'
 
 // Outcome-bearing fixture (issue #18 step 3): user prompt → tool work → git
 // commit invocation → last substantial assistant message with cause-effect
