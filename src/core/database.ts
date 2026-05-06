@@ -3,7 +3,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint, JournalEntryInput } from './types.js'
+import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint, JournalEntry, JournalEntryInput, JournalStatus } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
 
 /** 寫入 memories 時使用的參數型別 */
@@ -1656,6 +1656,66 @@ export class Database {
       "SELECT COUNT(*) AS c FROM session_journal WHERE status = 'pending'",
     ).get() as { c: number }
     return row.c
+  }
+
+  getJournalEntry(id: number): JournalEntry | null {
+    const row = this.db.prepare(`
+      SELECT id, session_id, message_id, content, content_hash, score,
+             reasons_json, status, expires_at, promoted_memory_id,
+             project_id, created_at
+      FROM session_journal WHERE id = ?
+    `).get(id) as {
+      id: number
+      session_id: string | null
+      message_id: string | null
+      content: string
+      content_hash: string
+      score: number
+      reasons_json: string | null
+      status: string
+      expires_at: string | null
+      promoted_memory_id: number | null
+      project_id: string | null
+      created_at: string
+    } | undefined
+    if (!row) return null
+    return {
+      id: row.id,
+      sessionId: row.session_id,
+      messageId: row.message_id,
+      content: row.content,
+      contentHash: row.content_hash,
+      score: row.score,
+      reasonsJson: row.reasons_json,
+      status: row.status as JournalStatus,
+      expiresAt: row.expires_at,
+      promotedMemoryId: row.promoted_memory_id,
+      projectId: row.project_id,
+      createdAt: row.created_at,
+    }
+  }
+
+  /** 升級 journal entry 為 promoted; caller 已透過 saveMemory 寫入 memories table
+   *  並拿到 memoryId,本方法只更新 journal 的 status + 回填 promoted_memory_id。
+   *  回 false 表示 entry 不存在或已不在 'pending' 狀態 (idempotent)。 */
+  promoteJournalEntry(id: number, memoryId: number): boolean {
+    const info = this.db.prepare(`
+      UPDATE session_journal
+      SET status = 'promoted', promoted_memory_id = ?
+      WHERE id = ? AND status = 'pending'
+    `).run(memoryId, id)
+    return info.changes > 0
+  }
+
+  /** 標記 entry 為 rejected, expires_at 設為 now+7d (decay sweep 才真的刪除)。
+   *  caller 傳 expiresAt ISO string; 回 false 表示 entry 不存在或非 pending。 */
+  rejectJournalEntry(id: number, expiresAt: string): boolean {
+    const info = this.db.prepare(`
+      UPDATE session_journal
+      SET status = 'rejected', expires_at = ?
+      WHERE id = ? AND status = 'pending'
+    `).run(expiresAt, id)
+    return info.changes > 0
   }
 
   queryMemories(query: string, limit: number, projectId?: string | null): Memory[] {
