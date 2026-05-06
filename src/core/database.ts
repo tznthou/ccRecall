@@ -757,6 +757,11 @@ const migrations: Migration[] = [
         )
       }
 
+      // UNIQUE 是 (session_id, content_hash) 不是 content_hash global —— 同
+      // session 重 trigger session/end 仍 dedup; 但兩個不同 session 產生同樣
+      // outcome cluster 各自存一筆 (Codex review 抓到的 cross-session leakage)。
+      // SQLite UNIQUE on nullable column: NULL 互不相等, 所以 sessionId=null 多筆
+      // 不會撞 (manual recall_save 走 memories 不會走這條, 影響面小)。
       db.exec(`
         CREATE TABLE session_journal (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -773,7 +778,7 @@ const migrations: Migration[] = [
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX idx_journal_status ON session_journal(status, expires_at);
-        CREATE UNIQUE INDEX idx_journal_hash ON session_journal(content_hash);
+        CREATE UNIQUE INDEX idx_journal_session_hash ON session_journal(session_id, content_hash);
       `)
     },
   },
@@ -1705,6 +1710,47 @@ export class Database {
       WHERE id = ? AND status = 'pending'
     `).run(memoryId, id)
     return info.changes > 0
+  }
+
+  /** List pending journal entries (newest first) with content preview for
+   *  surfacing on the manual promotion path. content 截 200 chars 避免 response
+   *  blob 過大; caller 想看完整內容可走 promote 看 memories 或直接 sqlite3。 */
+  getPendingJournalEntries(limit: number): Array<{
+    id: number
+    sessionId: string | null
+    score: number
+    reasonsJson: string | null
+    contentPreview: string
+    projectId: string | null
+    createdAt: string
+  }> {
+    const cappedLimit = Math.min(Math.max(limit, 1), 100)
+    const rows = this.db.prepare(`
+      SELECT id, session_id, score, reasons_json,
+             substr(content, 1, 200) AS content_preview,
+             project_id, created_at
+      FROM session_journal
+      WHERE status = 'pending'
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `).all(cappedLimit) as Array<{
+      id: number
+      session_id: string | null
+      score: number
+      reasons_json: string | null
+      content_preview: string
+      project_id: string | null
+      created_at: string
+    }>
+    return rows.map(r => ({
+      id: r.id,
+      sessionId: r.session_id,
+      score: r.score,
+      reasonsJson: r.reasons_json,
+      contentPreview: r.content_preview,
+      projectId: r.project_id,
+      createdAt: r.created_at,
+    }))
   }
 
   /** 標記 entry 為 rejected, expires_at 設為 now+7d (decay sweep 才真的刪除)。

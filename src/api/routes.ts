@@ -338,29 +338,55 @@ export function createRequestHandler(
       }
 
       let memoryId = 0
-      db.runTransaction(() => {
-        memoryId = db.saveMemory({
-          sessionId: entry.sessionId,
-          messageId: entry.messageId,
-          content: entry.content,
-          type,
-          confidence,
-          projectId: entry.projectId,
-        })
-        // 繼承 session topics → memory_topics, 重建 knowledge_map (對齊 v0.2.x harvest 行為)
-        if (entry.sessionId) {
-          const session = db.getSessionById(entry.sessionId)
-          if (session) {
-            const sessionTopics = db.getSessionTopicKeys(session.id)
-            if (sessionTopics.length > 0) {
-              db.saveMemoryTopics(memoryId, session.projectId, sessionTopics)
+      try {
+        db.runTransaction(() => {
+          memoryId = db.saveMemory({
+            sessionId: entry.sessionId,
+            messageId: entry.messageId,
+            content: entry.content,
+            type,
+            confidence,
+            projectId: entry.projectId,
+          })
+          // 繼承 session topics → memory_topics, 重建 knowledge_map (對齊 v0.2.x harvest 行為)
+          if (entry.sessionId) {
+            const session = db.getSessionById(entry.sessionId)
+            if (session) {
+              const sessionTopics = db.getSessionTopicKeys(session.id)
+              if (sessionTopics.length > 0) {
+                db.saveMemoryTopics(memoryId, session.projectId, sessionTopics)
+              }
+              db.rebuildKnowledgeMap(session.projectId)
             }
-            db.rebuildKnowledgeMap(session.projectId)
           }
+          // Race guard: pre-read 後 status 若被改 (multi-daemon, 直接 SQL),
+          // promoteJournalEntry 會回 false; throw 觸發 transaction rollback,
+          // 避免 memories 多一筆 orphan 而 journal status 沒翻 promoted。
+          if (!db.promoteJournalEntry(entry.id, memoryId)) {
+            throw new Error('JOURNAL_RACE: status changed during transaction')
+          }
+        })
+      } catch (err) {
+        if ((err as Error).message?.startsWith('JOURNAL_RACE:')) {
+          sendJson(res, 409, { error: 'journal entry status changed during transaction; re-fetch and retry' })
+          return
         }
-        db.promoteJournalEntry(entry.id, memoryId)
-      })
+        throw err
+      }
       sendJson(res, 200, { ok: true, memoryId, journalId: entry.id })
+      return
+    }
+
+    // GET /journal/pending?limit=N — list pending journal entries for promote/reject (#21 P1 fix-up)
+    if (req.method === 'GET' && path === '/journal/pending') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      const rawLimit = parseInt(url.searchParams.get('limit') ?? '20', 10)
+      const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 20 : Math.min(rawLimit, 100)
+      const entries = db.getPendingJournalEntries(limit)
+      sendJson(res, 200, { entries, total: entries.length })
       return
     }
 
