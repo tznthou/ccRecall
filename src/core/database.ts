@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import BetterSqlite3 from 'better-sqlite3'
+import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint } from './types.js'
+import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint, JournalEntryInput } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
 
 /** 寫入 memories 時使用的參數型別 */
@@ -733,6 +734,47 @@ const migrations: Migration[] = [
       const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
       if (cols.some(c => c.name === 'harvest_text')) return
       db.exec('ALTER TABLE sessions ADD COLUMN harvest_text TEXT;')
+    },
+  },
+  {
+    version: 22,
+    description: 'add session_journal table for low-trust harvest candidates (issue #21 P1)',
+    up: (db) => {
+      const exists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='session_journal'",
+      ).get()
+      if (exists) return
+
+      // Pre-check: memories table 必須存在 (v16 建立)。runMigrations 應已順序跑完
+      // 前面的 migration; 若不在則 schema 損壞,abort 比 silently 建立 dangling FK 安全。
+      const memoriesExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='memories'",
+      ).get()
+      if (!memoriesExists) {
+        throw new Error(
+          'v22 migration requires memories table (created in v16). ' +
+          'Schema appears corrupt — restore from pre-v22 backup.',
+        )
+      }
+
+      db.exec(`
+        CREATE TABLE session_journal (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT,
+          message_id TEXT,
+          content TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          score INTEGER NOT NULL,
+          reasons_json TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          expires_at TEXT,
+          promoted_memory_id INTEGER REFERENCES memories(id),
+          project_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX idx_journal_status ON session_journal(status, expires_at);
+        CREATE UNIQUE INDEX idx_journal_hash ON session_journal(content_hash);
+      `)
     },
   },
 ]
@@ -1573,6 +1615,42 @@ export class Database {
       projectId,
     )
     return Number(info.lastInsertRowid)
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // session_journal DAO (issue #21 P1)
+  // 低信任 harvest 候選的寫入入口; manual recall_save 仍走 saveMemory()。
+  // ─────────────────────────────────────────────────────────────
+
+  /** 寫入 journal 條目。content_hash 內部以 SHA-256 計算; 同 hash 第二次 INSERT
+   *  會被 UNIQUE INDEX 擋下並回傳 0 (idempotency)。
+   *
+   *  注意: better-sqlite3 的 INSERT OR IGNORE 在 IGNORE'd 時, lastInsertRowid
+   *  不會歸零 (保留前次成功 insert 的 rowid)。所以用 info.changes 判 dedup。 */
+  saveJournalEntry(input: JournalEntryInput): number {
+    const hash = createHash('sha256').update(input.content).digest('hex')
+    const info = this.db.prepare(`
+      INSERT OR IGNORE INTO session_journal
+        (session_id, message_id, content, content_hash, score, reasons_json, project_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.sessionId ?? null,
+      input.messageId ?? null,
+      input.content,
+      hash,
+      input.score,
+      input.reasonsJson ?? null,
+      input.projectId ?? null,
+    )
+    return info.changes === 0 ? 0 : Number(info.lastInsertRowid)
+  }
+
+  /** 給 /health endpoint 用; promotion path manual-only,user 看 pending 數決定是否 invoke。 */
+  getJournalPendingCount(): number {
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS c FROM session_journal WHERE status = 'pending'",
+    ).get() as { c: number }
+    return row.c
   }
 
   queryMemories(query: string, limit: number, projectId?: string | null): Memory[] {
