@@ -11,6 +11,48 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.2.7] — 2026-05-06
+
+### Fixed
+
+- **`extractOutcome` skips save-t process reports** (PR #24). Dogfood corpus audit (39 v=2 committed/tested sessions) found 100% sub-threshold scoring because `pickLastSubstantialAssistant` captured `save-t` completion reports (process meta) instead of real implementation outcomes. The walk-back loop now skips process-report candidates and falls back to earlier substantial assistant text. `scoreKnowledgeBearing` also short-circuits process-report → score 0 (defense in depth).
+
+### Added
+
+- `isProcessReport(text)` exported from `src/core/outcome-scorer.ts` and consumed by `outcome-extractor.ts`. `PROCESS_REPORT_RES` is anchored at `^` so long mid-text mentions of save-t do not misfire. Patterns cover CJK (`save-t 完成 / 流程完整 / 完整`), EN (`save-t done / finished / completed`), slash-command form (`/save-t`), and colon separators (`Save-T:` / `save-t：`), with optional markdown heading prefix and emoji (`💾🟢✅`).
+- `PROCESS_REPORT_MAX_LEN = 5000` length gate in `isProcessReport` to prevent regex linear-scan on megabyte-scale assistant text (security: ReDoS prevention).
+
+### ⚠️ Known limitation — prerequisite fix, not sufficient
+
+This fix unblocks the harvester's view of real outcomes (save-t no longer hides them) but **does not on its own raise the hit rate above zero**. The audit shows real implementation outcomes now reach the scorer, but they stay sub-threshold due to category coverage gaps in the 5-category rule scorer:
+
+- Chinese commit confirmation (`Commit 6de0666 落地`) — score 0
+- `## 修復總結 / 完工總結` tables — score 1 (occasionally hits decision-language)
+- Phase milestones (`## Phase 1 完成 ✅ | Step | Commit |`) — score 0
+
+Tracking: [issue #25](https://github.com/tznthou/ccRecall/issues/25). Same protocol as #23 — extend anchors deliberately when 3+ corroborating reports converge on a category gap.
+
+### Tests
+
+- +11 new unit tests (8 process-report scorer cases + 2 extractor fallback cases + 1 oversized input length-gate test).
+- Test count: 524 → 535.
+
+### Quality pipeline
+
+- ✅ Codex Review: 1 Medium (slash/colon regex gap) + 1 Low (`流程` alternation too broad) → both fixed.
+- ⏭️ Simplify: 4 candidates considered, all ruled out (no genuine simplification).
+- ✅ Security: 1 Medium (ReDoS length gate) fixed; 3 Low declined per gogo override.
+- ✅ Final Verify: build / typecheck / lint / 535 tests all green.
+
+### Upgrade checklist
+
+- `pnpm install -g @tznthou/ccrecall@0.2.7` (or your usual install path).
+- `launchctl kickstart -k gui/$UID/com.tznthou.ccrecall` to restart the daemon.
+- `curl http://127.0.0.1:7749/health` to verify `version: "0.2.7"`.
+- No schema migration in this release. No DB backup needed.
+
+---
+
 ## [0.2.6] — 2026-04-30
 
 ### Changed

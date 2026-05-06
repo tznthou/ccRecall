@@ -8,6 +8,48 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.2.7] — 2026-05-06
+
+### 修正
+
+- **`extractOutcome` 跳過 save-t 收尾報告**（PR #24）。Dogfood corpus audit（39 筆 v=2 committed/tested sessions）發現 100% sub-threshold,因為 `pickLastSubstantialAssistant` 抓到 `save-t` 收尾報告（process meta）而非真實 implementation outcome。walk-back 迴圈改成 skip process-report,往前找前一段 substantial assistant text。`scoreKnowledgeBearing` 同步加 process-report short-circuit → score 0（defense in depth）。
+
+### 新增
+
+- `src/core/outcome-scorer.ts` export `isProcessReport(text)`,給 `outcome-extractor.ts` 用。`PROCESS_REPORT_RES` 用 `^` anchor,長文本 mid-text 提及 save-t 不誤殺。Pattern 覆蓋繁中（`save-t 完成 / 流程完整 / 完整`）、英文（`save-t done / finished / completed`）、slash command（`/save-t`）、冒號分隔（`Save-T:` / `save-t：`）,可選 markdown heading prefix 與 emoji（`💾🟢✅`）。
+- `isProcessReport` 加 `PROCESS_REPORT_MAX_LEN = 5000` 長度閘門,防 regex 對 megabyte 尺寸 assistant text 做 linear scan（security: ReDoS prevention）。
+
+### ⚠️ 已知限制——前置修補,不充分
+
+這次修補解開 harvester 對真實 outcome 的視野（save-t 不再屏蔽）,但**單獨無法把命中率拉到 0 之上**。Audit 顯示真實 implementation outcome 現在能到達 scorer,但仍 sub-threshold——5 類 rule scorer 的覆蓋缺口:
+
+- 中文 commit confirmation（`Commit 6de0666 落地`）→ score 0
+- `## 修復總結 / 完工總結` 表格 → score 1（偶中 decision-language）
+- Phase milestone（`## Phase 1 完成 ✅ | Step | Commit |`）→ score 0
+
+追蹤:[issue #25](https://github.com/tznthou/ccRecall/issues/25)。沿用 #23 的協議——3+ 條 corroborating 報告匯聚同一 category gap 才擴 anchor patterns。
+
+### 測試
+
+- +11 個新單元測試（8 個 process-report scorer cases + 2 個 extractor fallback cases + 1 個 oversized input length-gate test）。
+- 測試數:524 → 535。
+
+### 品質流水線
+
+- ✅ Codex Review:1 Medium（slash/colon regex 缺口）+ 1 Low（`流程` alternation 太寬）→ 兩個都修。
+- ⏭️ Simplify:4 個候選審完全部 ruled out（無真實簡化空間）。
+- ✅ Security:1 Medium（ReDoS length gate）修;3 Low 依 gogo 行為覆寫不修。
+- ✅ Final Verify:build / typecheck / lint / 535 tests 全綠。
+
+### 升級清單
+
+- `pnpm install -g @tznthou/ccrecall@0.2.7`（或您慣用的安裝路徑）。
+- `launchctl kickstart -k gui/$UID/com.tznthou.ccrecall` 重啟 daemon。
+- `curl http://127.0.0.1:7749/health` 驗 `version: "0.2.7"`。
+- 本版無 schema migration。不需 DB backup。
+
+---
+
 ## [0.2.6] — 2026-04-30
 
 ### 變更
