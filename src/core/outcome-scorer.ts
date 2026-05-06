@@ -23,7 +23,7 @@ const NOISE_RES: ReadonlyArray<RegExp> = [
 // 因為 last substantial assistant 抓到 save-t 收尾報告(process meta)而非真實 outcome。
 // Anchor 在開頭(^),長文本 mid-text 提及 save-t 不誤殺。
 const PROCESS_REPORT_RES: ReadonlyArray<RegExp> = [
-  /^[#\s💾🟢✅_*-]*save[\s-]?t\s+(?:完成|流程|done|finished|complete|完整)/iu,
+  /^[#\s💾🟢✅_*-]*\/?save[\s-]?t(?:\s*[:：]\s*|\s+)(?:完成|流程完整|完整|done|finished|completed?)/iu,
 ]
 
 interface SignalCategory {

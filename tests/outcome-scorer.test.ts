@@ -45,6 +45,23 @@ describe('scoreKnowledgeBearing — process-report short-circuit', () => {
     expect(scoreKnowledgeBearing('Save-t finished. Updated 3 files.').reasons).toEqual(['process-report'])
   })
 
+  it('flags slash-command save-t headings (Codex M1)', () => {
+    // /save-t is the documented skill name — assistant may echo it verbatim
+    expect(scoreKnowledgeBearing('## /save-t 完成 ✓\n\n寫入摘要').reasons).toEqual(['process-report'])
+    expect(scoreKnowledgeBearing('/save-t finished. 3 files updated.').reasons).toEqual(['process-report'])
+  })
+
+  it('flags colon-separated save-t reports (Codex M1)', () => {
+    expect(scoreKnowledgeBearing('Save-T: done\n\nupdated 3 files').reasons).toEqual(['process-report'])
+    expect(scoreKnowledgeBearing('save-t：完成\n\n摘要表格').reasons).toEqual(['process-report'])
+  })
+
+  it('does NOT misfire on save-t with non-completion follow-up (Codex L1)', () => {
+    // Bare 流程 was too broad — must be 流程完整, not 流程不完整 / 流程 root cause
+    expect(scoreKnowledgeBearing('Save-t 流程不完整,還缺 RESUME.md').reasons).not.toContain('process-report')
+    expect(scoreKnowledgeBearing('Save-t 流程 root cause: WAL truncate').reasons).not.toContain('process-report')
+  })
+
   it('does NOT flag mid-text save-t mentions', () => {
     const text = 'After we ran save-t, the tests passed. Root cause: src/auth.ts:42.'
     expect(scoreKnowledgeBearing(text).reasons).not.toContain('process-report')
