@@ -83,7 +83,7 @@ After the three setup steps you might reasonably wonder: does it just keep runni
 4. **Hooks**
    The next section walks you through wiring these up. Once configured, Claude Code calls ccRecall at two moments automatically:
    - **SessionStart**: relevant memories are injected into Claude's context *before* your first prompt — you never have to ask it to "look something up"
-   - **SessionEnd**: the session you just finished is harvested into a new memory
+   - **SessionEnd**: the session you just finished is harvested into the **journal** — a low-trust review queue (since v0.3.0). It does *not* show up in `recall_query` until you promote it (see Scenario 4 below).
 
 The takeaway: **install + hooks = set and forget**. ccRecall accumulates on its own.
 
@@ -110,18 +110,25 @@ Remove later: `ccmem uninstall-hooks` (only deletes ccRecall's own entries; your
 
 ### Verifying the hook fires
 
+Since v0.3.0 the hook writes to `session_journal`, not `memories` — so count that table:
+
 ```bash
-# Note the current memory count
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+# Note the current journal count
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM session_journal"
+
+# Or just check via /health
+curl http://127.0.0.1:7749/health | jq .journalPendingCount
 
 # Open a fresh Claude Code session, chat briefly, close it
 
-# Recount — should be +1
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+# Recount — should be higher
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM session_journal"
 
 # Or tail the daemon log and watch /session/end land
 tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
 ```
+
+The `memories` table count won't move from a hook fire alone — that takes a `ccmem promote` (see Scenario 4) or a manual `recall_save`.
 
 ---
 
@@ -156,7 +163,7 @@ tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
 
 ---
 
-## Three Everyday Scenarios
+## Four Everyday Scenarios
 
 ### Scenario 1: Recalling "That Bug We Fixed"
 
@@ -205,6 +212,31 @@ Claude: Three main clusters:
 ```
 
 That's ccRecall's metacognition layer — not just individual memories, but topic clusters showing what you and the AI have actually been exploring together.
+
+### Scenario 4: Promoting a Journal Candidate (since v0.3.0)
+
+The SessionEnd hook records every closed session into `session_journal` — a low-trust queue that `recall_query` does not read. To make a candidate searchable, promote it:
+
+```bash
+# See what's pending review
+curl http://127.0.0.1:7749/journal/pending | jq
+
+# Picked a good one? Promote it
+ccmem promote 123
+# {"id":456,"type":"discovery","confidence":0.7}
+
+# Discard noise
+ccmem reject 124
+# Soft-deleted; cleared in 7 days by the decay sweep
+```
+
+Want a different memory type or higher confidence?
+
+```bash
+ccmem promote 123 --type decision --confidence 0.9
+```
+
+Why manual? The pre-0.3.0 design gated harvest on a rule scorer — corpus audit found a 0/39 hit rate on real outcomes (the scorer kept under-weighting them). The fix isn't more regex patterns; it's letting the harvester record broadly and letting you decide what's worth keeping. See [issue #21](https://github.com/tznthou/ccRecall/issues/21) for the full reasoning.
 
 ---
 
