@@ -293,6 +293,109 @@ export function createRequestHandler(
       return
     }
 
+    // POST /journal/promote — manual promote a journal entry to memories (#21 P1)
+    if (req.method === 'POST' && path === '/journal/promote') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      let bodyText: string
+      try {
+        bodyText = await readBody(req)
+      } catch (err) {
+        const msg = (err as Error).message
+        if (msg === 'body too large') { sendJson(res, 413, { error: msg }); return }
+        throw err
+      }
+      let parsed: unknown
+      try { parsed = bodyText ? JSON.parse(bodyText) : {} }
+      catch { sendJson(res, 400, { error: 'invalid JSON body' }); return }
+      const b = parsed as { id?: unknown; type?: unknown; confidence?: unknown }
+      if (typeof b.id !== 'number' || !Number.isInteger(b.id) || b.id <= 0) {
+        sendJson(res, 400, { error: 'id must be positive integer' })
+        return
+      }
+      const type: MemoryType = (typeof b.type === 'string' && VALID_MEMORY_TYPES.has(b.type as MemoryType))
+        ? b.type as MemoryType
+        : 'discovery'
+      let confidence = 0.7
+      if (b.confidence != null) {
+        if (typeof b.confidence !== 'number' || b.confidence < 0 || b.confidence > 1) {
+          sendJson(res, 400, { error: 'confidence must be number in [0, 1]' })
+          return
+        }
+        confidence = b.confidence
+      }
+      const entry = db.getJournalEntry(b.id)
+      if (!entry) {
+        sendJson(res, 404, { error: 'journal entry not found' })
+        return
+      }
+      if (entry.status !== 'pending') {
+        sendJson(res, 409, { error: `journal entry status='${entry.status}', expected 'pending'` })
+        return
+      }
+
+      let memoryId = 0
+      db.runTransaction(() => {
+        memoryId = db.saveMemory({
+          sessionId: entry.sessionId,
+          messageId: entry.messageId,
+          content: entry.content,
+          type,
+          confidence,
+          projectId: entry.projectId,
+        })
+        // 繼承 session topics → memory_topics, 重建 knowledge_map (對齊 v0.2.x harvest 行為)
+        if (entry.sessionId) {
+          const session = db.getSessionById(entry.sessionId)
+          if (session) {
+            const sessionTopics = db.getSessionTopicKeys(session.id)
+            if (sessionTopics.length > 0) {
+              db.saveMemoryTopics(memoryId, session.projectId, sessionTopics)
+            }
+            db.rebuildKnowledgeMap(session.projectId)
+          }
+        }
+        db.promoteJournalEntry(entry.id, memoryId)
+      })
+      sendJson(res, 200, { ok: true, memoryId, journalId: entry.id })
+      return
+    }
+
+    // POST /journal/reject — mark a journal entry as rejected (decay sweep cleans up)
+    if (req.method === 'POST' && path === '/journal/reject') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      let bodyText: string
+      try {
+        bodyText = await readBody(req)
+      } catch (err) {
+        const msg = (err as Error).message
+        if (msg === 'body too large') { sendJson(res, 413, { error: msg }); return }
+        throw err
+      }
+      let parsed: unknown
+      try { parsed = bodyText ? JSON.parse(bodyText) : {} }
+      catch { sendJson(res, 400, { error: 'invalid JSON body' }); return }
+      const b = parsed as { id?: unknown }
+      if (typeof b.id !== 'number' || !Number.isInteger(b.id) || b.id <= 0) {
+        sendJson(res, 400, { error: 'id must be positive integer' })
+        return
+      }
+      // Decay TTL: 7 days; sweep cron (C5) cleans up after expires_at
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+      const ok = db.rejectJournalEntry(b.id, expiresAt)
+      if (!ok) {
+        sendJson(res, 404, { error: 'journal entry not found or not pending' })
+        return
+      }
+      sendJson(res, 200, { ok: true, journalId: b.id, expiresAt })
+      return
+    }
+
     // POST /session/end
     if (req.method === 'POST' && path === '/session/end') {
       if (!isLoopbackOrigin(req.headers.origin)) {
