@@ -65,7 +65,7 @@ describe('schema', () => {
     expect(idxNames).toContain('idx_message_uuids_session')
     expect(idxNames).toContain('idx_sessions_project')
     expect(idxNames).toContain('idx_journal_status')
-    expect(idxNames).toContain('idx_journal_hash')
+    expect(idxNames).toContain('idx_journal_session_hash')
     expect(idxNames).not.toContain('idx_messages_session')
   })
 })
@@ -87,14 +87,42 @@ describe('session_journal DAO (issue #21 P1)', () => {
     expect(db.getJournalPendingCount()).toBe(1)
   })
 
-  it('saveJournalEntry deduplicates by content_hash (UNIQUE INDEX idempotency)', () => {
-    const first = db.saveJournalEntry({ content: 'duplicate content', score: 0 })
+  it('saveJournalEntry deduplicates same content within same session (UNIQUE INDEX idempotency)', () => {
+    // UNIQUE 是 (session_id, content_hash); 同 session retry 仍 dedup
+    const first = db.saveJournalEntry({
+      sessionId: 'sess-A',
+      content: 'duplicate content',
+      score: 0,
+    })
     expect(first).toBeGreaterThan(0)
 
-    const second = db.saveJournalEntry({ content: 'duplicate content', score: 0 })
+    const second = db.saveJournalEntry({
+      sessionId: 'sess-A',
+      content: 'duplicate content',
+      score: 0,
+    })
     expect(second).toBe(0) // INSERT OR IGNORE → lastInsertRowid 0 表示被擋下
 
     expect(db.getJournalPendingCount()).toBe(1)
+  })
+
+  it('saveJournalEntry accepts same content from DIFFERENT sessions (cross-session leakage fix, Codex review)', () => {
+    // P1 fix-up: 兩個不同 session 產生同樣 outcome cluster 各自留一筆,
+    // 不再被 global content_hash 靜默吃掉 (Codex finding #1)。
+    const a = db.saveJournalEntry({
+      sessionId: 'sess-X',
+      content: 'Root cause: same wording, different session',
+      score: 2,
+    })
+    const b = db.saveJournalEntry({
+      sessionId: 'sess-Y',
+      content: 'Root cause: same wording, different session',
+      score: 2,
+    })
+    expect(a).toBeGreaterThan(0)
+    expect(b).toBeGreaterThan(0)
+    expect(b).not.toBe(a)
+    expect(db.getJournalPendingCount()).toBe(2)
   })
 
   it('saveJournalEntry stores score 0 entries (no threshold gate)', () => {

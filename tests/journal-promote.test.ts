@@ -147,6 +147,118 @@ describe('POST /journal/promote (#21 P1 step 6)', () => {
   })
 })
 
+describe('GET /journal/pending (Codex review fix-up)', () => {
+  let tmpDir: string
+  let db: Database
+  let server: http.Server
+  let port: number
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-listpending-'))
+    db = new Database(path.join(tmpDir, 'test.db'))
+    server = createServer(db)
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        port = (server.address() as { port: number }).port
+        resolve()
+      })
+    })
+  })
+
+  afterEach(async () => {
+    server.close()
+    db.close()
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('returns pending entries with id, score, reasons, content preview', async () => {
+    db.saveJournalEntry({
+      sessionId: 'sess-1',
+      content: 'first candidate with substantive content',
+      score: 2,
+      reasonsJson: '["decision-language","impl-facts"]',
+    })
+    db.saveJournalEntry({
+      sessionId: 'sess-2',
+      content: 'second',
+      score: 1,
+    })
+
+    const resp = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      http.get(`http://127.0.0.1:${port}/journal/pending`, (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString())
+          resolve({ status: res.statusCode!, body })
+        })
+        res.on('error', reject)
+      }).on('error', reject)
+    })
+
+    expect(resp.status).toBe(200)
+    const b = resp.body as {
+      entries: Array<{ id: number; score: number; reasonsJson: string | null; contentPreview: string }>
+      total: number
+    }
+    expect(b.total).toBe(2)
+    expect(b.entries).toHaveLength(2)
+    expect(b.entries[0].contentPreview.length).toBeLessThanOrEqual(200)
+  })
+
+  it('honors limit param (capped at 100)', async () => {
+    for (let i = 0; i < 5; i++) {
+      db.saveJournalEntry({
+        sessionId: `sess-${i}`,
+        content: `candidate ${i}`,
+        score: 0,
+      })
+    }
+    const resp = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      http.get(`http://127.0.0.1:${port}/journal/pending?limit=3`, (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString())
+          resolve({ status: res.statusCode!, body })
+        })
+        res.on('error', reject)
+      }).on('error', reject)
+    })
+
+    expect(resp.status).toBe(200)
+    expect((resp.body as { total: number }).total).toBe(3)
+  })
+
+  it('does NOT include promoted or rejected entries', async () => {
+    const id = db.saveJournalEntry({ sessionId: 'sess-prom', content: 'promote me', score: 2 })
+    const memId = db.saveMemory({
+      sessionId: null, messageId: null, content: 'promote me', type: 'discovery',
+    })
+    db.promoteJournalEntry(id, memId)
+
+    const id2 = db.saveJournalEntry({ sessionId: 'sess-rej', content: 'reject me', score: 0 })
+    db.rejectJournalEntry(id2, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString())
+
+    db.saveJournalEntry({ sessionId: 'sess-keep', content: 'still pending', score: 1 })
+
+    const resp = await new Promise<{ body: unknown }>((resolve, reject) => {
+      http.get(`http://127.0.0.1:${port}/journal/pending`, (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          resolve({ body: JSON.parse(Buffer.concat(chunks).toString()) })
+        })
+        res.on('error', reject)
+      }).on('error', reject)
+    })
+
+    const entries = (resp.body as { entries: Array<{ contentPreview: string }> }).entries
+    expect(entries).toHaveLength(1)
+    expect(entries[0].contentPreview).toContain('still pending')
+  })
+})
+
 describe('POST /journal/reject (#21 P1 step 6)', () => {
   let tmpDir: string
   let db: Database

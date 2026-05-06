@@ -95,9 +95,18 @@ describe('extractOutcome — candidateText', () => {
     expect(extractOutcome(msgs).candidateText).toBe(text)
   })
 
-  it('still drops short text that scorer rejects (single weak signal)', () => {
-    // Single category match (decision-language only) — under threshold, no rescue.
+  it('v0.3.0 (#21 P1): short text with single weak signal IS accepted (was dropped pre-0.3.0)', () => {
+    // Pre-0.3.0: isSubstantial used score >= KNOWLEDGE_THRESHOLD (=2), so single
+    // category match was dropped. P1 lowered to score >= 1 so journal can capture
+    // short low-confidence candidates; persistence gate moved to promotion path.
     const text = '我們決定先吃飯'
+    const msgs = [makeMsg({ role: 'assistant', contentText: text })]
+    expect(extractOutcome(msgs).candidateText).toBe(text)
+  })
+
+  it('still drops short text with score=0 (hard floor: noise / no signal)', () => {
+    // Even after lowering threshold to >= 1, score=0 (no category match) is dropped.
+    const text = 'unclear without more info'
     const msgs = [makeMsg({ role: 'assistant', contentText: text })]
     expect(extractOutcome(msgs).candidateText).toBeNull()
   })

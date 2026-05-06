@@ -54,12 +54,15 @@ const outcomeSession = [
   { type: 'assistant', uuid: 'o4', timestamp: '2026-04-15T10:03:00Z', message: { role: 'assistant', content: '## Auth fix shipped\n\nRoot cause: token expiry was not propagated to the refresh handler in /src/auth.ts:42. After first session expiry the silent fail looked like a stale UI bug.\n\nFix verified: 495/495 tests pass.' } },
 ]
 
-// Sub-threshold fixture: short Q&A, no structural markers, no high-signal
-// patterns, no git commit. Indexer must still write the session row, but
-// buildMemoryFromSession must skip the memory.
+// Sub-threshold fixture: short Q&A, no category match (score=0). v0.3.0 P1
+// lowered isSubstantial to score >= 1, so we use a phrase that doesn't trigger
+// any of the 5 category regexes (decision/impl-facts/constraints/cause-effect/
+// validation). "unclear without more info" matches none. Pre-0.3.0 fixture
+// "I cannot tell time directly." actually matches `cannot` (constraints) → score 1
+// — would now write to journal under P1 design.
 const subThresholdSession = [
-  { type: 'user', uuid: 's1', timestamp: '2026-04-15T11:00:00Z', message: { role: 'user', content: 'What time is it' } },
-  { type: 'assistant', uuid: 's2', timestamp: '2026-04-15T11:00:30Z', message: { role: 'assistant', content: 'I cannot tell time directly.' } },
+  { type: 'user', uuid: 's1', timestamp: '2026-04-15T11:00:00Z', message: { role: 'user', content: 'Anything?' } },
+  { type: 'assistant', uuid: 's2', timestamp: '2026-04-15T11:00:30Z', message: { role: 'assistant', content: 'unclear without more info' } },
 ]
 
 describe('POST /session/end — outcome-bearing session', () => {
