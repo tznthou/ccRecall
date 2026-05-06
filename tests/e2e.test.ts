@@ -189,6 +189,13 @@ describe('E2E: index → search → HTTP', () => {
     expect((body as { memoryCount: number }).memoryCount).toBe(2)
   })
 
+  it('P1 (#21): GET /health reports journalPendingCount for promote-prompt surfacing', async () => {
+    db.saveJournalEntry({ content: 'pending-1', score: 0 })
+    db.saveJournalEntry({ content: 'pending-2', score: 1 })
+    const { body } = await fetch(`http://127.0.0.1:${port}/health`)
+    expect((body as { journalPendingCount: number }).journalPendingCount).toBe(2)
+  })
+
   it('Phase 3c: indexer populates knowledge_map from session topics', () => {
     const topics = db.rawAll<{ topic_key: string; mention_count: number }>(
       'SELECT topic_key, mention_count FROM knowledge_map ORDER BY topic_key',

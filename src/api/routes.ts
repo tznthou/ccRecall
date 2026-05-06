@@ -205,6 +205,7 @@ export function createRequestHandler(
         sessionCount: db.getMainSessionCount(),
         memoryCount: db.getMemoryCount(),
         topicCount: db.getTopicCount(),
+        journalPendingCount: db.getJournalPendingCount(),
         uptime: Math.floor((Date.now() - startTime) / 1000),
         lastIntegrityCheckAt: integrity?.at ?? null,
         lastIntegrityCheckOk: integrity?.ok ?? null,

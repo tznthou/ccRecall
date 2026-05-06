@@ -343,6 +343,9 @@ export interface HealthResult {
   sessionCount: number
   memoryCount: number
   topicCount: number
+  /** session_journal pending count — surfaces auto-harvested low-trust candidates
+   *  so user knows when to invoke `ccmem promote`. (issue #21 P1) */
+  journalPendingCount: number
   uptime: number
   /** ISO timestamp of last PRAGMA integrity_check tick, or null if the monitor
    *  has not completed its first run yet (or is not attached — tests use

@@ -103,6 +103,74 @@ describe('session_journal DAO (issue #21 P1)', () => {
     expect(id).toBeGreaterThan(0)
     expect(db.getJournalPendingCount()).toBe(1)
   })
+
+  it('sweepJournal deletes rejected entries past expires_at', () => {
+    const id = db.saveJournalEntry({ content: 'rejected-soon', score: 0 })
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    db.rejectJournalEntry(id, yesterday)
+
+    const result = db.sweepJournal()
+    expect(result.rejectedDeleted).toBe(1)
+    expect(db.getJournalEntry(id)).toBeNull()
+  })
+
+  it('sweepJournal keeps rejected entries with future expires_at', () => {
+    const id = db.saveJournalEntry({ content: 'rejected-later', score: 0 })
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    db.rejectJournalEntry(id, future)
+
+    const result = db.sweepJournal()
+    expect(result.rejectedDeleted).toBe(0)
+    expect(db.getJournalEntry(id)?.status).toBe('rejected')
+  })
+
+  it('sweepJournal deletes pending entries older than 30 days', () => {
+    const id = db.saveJournalEntry({ content: 'old-pending', score: 0 })
+    // Backdate created_at by 31 days
+    db.rawExec(
+      `UPDATE session_journal SET created_at = datetime('now', '-31 days') WHERE id = ${id}`,
+    )
+
+    const result = db.sweepJournal()
+    expect(result.pendingDeleted).toBe(1)
+    expect(db.getJournalEntry(id)).toBeNull()
+  })
+
+  it('sweepJournal does NOT delete pending entries within 30 days', () => {
+    const id = db.saveJournalEntry({ content: 'fresh-pending', score: 0 })
+    const result = db.sweepJournal()
+    expect(result.pendingDeleted).toBe(0)
+    expect(db.getJournalEntry(id)?.status).toBe('pending')
+  })
+
+  it('sweepJournal does NOT touch promoted entries (audit trail)', () => {
+    const id = db.saveJournalEntry({ content: 'promoted-keep', score: 2 })
+    const memId = db.saveMemory({
+      sessionId: null, messageId: null, content: 'promoted-keep', type: 'discovery',
+    })
+    db.promoteJournalEntry(id, memId)
+
+    // Even backdating to ancient
+    db.rawExec(
+      `UPDATE session_journal SET created_at = datetime('now', '-90 days') WHERE id = ${id}`,
+    )
+    const result = db.sweepJournal()
+    expect(result.rejectedDeleted).toBe(0)
+    expect(result.pendingDeleted).toBe(0)
+    expect(db.getJournalEntry(id)?.status).toBe('promoted')
+  })
+
+  it('sweepJournal does NOT touch memories table (manual exemption)', () => {
+    const memId = db.saveMemory({
+      sessionId: null, messageId: null, content: 'manual save', type: 'decision',
+    })
+    db.rawExec(
+      `UPDATE memories SET created_at = datetime('now', '-90 days') WHERE id = ${memId}`,
+    )
+
+    db.sweepJournal()
+    expect(db.getMemoryCount()).toBe(1)
+  })
 })
 
 describe('recall trust boundary (issue #21 P1)', () => {
