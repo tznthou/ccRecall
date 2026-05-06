@@ -13,6 +13,9 @@
 // 避免被下面的 weak-signal 累計湊到 threshold。Pattern 採 anchored-only 設計,長文本不誤殺。
 
 const NOISE_MAX_LEN = 50
+// Process-report headers are short (save-t reports are <2KB in practice).
+// Length gate prevents regex linear-scan on megabyte-scale assistant text.
+const PROCESS_REPORT_MAX_LEN = 5000
 
 const NOISE_RES: ReadonlyArray<RegExp> = [
   /^\s*(?:done|完成|處理好了|實作好了|搞定|fixed|implemented|ok|okay)\s*[.!。!]*\s*$/i,
@@ -111,5 +114,6 @@ function isAssistantNoise(text: string): boolean {
 }
 
 export function isProcessReport(text: string): boolean {
+  if (text.length > PROCESS_REPORT_MAX_LEN) return false
   return PROCESS_REPORT_RES.some(p => p.test(text))
 }

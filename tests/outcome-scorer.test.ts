@@ -71,6 +71,13 @@ describe('scoreKnowledgeBearing — process-report short-circuit', () => {
     expect(scoreKnowledgeBearing('we save the result to disk').reasons).not.toContain('process-report')
     expect(scoreKnowledgeBearing('auto-save token expired').reasons).not.toContain('process-report')
   })
+
+  it('skips process-report check on oversized input (security: prevent regex scan on megabyte text)', () => {
+    // Length gate: inputs >5KB cannot be a save-t report (always short headers)
+    const oversized = '## save-t 完成\n\n' + 'x'.repeat(6000)
+    const result = scoreKnowledgeBearing(oversized)
+    expect(result.reasons).not.toContain('process-report')
+  })
 })
 
 describe('scoreKnowledgeBearing — decision-language', () => {
