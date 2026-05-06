@@ -101,4 +101,28 @@ describe('extractOutcome — candidateText', () => {
     const msgs = [makeMsg({ role: 'assistant', contentText: text })]
     expect(extractOutcome(msgs).candidateText).toBeNull()
   })
+
+  it('skips trailing save-t process report and falls back to real outcome', () => {
+    // dogfood pattern: session 末尾常常是 save-t 收尾報告（非 outcome）,
+    // 真實 implementation outcome 在 save-t 之前。extractor 應 skip save-t 往前找。
+    const realOutcome =
+      'Root cause: WAL never truncates, fixed at src/core/database.ts:1552. ' +
+      'Verified: 495/495 tests pass after the change. We decided to add TRUNCATE at end of indexer.'
+    const saveTReport =
+      '## save-t 完成 ✓\n\n寫入摘要：\n| 檔案 | 動作 |\n|---|---|\n| RESUME.md | 更新 |'
+    const msgs = [
+      makeMsg({ role: 'assistant', contentText: realOutcome }),
+      makeMsg({ role: 'user', contentText: '/save-t' }),
+      makeMsg({ role: 'assistant', contentText: saveTReport }),
+    ]
+    expect(extractOutcome(msgs).candidateText).toBe(realOutcome)
+  })
+
+  it('returns null when only save-t reports exist', () => {
+    const msgs = [
+      makeMsg({ role: 'assistant', contentText: 'Save-T 完成。\n\n## 輸出摘要\n更新了 3 個檔案。' }),
+      makeMsg({ role: 'assistant', contentText: '## save-t 完成 ✓\n\n寫入動作完成' }),
+    ]
+    expect(extractOutcome(msgs).candidateText).toBeNull()
+  })
 })

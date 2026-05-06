@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { ParsedLine } from './types.js'
-import { scoreKnowledgeBearing, KNOWLEDGE_THRESHOLD } from './outcome-scorer.js'
+import { scoreKnowledgeBearing, KNOWLEDGE_THRESHOLD, isProcessReport } from './outcome-scorer.js'
 
 // 從 session 挑「last substantial assistant text」作為記憶候選,餵 outcome-scorer.ts 評分。
 // 與 summarizer.ts inferOutcome 區別:inferOutcome 推 OutcomeStatus(committed/tested/...),
@@ -29,6 +29,7 @@ function pickLastSubstantialAssistant(messages: ParsedLine[]): string | null {
     if (msg.role !== 'assistant') continue
     const text = msg.contentText?.trim()
     if (!text) continue
+    if (isProcessReport(text)) continue
     if (isSubstantial(text)) return text
   }
   return null

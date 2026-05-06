@@ -26,6 +26,36 @@ describe('scoreKnowledgeBearing — noise short-circuit', () => {
   })
 })
 
+describe('scoreKnowledgeBearing — process-report short-circuit', () => {
+  // dogfood corpus 實證：39 筆 v=2 committed/tested sessions 全部 sub-threshold,
+  // last substantial assistant 抓到 save-t 收尾報告 (process-report) 而非真實 outcome。
+  // 短路設計：開頭符合 save-t 樣式 → score 0，避免下游 scorer pattern 偶然湊分。
+  it('flags save-t completion reports (CJK heading)', () => {
+    expect(scoreKnowledgeBearing('## save-t 完成 ✓\n\n寫入摘要表格...').reasons).toEqual(['process-report'])
+    expect(scoreKnowledgeBearing('Save-T 完成。\n\n## 輸出摘要').reasons).toEqual(['process-report'])
+    expect(scoreKnowledgeBearing('Save-t 流程完整。').reasons).toEqual(['process-report'])
+  })
+
+  it('flags save-t completion reports with emoji prefix', () => {
+    expect(scoreKnowledgeBearing('# 💾 Save-T 完成\n\n## 已更新檔案').reasons).toEqual(['process-report'])
+  })
+
+  it('flags save-t completion reports (EN)', () => {
+    expect(scoreKnowledgeBearing('## Save-T done\n\nupdated files...').reasons).toEqual(['process-report'])
+    expect(scoreKnowledgeBearing('Save-t finished. Updated 3 files.').reasons).toEqual(['process-report'])
+  })
+
+  it('does NOT flag mid-text save-t mentions', () => {
+    const text = 'After we ran save-t, the tests passed. Root cause: src/auth.ts:42.'
+    expect(scoreKnowledgeBearing(text).reasons).not.toContain('process-report')
+  })
+
+  it('does NOT flag unrelated "save" verbs', () => {
+    expect(scoreKnowledgeBearing('we save the result to disk').reasons).not.toContain('process-report')
+    expect(scoreKnowledgeBearing('auto-save token expired').reasons).not.toContain('process-report')
+  })
+})
+
 describe('scoreKnowledgeBearing — decision-language', () => {
   it('hits CJK decision verbs', () => {
     expect(scoreKnowledgeBearing('我們決定改用 SQLite 而非 LMDB').reasons).toContain('decision-language')
