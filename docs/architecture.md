@@ -83,7 +83,12 @@ If a scan is running and another event fires, we don't queue it — we set a `di
 
 `src/core/maintenance-coordinator.ts`
 
-Independent 5-minute timer, independent single-flight. Its only job: run `CompressionPipeline.runOnce({ batchSize: 50 })` — age memories, compress them in stages (raw → summary → one-liner), and delete those that haven't been accessed in 60 days.
+Independent 5-minute timer, independent single-flight. Two sweeps per tick (since v0.3.0):
+
+1. `CompressionPipeline.runOnce({ batchSize: 50 })` — age memories, compress them in stages (raw → summary → one-liner), and delete those that haven't been accessed in 60 days.
+2. `sweepJournal()` — delete journal entries that are `rejected` past their 7-day `expires_at`, plus `pending` entries older than 30 days. Promoted entries are kept indefinitely as an audit trail (the promotion already wrote a corresponding row into `memories`).
+
+Both sweeps share the coordinator's single-flight; the watcher's single-flight is separate.
 
 It does *not* share the watcher's single-flight. Here's why: the watcher writes to the session-scoped tables (`sessions` / `sessions_fts` / `session_files` / `message_uuids` / topic tables); the coordinator writes to `memories`. Disjoint tables means they can't corrupt each other's state. What they *can* do is contend for the SQLite writer (WAL serializes one writer at a time), but that's a throughput concern, not a correctness one. Keeping the single-flights per-engine means each one's worst case is bounded by itself, not by the other.
 
@@ -95,7 +100,9 @@ It does *not* share the watcher's single-flight. Here's why: the watcher writes 
 
 `src/api/routes.ts`
 
-Memories don't get created by the watcher. The watcher writes **session summaries** (into the `sessions` table); harvesting a summary *into a memory row* happens only when `/session/end` is called. That endpoint is driven by the SessionEnd hook `hooks/session-end.mjs`.
+Memories don't get created by the watcher. The watcher writes **session summaries** (into the `sessions` table); harvesting a summary into a journal candidate happens only when `/session/end` is called. That endpoint is driven by the SessionEnd hook `hooks/session-end.mjs`.
+
+Since v0.3.0 the harvest target is `session_journal`, **not** `memories`. The hook produces a low-trust candidate; turning it into a high-trust memory takes an explicit `POST /journal/promote` (typically via `ccmem promote <id>`). Manual `POST /memory/save` and the MCP `recall_save` tool still write directly to `memories` — they bypass journal entirely. Reasoning lives in the "Trust grade vs persistence gate" section below.
 
 ### Why harvest is hook-driven, not watcher-driven
 
@@ -119,6 +126,29 @@ const server = createServer(db, {
 
 The tradeoff: two concurrent `runIndexer` runs can contend for the writer. In practice they don't corrupt — SQLite WAL serializes writes — and the window is narrow (rescue only runs on cache miss).
 
+### Promote and reject paths
+
+`POST /journal/promote` runs four steps inside one BEGIN/COMMIT: `saveMemory` → `saveMemoryTopics` → `rebuildKnowledgeMap` → `promoteJournalEntry` (which sets the journal row's `status = 'promoted'` and links `promoted_memory_id`). If any step throws, the transaction rolls back and the journal row stays `pending`. `promoteJournalEntry()` returning `false` (concurrent promote race) re-throws inside the transaction so an already-written memory row does not leak — race-safe by construction, not by `SELECT … FOR UPDATE` gymnastics.
+
+`POST /journal/reject` is simpler: it sets `status = 'rejected'` and `expires_at = now + 7 days`. The decay sweep in Engine 2 reaps it later. The soft-delete + TTL choice (rather than immediate `DELETE`) means an accidental reject can be undone within a week — `UPDATE session_journal SET status = 'pending', expires_at = NULL WHERE id = ?` is enough.
+
+---
+
+## Trust grade vs persistence gate (the 0.3.0 redesign)
+
+Pre-0.3.0, the rule scorer in `summarizer.ts` decided whether the harvest got persisted at all (`score >= KNOWLEDGE_THRESHOLD`). A corpus audit on 39 known-good outcomes returned **0** over threshold — the scorer was systematically under-weighting real outcomes (the failure scenarios are catalogued in [issue #25](https://github.com/tznthou/ccRecall/issues/25)). Adding more regex patterns would have only delayed the next failure mode.
+
+The structural fix was to move the scorer off the persistence gate. Harvest now *always* lands somewhere; the scorer informs trust grade and promotion priority instead of yes/no. Two tables, two trust levels:
+
+| Table | Write path | Trust | Read path |
+|---|---|---|---|
+| `session_journal` | SessionEnd hook (auto) | Low — needs review | `/journal/pending`, `/health.journalPendingCount` |
+| `memories` | `recall_save` (manual) **or** `ccmem promote` | High — explicit human OK | `recall_query`, `recall_context`, `/memory/query` |
+
+The hard floor is preserved. The scorer's `noise` and `process-report` reasons still short-circuit (these aren't knowledge regardless of where they land), so Claude Code's session-completion summaries do not pollute the journal either.
+
+What this design buys us: harvester records broadly without polluting recall results; the user (or future tooling) can replay the trust decision later as patterns evolve, without re-running the harvester or losing data. What it costs: someone has to do the promotion. Manual-only on purpose — auto-promote at a threshold *is* the persistence gate we just removed, and would re-introduce the same failure mode. Surfacing pending count via `/health` and the full list via `/journal/pending` is the discovery mechanism.
+
 ---
 
 ## Trade-offs We Chose
@@ -130,6 +160,8 @@ The tradeoff: two concurrent `runIndexer` runs can contend for the writer. In pr
 | Three per-engine single-flights | One global lock | A global lock means compression blocks indexing and vice versa. Per-engine isolates blast radius to its own job. |
 | Hook-driven harvest | Watcher-driven harvest | Only Claude Code knows when a session *really* ends. Watcher sees file writes, not session lifecycle. |
 | Rescue bypasses single-flight | Rescue respects single-flight | Rescue is a blocking HTTP request. Getting dropped silently by the watcher's `dirty` flag would turn into a 404 to the hook. Deterministic execution wins. |
+| Two trust tiers (`session_journal` + `memories`) | Single table with a `trust` column | Disjoint tables make `recall_query` cheap and unambiguous — it never needs a `WHERE trust = 'high'` filter. Hook writes can never accidentally pollute recall, even if a future bug forgets the column. The cost — one extra table — is paid once at migration; the recall savings are amortized forever. |
+| Manual-only promotion | Auto-promote at score threshold | Auto-promote at a score threshold *is* the persistence gate we just removed. Threshold-driven persistence is what produced the 0/39 audit hit rate. Manual promotion (with `/health` surfacing) keeps the human in the loop precisely where we know the rule scorer can't be trusted alone. |
 
 ---
 
@@ -155,5 +187,9 @@ Authoritative state is always `gh issue list` plus project notes, not this file.
 | What does the summarizer produce? | `src/core/summarizer.ts:420-480` |
 | Why is `reason: 'resume'` skipped? | `hooks/session-end.mjs:82` |
 | How is compression scheduled? | `src/core/maintenance-coordinator.ts:51-57` |
+| Where is the v22 schema migration defined? | `src/core/database.ts` (grep `journalCreateSql`) |
+| How does `POST /journal/promote` stay atomic? | `src/api/routes.ts` (grep `promoteJournal`) |
+| Where does the journal decay sweep run? | `src/core/maintenance-coordinator.ts` (grep `sweepJournal`) |
+| Where is the `ccmem promote` / `reject` CLI? | `src/cli/journal.ts` |
 
 Found something the doc gets wrong, or a trade-off not explained here? Open a [GitHub Issue](https://github.com/tznthou/ccRecall/issues) — the code is the truth, and this doc should track it.

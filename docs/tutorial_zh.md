@@ -83,7 +83,7 @@ claude mcp add ccrecall --scope user -- ccmem-mcp
 4. **Hooks（Claude Code 生命週期鉤子）**
    下一節會教你設 hook。設好之後 Claude Code 會在兩個時機自動叫 ccRecall：
    - **SessionStart**：開新 session 前，把相關記憶注入 context（Claude 不用自己決定要不要查）
-   - **SessionEnd**：session 結束時，把剛剛這段萃取成一筆新的 memory
+   - **SessionEnd**：session 結束時，把剛剛這段寫進 **journal**——v0.3.0 之後是 low-trust 待審佇列，**不會**直接被 `recall_query` 召回，要先 promote（見下方情境四）
 
 一句話：**裝完 + 配好 hook，之後就不用管，它自己累積。**
 
@@ -110,18 +110,25 @@ ccmem install-hooks
 
 ### 驗證 hook 真的有觸發
 
+v0.3.0 之後 hook 是寫到 `session_journal`，不是 `memories`，所以要數那張表：
+
 ```bash
-# 記下目前 memory 數
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+# 記下目前 journal 數
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM session_journal"
+
+# 或直接看 /health
+curl http://127.0.0.1:7749/health | jq .journalPendingCount
 
 # 開新 Claude Code session，聊幾句，關掉
 
-# 再數一次，應該 +1
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM memories"
+# 再數一次，應該變多
+sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM session_journal"
 
 # 或者 tail daemon log 看 /session/end 被打到
 tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
 ```
+
+光靠 hook 觸發 `memories` 表的數字不會動——要 `ccmem promote`（見情境四）或 manual `recall_save` 才會。
 
 ---
 
@@ -156,7 +163,7 @@ tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
 
 ---
 
-## 日常三情境
+## 日常四情境
 
 ### 情境一：跨 session 召回「上次那個 bug」
 
@@ -203,6 +210,31 @@ Claude：三大 cluster：
 ```
 
 這是 ccRecall 的元認知層——不只記個別 memory，還會聚合成「你跟 AI 在這個 project 討論過什麼 topic」。
+
+### 情境四：把 journal 候選 promote 到 memories（v0.3.0 新增）
+
+SessionEnd hook 把每個結束的 session 寫進 `session_journal`——這是 low-trust 待審佇列，`recall_query` 不會去讀。要讓某筆候選變成可查詢，promote 它：
+
+```bash
+# 看待審清單
+curl http://127.0.0.1:7749/journal/pending | jq
+
+# 挑到喜歡的就 promote
+ccmem promote 123
+# {"id":456,"type":"discovery","confidence":0.7}
+
+# 看到雜訊就 reject
+ccmem reject 124
+# soft-delete，7 天 TTL 後由 decay sweep 清掉
+```
+
+想換 type 或調 confidence？
+
+```bash
+ccmem promote 123 --type decision --confidence 0.9
+```
+
+為什麼要手動？v0.3.0 之前的設計把 rule scorer 卡在 harvest 持久化 gate 上——corpus audit 顯示對真實 outcome 的命中率是 0/39（scorer 一直低估）。修法不是再加 regex patterns，是讓 harvester 廣捕，讓你決定值不值得留。完整 rationale 見 [issue #21](https://github.com/tznthou/ccRecall/issues/21)。
 
 ---
 
