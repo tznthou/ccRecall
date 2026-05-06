@@ -6,9 +6,11 @@ import type { Database, MemoryInput } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
 import { runLint } from '../core/lint.js'
 import { scrubErrorMessage } from '../core/log-safe.js'
+import { scoreKnowledgeBearing } from '../core/outcome-scorer.js'
 import type {
   HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
+  JournalEntryInput,
 } from '../core/types.js'
 import { deriveDepth } from '../core/types.js'
 import type { IntegrityCheckRecord } from '../core/integrity-monitor.js'
@@ -78,18 +80,26 @@ export function inferConfidence(outcome: OutcomeStatus): number {
   return 0.7
 }
 
-export function buildMemoryFromSession(session: SessionMeta): MemoryInput | null {
+/** P1 (#21): hook auto-harvester 改寫 session_journal 不寫 memories;
+ *  manual recall_save 仍直寫 memories。promote 路徑 (C4) 會把 journal entry
+ *  搬到 memories table 並設 confidence。
+ *
+ *  Score 重算: summarizer 已用 scorer 過 noise/process-report hard floor,
+ *  但 score + reasons metadata 沒儲在 sessions.harvest_text。重算成本低
+ *  (regex 對 <2KB 文字),換 schema 不變的代價可接受。 */
+export function buildJournalCandidate(session: SessionMeta): JournalEntryInput | null {
   const harvestText = session.harvestText?.trim()
   if (!harvestText) return null
+  const result = scoreKnowledgeBearing(harvestText)
+  // Defense in depth: 單元測試可能直接餵 SessionMeta, hard floor 仍應生效。
+  if (result.reasons.includes('noise') || result.reasons.includes('process-report')) return null
   return {
     sessionId: session.id,
     messageId: null,
     content: harvestText,
-    // Source switched from first-user-prompt to scored outcome cluster (#18).
-    // type='query' is a provenance marker; semantic kind (decision/discovery)
-    // stays the realm of explicit recall_save until #21 splits source vs kind.
-    type: 'query',
-    confidence: inferConfidence(session.outcomeStatus),
+    score: result.score,
+    reasonsJson: JSON.stringify(result.reasons),
+    projectId: session.projectId ?? null,
   }
 }
 
@@ -328,49 +338,30 @@ export function createRequestHandler(
         sendJson(res, 404, { error: 'session not found' })
         return
       }
-      const candidate = buildMemoryFromSession(session)
+      const candidate = buildJournalCandidate(session)
       if (!candidate) {
         sendJson(res, 200, {
           ok: true,
           sessionId: v.sessionId,
-          memoriesSaved: [],
+          journalSaved: [],
           dryRun: v.dryRun,
-          reason: 'session has no summary',
+          reason: 'session has no harvest candidate',
         })
         return
       }
 
-      const existing = db.getMemoriesBySessionId(v.sessionId)
-      if (existing.length > 0) {
-        sendJson(res, 200, {
-          ok: true,
-          sessionId: v.sessionId,
-          memoriesSaved: existing.map(m => m.id),
-          dryRun: v.dryRun,
-          alreadyHarvested: true,
-          candidate: v.dryRun ? candidate : undefined,
-        })
-        return
-      }
-
+      // P1 (#21): journal 用 content_hash UNIQUE INDEX dedup; saveJournalEntry
+      // 在重複 hash 時回 0。不再需要 v0.2.x 的 alreadyHarvested split-brain check;
+      // memory_topics / rebuildKnowledgeMap 留給 promote 路徑 (C4) 處理。
       const savedIds: number[] = []
       if (!v.dryRun) {
-        // Atomic：若 saveMemoryTopics 或 rebuildKnowledgeMap 失敗，整個 harvest rollback，
-        // 避免 retry 時 existing.length > 0 回 alreadyHarvested 但 topic 關聯缺失的 split-brain
-        db.runTransaction(() => {
-          const memoryId = db.saveMemory(candidate)
-          savedIds.push(memoryId)
-          const sessionTopics = db.getSessionTopicKeys(session.id)
-          if (sessionTopics.length > 0) {
-            db.saveMemoryTopics(memoryId, session.projectId, sessionTopics)
-          }
-          db.rebuildKnowledgeMap(session.projectId)
-        })
+        const id = db.saveJournalEntry(candidate)
+        if (id > 0) savedIds.push(id)
       }
       sendJson(res, 200, {
         ok: true,
         sessionId: v.sessionId,
-        memoriesSaved: savedIds,
+        journalSaved: savedIds,
         dryRun: v.dryRun,
         candidate: v.dryRun ? candidate : undefined,
       })
