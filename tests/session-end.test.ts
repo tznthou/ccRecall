@@ -9,9 +9,9 @@ import { runIndexer } from '../src/core/indexer.js'
 import { createServer } from '../src/api/server.js'
 import {
   inferConfidence,
-  buildMemoryFromSession,
+  buildJournalCandidate,
 } from '../src/api/routes.js'
-import type { OutcomeStatus, SessionMeta } from '../src/core/types.js'
+import type { SessionMeta } from '../src/core/types.js'
 
 function postJson(
   url: string,
@@ -127,37 +127,40 @@ describe('POST /session/end — outcome-bearing session', () => {
     expect((body as { error: string }).error).toMatch(/not found/)
   })
 
-  it('saves a memory whose content is the outcome cluster (NOT the user prompt)', async () => {
+  it('saves a journal entry whose content is the outcome cluster (NOT the user prompt)', async () => {
     const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
       sessionId,
     })
     expect(status).toBe(200)
-    const b = body as { ok: boolean; memoriesSaved: number[]; dryRun: boolean }
+    const b = body as { ok: boolean; journalSaved: number[]; dryRun: boolean }
     expect(b.ok).toBe(true)
-    expect(b.memoriesSaved).toHaveLength(1)
+    expect(b.journalSaved).toHaveLength(1)
     expect(b.dryRun).toBe(false)
 
-    const saved = db.queryMemories('Auth fix shipped', 10)
-    expect(saved.length).toBeGreaterThan(0)
-    expect(saved[0].sessionId).toBe(sessionId)
-    expect(saved[0].content).toContain('Root cause')
-    expect(saved[0].content).not.toContain('[intent]')
-    expect(saved[0].content).not.toContain('Fix the login bug in auth.ts')
-    expect(saved[0].type).toBe('query')
+    // P1 (#21): hook auto-harvest 不再寫 memories table
+    expect(db.getMemoryCount()).toBe(0)
+
+    const journalRows = db.rawAll<{ session_id: string; content: string; score: number }>(
+      "SELECT session_id, content, score FROM session_journal ORDER BY id ASC",
+    )
+    expect(journalRows).toHaveLength(1)
+    expect(journalRows[0].session_id).toBe(sessionId)
+    expect(journalRows[0].content).toContain('Root cause')
+    expect(journalRows[0].content).not.toContain('[intent]')
+    expect(journalRows[0].content).not.toContain('Fix the login bug in auth.ts')
+    expect(journalRows[0].score).toBeGreaterThanOrEqual(2) // outcome fixture clears scorer
   })
 
-  it('is idempotent: repeat call returns existing memory id', async () => {
+  it('is idempotent: repeat call dedupes via content_hash UNIQUE INDEX', async () => {
     const first = await postJson(`http://127.0.0.1:${port}/session/end`, { sessionId })
-    const firstBody = first.body as { memoriesSaved: number[]; alreadyHarvested?: boolean }
-    expect(firstBody.memoriesSaved).toHaveLength(1)
-    expect(firstBody.alreadyHarvested).toBeUndefined()
-    const firstId = firstBody.memoriesSaved[0]
+    const firstBody = first.body as { journalSaved: number[] }
+    expect(firstBody.journalSaved).toHaveLength(1)
 
     const second = await postJson(`http://127.0.0.1:${port}/session/end`, { sessionId })
-    const secondBody = second.body as { memoriesSaved: number[]; alreadyHarvested?: boolean }
-    expect(secondBody.memoriesSaved).toEqual([firstId])
-    expect(secondBody.alreadyHarvested).toBe(true)
-    expect(db.getMemoryCount()).toBe(1)
+    const secondBody = second.body as { journalSaved: number[] }
+    expect(secondBody.journalSaved).toHaveLength(0) // dedup → no new write
+
+    expect(db.getJournalPendingCount()).toBe(1)
   })
 
   it('respects dryRun: returns candidate but does not save', async () => {
@@ -167,18 +170,18 @@ describe('POST /session/end — outcome-bearing session', () => {
     expect(status).toBe(200)
     const b = body as {
       ok: boolean
-      memoriesSaved: number[]
+      journalSaved: number[]
       dryRun: boolean
-      candidate: { content: string; type: string }
+      candidate: { content: string; score: number }
     }
-    expect(b.memoriesSaved).toHaveLength(0)
+    expect(b.journalSaved).toHaveLength(0)
     expect(b.dryRun).toBe(true)
     expect(b.candidate.content).toContain('Root cause')
-    expect(db.getMemoryCount()).toBe(0)
+    expect(db.getJournalPendingCount()).toBe(0)
   })
 })
 
-describe('POST /session/end — sub-threshold session (no harvest)', () => {
+describe('POST /session/end — sub-threshold session (P1: still journals, no threshold gate)', () => {
   let tmpDir: string
   let db: Database
   let server: http.Server
@@ -212,17 +215,22 @@ describe('POST /session/end — sub-threshold session (no harvest)', () => {
     await rm(tmpDir, { recursive: true, force: true })
   })
 
-  it('skips memory but keeps session row when no candidate clears threshold', async () => {
+  // P1 (#21): 移除 score >= 2 persistence gate。sub-threshold candidate
+  // (例如 "I cannot tell time directly.") 仍會進 journal,只要不是 noise / process-report。
+  // 但若 summarizer extractOutcome 因 fixture 太短、無 substantial assistant 而沒產
+  // candidateText, harvest_text 仍是 null,journal 也不會寫。本 fixture 屬後者。
+  it('produces no harvest candidate when session lacks substantial assistant text', async () => {
     const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
       sessionId,
     })
     expect(status).toBe(200)
-    const b = body as { ok: boolean; memoriesSaved: number[]; reason?: string }
+    const b = body as { ok: boolean; journalSaved: number[]; reason?: string }
     expect(b.ok).toBe(true)
-    expect(b.memoriesSaved).toHaveLength(0)
+    expect(b.journalSaved).toHaveLength(0)
     expect(b.reason).toBeTruthy()
 
     expect(db.getSessionById(sessionId)).not.toBeNull()
+    expect(db.getJournalPendingCount()).toBe(0)
     expect(db.getMemoryCount()).toBe(0)
   })
 })
@@ -265,16 +273,16 @@ describe('POST /session/end — rescue reindex (fresh session race)', () => {
     await rm(tmpDir, { recursive: true, force: true })
   })
 
-  it('rescues a fresh session: reindexes on miss then harvests', async () => {
+  it('rescues a fresh session: reindexes on miss then harvests to journal', async () => {
     expect(db.getSessionById(freshSessionId)).toBeNull()
 
     const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
       sessionId: freshSessionId,
     })
     expect(status).toBe(200)
-    const b = body as { ok: boolean; memoriesSaved: number[] }
+    const b = body as { ok: boolean; journalSaved: number[] }
     expect(b.ok).toBe(true)
-    expect(b.memoriesSaved).toHaveLength(1)
+    expect(b.journalSaved).toHaveLength(1)
     expect(db.getSessionById(freshSessionId)).not.toBeNull()
   })
 
@@ -329,19 +337,20 @@ describe('session-end helpers (unit)', () => {
   }
 
   it('inferConfidence: committed 0.9, tested 0.8, else 0.7', () => {
+    // 留給 promote 路徑 (C4) 在升級 journal entry 到 memories 時推導 confidence。
     expect(inferConfidence('committed')).toBe(0.9)
     expect(inferConfidence('tested')).toBe(0.8)
     expect(inferConfidence('in-progress')).toBe(0.7)
     expect(inferConfidence(null)).toBe(0.7)
   })
 
-  it('buildMemoryFromSession: returns null when harvestText empty', () => {
-    expect(buildMemoryFromSession({ ...baseSession, harvestText: null })).toBeNull()
-    expect(buildMemoryFromSession({ ...baseSession, harvestText: '   ' })).toBeNull()
+  it('buildJournalCandidate: returns null when harvestText empty', () => {
+    expect(buildJournalCandidate({ ...baseSession, harvestText: null })).toBeNull()
+    expect(buildJournalCandidate({ ...baseSession, harvestText: '   ' })).toBeNull()
   })
 
-  it('buildMemoryFromSession: content is harvestText verbatim — no [intent] prefix, no summary join', () => {
-    const result = buildMemoryFromSession(baseSession)
+  it('buildJournalCandidate: content is harvestText verbatim — no [intent] prefix, no summary join', () => {
+    const result = buildJournalCandidate(baseSession)
     expect(result).not.toBeNull()
     expect(result!.content).toBe(baseSession.harvestText!.trim())
     expect(result!.content).not.toContain('[intent]')
@@ -351,29 +360,18 @@ describe('session-end helpers (unit)', () => {
     expect(result!.messageId).toBeNull()
   })
 
-  it('buildMemoryFromSession: type=query invariant across ALL outcomes (Issue #19), confidence varies', () => {
-    // Pre-0.2.5 harvester used outcome→decision/discovery classification. 0.2.5
-    // hard-coded type='query' to drop classification; #18 keeps that invariant
-    // unchanged while switching the source from intent to harvestText. Auto-
-    // harvest type must remain 'query' for every outcome value — semantic kind
-    // (decision/discovery) stays the realm of explicit recall_save until #21.
-    const cases: Array<[OutcomeStatus, number]> = [
-      ['committed', 0.9],
-      ['tested', 0.8],
-      ['in-progress', 0.7],
-      [null, 0.7],
-    ]
-    for (const [outcome, expectedConfidence] of cases) {
-      const result = buildMemoryFromSession({ ...baseSession, outcomeStatus: outcome })
-      expect(result!.type).toBe('query')
-      expect(result!.confidence).toBe(expectedConfidence)
-    }
+  it('buildJournalCandidate: stores score and reasonsJson from re-scoring', () => {
+    const result = buildJournalCandidate(baseSession)
+    expect(result).not.toBeNull()
+    expect(result!.score).toBeGreaterThanOrEqual(2) // outcome fixture clears scorer
+    const reasons = JSON.parse(result!.reasonsJson!)
+    expect(Array.isArray(reasons)).toBe(true)
+    expect(reasons.length).toBeGreaterThan(0)
   })
 
-  it('buildMemoryFromSession: ignores intent / summary / outcome when harvestText is null', () => {
-    // Old source (intentText + summaryText) MUST NOT leak back as a fallback —
-    // otherwise the 60-80% planned write reduction collapses.
-    const result = buildMemoryFromSession({
+  it('buildJournalCandidate: ignores intent / summary / outcome when harvestText is null', () => {
+    // Old source (intentText + summaryText) MUST NOT leak back as a fallback.
+    const result = buildJournalCandidate({
       ...baseSession,
       harvestText: null,
       intentText: 'A real-looking decision intent',
@@ -381,5 +379,15 @@ describe('session-end helpers (unit)', () => {
       outcomeStatus: 'committed',
     })
     expect(result).toBeNull()
+  })
+
+  it('buildJournalCandidate: hard-floor short-circuits noise / process-report (defense in depth)', () => {
+    // process-report (save-t style 收尾報告) 即便繞過 summarizer 直接餵 SessionMeta
+    // 也應被 buildJournalCandidate 擋下,否則 journal 會被 process meta 污染。
+    const processReport = buildJournalCandidate({
+      ...baseSession,
+      harvestText: '## save-t 完成 ✓\n\n寫入摘要表格',
+    })
+    expect(processReport).toBeNull()
   })
 })

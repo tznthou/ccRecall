@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { ParsedLine, SessionSummary, OutcomeSignals, OutcomeStatus, FileOperation, SessionFileInput } from './types.js'
 import { extractOutcome } from './outcome-extractor.js'
-import { scoreKnowledgeBearing, KNOWLEDGE_THRESHOLD } from './outcome-scorer.js'
+import { scoreKnowledgeBearing } from './outcome-scorer.js'
 
 /** 摘要引擎版本（每次規則改動時遞增，讓 backfill 可追蹤） */
 export const SUMMARY_VERSION = 2
@@ -432,12 +432,16 @@ export function summarizeSession(
   // ── Outcome ──
   const { status: outcomeStatus, signals: outcomeSignals } = inferOutcome(messages)
 
-  // ── Harvest candidate (issue #18: last substantial assistant, scored knowledge-bearing) ──
+  // ── Harvest candidate (issue #18 outcome cluster + #21 P1 journal split) ──
+  // v0.3.0: 移除 score >= 2 persistence gate (P1 設計: harvest broadly, remember
+  // narrowly)。但保留 hard floor: noise / process-report 仍 short-circuit (前者
+  // 是純 ack token、後者是 session 收尾報告; 都不該進 journal)。
   const extraction = extractOutcome(messages)
   let harvestText: string | null = null
   if (extraction.candidateText) {
     const result = scoreKnowledgeBearing(extraction.candidateText)
-    if (result.score >= KNOWLEDGE_THRESHOLD) {
+    const isHardFloor = result.reasons.includes('noise') || result.reasons.includes('process-report')
+    if (!isHardFloor) {
       harvestText = truncate(extraction.candidateText, MAX_HARVEST_LEN)
     }
   }

@@ -199,24 +199,26 @@ describe('E2E: index → search → HTTP', () => {
     expect(loginTopic).toBeTruthy()
   })
 
-  it('Phase 3c: POST /session/end harvest inherits session topics into memory_topics', async () => {
+  it('P1 (#21): POST /session/end writes session_journal, NOT memory_topics', async () => {
+    // v0.2.x 邏輯: session/end harvest 寫 memories + 繼承 session topics 到 memory_topics
+    // v0.3.0 (P1): hook auto-harvest 改寫 session_journal; memory_topics 留給 promote 路徑 (C4)
     const sessions = db.rawAll<{ id: string }>('SELECT id FROM sessions LIMIT 1')
     const sessionId = sessions[0].id
-    const sessionTopicsBefore = db.getSessionTopicKeys(sessionId)
-    expect(sessionTopicsBefore.length).toBeGreaterThan(0)
 
-    const { status, body } = await postJson(
+    const { status } = await postJson(
       `http://127.0.0.1:${port}/session/end`,
       { sessionId },
     )
     expect(status).toBe(200)
-    const savedIds = (body as { memoriesSaved: number[] }).memoriesSaved
-    expect(savedIds.length).toBe(1)
 
-    const memTopics = db.rawAll<{ topic_key: string }>(
-      `SELECT topic_key FROM memory_topics WHERE memory_id = ${savedIds[0]} ORDER BY topic_key`,
-    ).map(r => r.topic_key)
-    expect(memTopics).toEqual(sessionTopicsBefore)
+    // 核心 assertion: memory_topics 沒有任何 row (P1 不繼承)
+    const memTopicsAfter = db.rawAll<{ topic_key: string }>(
+      'SELECT topic_key FROM memory_topics',
+    )
+    expect(memTopicsAfter).toHaveLength(0)
+
+    // memories table 也不該被 hook 寫到 (manual recall_save 才會寫)
+    expect(db.getMemoryCount()).toBe(0)
   })
 
   it('Phase 4d: GET /lint/warnings returns orphan + stale report', async () => {
