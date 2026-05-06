@@ -1620,6 +1620,11 @@ export class Database {
   // ─────────────────────────────────────────────────────────────
   // session_journal DAO (issue #21 P1)
   // 低信任 harvest 候選的寫入入口; manual recall_save 仍走 saveMemory()。
+  //
+  // Trust boundary: queryMemories / getMemoriesByTopics 故意只查 memories table,
+  // 不 union session_journal — unpromoted journal entries 是 low-trust,不該污染
+  // recall 結果。promote 路徑 (C4) 把 journal entry 搬到 memories 後才會被 recall
+  // 看到。若未來修改 query 邏輯需動到 journal,務必保持這條 invariant。
   // ─────────────────────────────────────────────────────────────
 
   /** 寫入 journal 條目。content_hash 內部以 SHA-256 計算; 同 hash 第二次 INSERT

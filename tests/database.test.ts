@@ -105,6 +105,44 @@ describe('session_journal DAO (issue #21 P1)', () => {
   })
 })
 
+describe('recall trust boundary (issue #21 P1)', () => {
+  // P1 invariant: unpromoted journal entries 是 low-trust,不該出現在 recall_query
+  // / recall_context 結果。queryMemories 只查 memories table; journal 沒有對應的
+  // FTS5 virtual table,自然不會被 FTS match。本 test 鎖住設計意圖,未來若改寫
+  // query 邏輯讓 journal 漏進來,test fail 等於告警。
+  it('queryMemories does NOT return unpromoted journal entries', () => {
+    db.saveJournalEntry({
+      content: 'unpromoted candidate text with token: needle-zxq-12345',
+      score: 0,
+    })
+    expect(db.getJournalPendingCount()).toBe(1)
+    expect(db.getMemoryCount()).toBe(0)
+
+    const results = db.queryMemories('needle-zxq-12345', 10)
+    expect(results).toHaveLength(0)
+  })
+
+  it('queryMemories returns memories but NOT journal even when both have matching content', () => {
+    // 同樣 content 同時寫進 journal + memories,query 只該回 memories 那筆。
+    const matchToken = 'distinctive-token-abc-789'
+    db.saveJournalEntry({
+      content: `journal version: ${matchToken}`,
+      score: 0,
+    })
+    const memId = db.saveMemory({
+      sessionId: null,
+      messageId: null,
+      content: `memory version: ${matchToken}`,
+      type: 'discovery',
+    })
+
+    const results = db.queryMemories(matchToken, 10)
+    expect(results).toHaveLength(1)
+    expect(results[0].id).toBe(memId)
+    expect(results[0].content).toContain('memory version')
+  })
+})
+
 describe('migration system', () => {
   it('schema_version table exists with baseline', () => {
     const rows = db.rawAll<{ version: number; description: string }>(
