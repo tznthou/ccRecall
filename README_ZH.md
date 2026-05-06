@@ -293,9 +293,7 @@ ccRecall/
 │   │                                 # FTS5 CJK edge cases、integrity monitor 等）
 │   └── fixtures/                     # 測試用 JSONL + 共用 helpers
 ├── .mcp.json.example                 # MCP client 設定範本
-├── NOTICE / SECURITY.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
-└── .claude/
-    └── pi-research/                  # 架構研究文件
+└── NOTICE / SECURITY.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
 ```
 
 ---

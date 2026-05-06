@@ -15,16 +15,16 @@ more like an iteration counter than a strict SemVer major).
 
 ### Fixed
 
-- **`extractOutcome` skips save-t process reports** (PR #24). Dogfood corpus audit (39 v=2 committed/tested sessions) found 100% sub-threshold scoring because `pickLastSubstantialAssistant` captured `save-t` completion reports (process meta) instead of real implementation outcomes. The walk-back loop now skips process-report candidates and falls back to earlier substantial assistant text. `scoreKnowledgeBearing` also short-circuits process-report → score 0 (defense in depth).
+- **`extractOutcome` skips session wrap-up reports** (PR #24). Dogfood corpus audit (39 v=2 committed/tested sessions) found 100% sub-threshold scoring because `pickLastSubstantialAssistant` captured session-completion summary reports (process meta) instead of real implementation outcomes. The walk-back loop now skips process-report candidates and falls back to earlier substantial assistant text. `scoreKnowledgeBearing` also short-circuits process-report → score 0 (defense in depth).
 
 ### Added
 
-- `isProcessReport(text)` exported from `src/core/outcome-scorer.ts` and consumed by `outcome-extractor.ts`. `PROCESS_REPORT_RES` is anchored at `^` so long mid-text mentions of save-t do not misfire. Patterns cover CJK (`save-t 完成 / 流程完整 / 完整`), EN (`save-t done / finished / completed`), slash-command form (`/save-t`), and colon separators (`Save-T:` / `save-t：`), with optional markdown heading prefix and emoji (`💾🟢✅`).
+- `isProcessReport(text)` exported from `src/core/outcome-scorer.ts` and consumed by `outcome-extractor.ts`. `PROCESS_REPORT_RES` is anchored at `^` so long mid-text mentions do not misfire. Patterns cover CJK and English session-completion markers, slash-command form, and colon-separated headings, with optional markdown heading prefix and emoji (`💾🟢✅`).
 - `PROCESS_REPORT_MAX_LEN = 5000` length gate in `isProcessReport` to prevent regex linear-scan on megabyte-scale assistant text (security: ReDoS prevention).
 
 ### ⚠️ Known limitation — prerequisite fix, not sufficient
 
-This fix unblocks the harvester's view of real outcomes (save-t no longer hides them) but **does not on its own raise the hit rate above zero**. The audit shows real implementation outcomes now reach the scorer, but they stay sub-threshold due to category coverage gaps in the 5-category rule scorer:
+This fix unblocks the harvester's view of real outcomes (wrap-up reports no longer hide them) but **does not on its own raise the hit rate above zero**. The audit shows real implementation outcomes now reach the scorer, but they stay sub-threshold due to category coverage gaps in the 5-category rule scorer:
 
 - Chinese commit confirmation (`Commit 6de0666 落地`) — score 0
 - `## 修復總結 / 完工總結` tables — score 1 (occasionally hits decision-language)
@@ -217,7 +217,7 @@ curl -s http://127.0.0.1:7749/health | jq .version
 
 ### Added
 
-- **Harvest noise filter** (`isHarvestNoise()` in `src/core/harvester-filter.ts`). Hook auto-harvest now skips conversation-control noise before writing to the memories table: bare slash commands (`/clear`, `/model`, `/compact`, `/save-t`), pure-CJK progress query shells (`繼續我們的進度`, `確認我們現在的進度`, `這個專案進度如何?`), and speculative self-reflection openings (`我們剛是不是 …`). False-positive guards: short-text 30-char cap on slash and progress detection so audit queries carrying concrete technical detail still pass; reflection narrowed to the high-signal `^我們剛是不是` prefix so concrete inquiries like `我們剛剛 github 沒有發 tag ？` are kept.
+- **Harvest noise filter** (`isHarvestNoise()` in `src/core/harvester-filter.ts`). Hook auto-harvest now skips conversation-control noise before writing to the memories table: bare slash commands (`/clear`, `/model`, `/compact`), pure-CJK progress query shells (`繼續我們的進度`, `確認我們現在的進度`, `這個專案進度如何?`), and speculative self-reflection openings (`我們剛是不是 …`). False-positive guards: short-text 30-char cap on slash and progress detection so audit queries carrying concrete technical detail still pass; reflection narrowed to the high-signal `^我們剛是不是` prefix so concrete inquiries like `我們剛剛 github 沒有發 tag ？` are kept.
 - **`'query'` MemoryType** added to the union, MCP `MEMORY_TYPES` enum, and HTTP `VALID_MEMORY_TYPES` set. Hook-harvested memories now always carry `type='query'` regardless of session outcome — the prompt itself is a query, not a decision or discovery, even when the underlying session ended in a commit. `decision` / `discovery` / `feedback` / `preference` / `pattern` are reserved for explicit `recall_save` writes.
 
 ### Changed

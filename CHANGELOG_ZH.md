@@ -12,16 +12,16 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ### 修正
 
-- **`extractOutcome` 跳過 save-t 收尾報告**（PR #24）。Dogfood corpus audit（39 筆 v=2 committed/tested sessions）發現 100% sub-threshold,因為 `pickLastSubstantialAssistant` 抓到 `save-t` 收尾報告（process meta）而非真實 implementation outcome。walk-back 迴圈改成 skip process-report,往前找前一段 substantial assistant text。`scoreKnowledgeBearing` 同步加 process-report short-circuit → score 0（defense in depth）。
+- **`extractOutcome` 跳過 session 收尾報告**（PR #24）。Dogfood corpus audit（39 筆 v=2 committed/tested sessions）發現 100% sub-threshold,因為 `pickLastSubstantialAssistant` 抓到 session 收尾摘要報告（process meta）而非真實 implementation outcome。walk-back 迴圈改成 skip process-report,往前找前一段 substantial assistant text。`scoreKnowledgeBearing` 同步加 process-report short-circuit → score 0（defense in depth）。
 
 ### 新增
 
-- `src/core/outcome-scorer.ts` export `isProcessReport(text)`,給 `outcome-extractor.ts` 用。`PROCESS_REPORT_RES` 用 `^` anchor,長文本 mid-text 提及 save-t 不誤殺。Pattern 覆蓋繁中（`save-t 完成 / 流程完整 / 完整`）、英文（`save-t done / finished / completed`）、slash command（`/save-t`）、冒號分隔（`Save-T:` / `save-t：`）,可選 markdown heading prefix 與 emoji（`💾🟢✅`）。
+- `src/core/outcome-scorer.ts` export `isProcessReport(text)`,給 `outcome-extractor.ts` 用。`PROCESS_REPORT_RES` 用 `^` anchor,長文本 mid-text 提及不誤殺。Pattern 覆蓋繁中與英文 session 收尾標記、slash command 形式、冒號分隔標題,可選 markdown heading prefix 與 emoji（`💾🟢✅`）。
 - `isProcessReport` 加 `PROCESS_REPORT_MAX_LEN = 5000` 長度閘門,防 regex 對 megabyte 尺寸 assistant text 做 linear scan（security: ReDoS prevention）。
 
 ### ⚠️ 已知限制——前置修補,不充分
 
-這次修補解開 harvester 對真實 outcome 的視野（save-t 不再屏蔽）,但**單獨無法把命中率拉到 0 之上**。Audit 顯示真實 implementation outcome 現在能到達 scorer,但仍 sub-threshold——5 類 rule scorer 的覆蓋缺口:
+這次修補解開 harvester 對真實 outcome 的視野（收尾報告不再屏蔽）,但**單獨無法把命中率拉到 0 之上**。Audit 顯示真實 implementation outcome 現在能到達 scorer,但仍 sub-threshold——5 類 rule scorer 的覆蓋缺口:
 
 - 中文 commit confirmation（`Commit 6de0666 落地`）→ score 0
 - `## 修復總結 / 完工總結` 表格 → score 1（偶中 decision-language）
@@ -214,7 +214,7 @@ curl -s http://127.0.0.1:7749/health | jq .version
 
 ### 新增
 
-- **Harvest 噪音過濾器**（`isHarvestNoise()`，`src/core/harvester-filter.ts`）。Hook auto-harvest 寫進 memories table 之前會先擋掉對話操控類噪音：純 slash 指令（`/clear`、`/model`、`/compact`、`/save-t`）、純中文進度查詢殼（`繼續我們的進度`、`確認我們現在的進度`、`這個專案進度如何?`）、推測式自我反思開頭（`我們剛是不是 …`）。誤殺防護：slash 跟 progress 偵測都有 30 字短文本上限，帶具體技術細節的 audit query 仍會被保留；reflection 只留 `^我們剛是不是` 一條 high-signal pattern，所以「我們剛剛 github 沒有發 tag ？」這種具體 issue 詢問還是會進去。
+- **Harvest 噪音過濾器**（`isHarvestNoise()`，`src/core/harvester-filter.ts`）。Hook auto-harvest 寫進 memories table 之前會先擋掉對話操控類噪音：純 slash 指令（`/clear`、`/model`、`/compact`）、純中文進度查詢殼（`繼續我們的進度`、`確認我們現在的進度`、`這個專案進度如何?`）、推測式自我反思開頭（`我們剛是不是 …`）。誤殺防護：slash 跟 progress 偵測都有 30 字短文本上限，帶具體技術細節的 audit query 仍會被保留；reflection 只留 `^我們剛是不是` 一條 high-signal pattern，所以「我們剛剛 github 沒有發 tag ？」這種具體 issue 詢問還是會進去。
 - **新增 `'query'` MemoryType**——加進 union、MCP `MEMORY_TYPES` enum、HTTP `VALID_MEMORY_TYPES` set。Hook 抓進來的記憶從此一律標 `type='query'`，不再看 session outcome——prompt 本身就是查詢，不是 decision 也不是 discovery，就算這次 session 真的 commit 了也一樣。`decision` / `discovery` / `feedback` / `preference` / `pattern` 留給 `recall_save` 手動寫入用。
 
 ### 變更

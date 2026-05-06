@@ -300,9 +300,7 @@ ccRecall/
 │   │                             # FTS5 CJK edge cases, integrity monitor, ...)
 │   └── fixtures/                 # Sample JSONL + shared test helpers
 ├── .mcp.json.example             # MCP client config template
-├── NOTICE / SECURITY.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
-└── .claude/
-    └── pi-research/              # Architecture research documents
+└── NOTICE / SECURITY.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
 ```
 
 ---
