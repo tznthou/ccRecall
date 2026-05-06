@@ -220,6 +220,37 @@ export interface Memory {
   createdAt: string
 }
 
+// ── ccRecall 新增：session_journal（issue #21 P1：low-trust harvest 候選） ──
+
+/** journal 條目狀態：pending=harvester 寫入起點；promoted=已 manual promote 到 memories；rejected=待 decay sweep 清除 */
+export type JournalStatus = 'pending' | 'promoted' | 'rejected'
+
+/** session_journal 條目（DB row） */
+export interface JournalEntry {
+  id: number
+  sessionId: string | null
+  messageId: string | null
+  content: string
+  contentHash: string
+  score: number
+  reasonsJson: string | null
+  status: JournalStatus
+  expiresAt: string | null
+  promotedMemoryId: number | null
+  projectId: string | null
+  createdAt: string
+}
+
+/** 寫入 session_journal 的參數型別 */
+export interface JournalEntryInput {
+  sessionId?: string | null
+  messageId?: string | null
+  content: string
+  score: number
+  reasonsJson?: string | null
+  projectId?: string | null
+}
+
 // ── ccRecall 新增：元認知型別（Phase 3） ──
 
 /** 知識深度（由 mention_count 衍生：>=5 deep, >=2 medium, >=1 shallow, else none） */

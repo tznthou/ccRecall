@@ -41,7 +41,7 @@ afterEach(async () => {
 })
 
 describe('schema', () => {
-  it('createSchema → tables + indexes at v20 target state', () => {
+  it('createSchema → tables + indexes at v22 target state', () => {
     const tables = db.rawAll<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).map(r => r.name)
@@ -52,6 +52,7 @@ describe('schema', () => {
     expect(tables).toContain('memories')
     expect(tables).toContain('memories_fts')
     expect(tables).toContain('sessions_fts')
+    expect(tables).toContain('session_journal')
     // v20 dropped
     expect(tables).not.toContain('messages')
     expect(tables).not.toContain('messages_fts')
@@ -63,7 +64,44 @@ describe('schema', () => {
     ).map(r => r.name)
     expect(idxNames).toContain('idx_message_uuids_session')
     expect(idxNames).toContain('idx_sessions_project')
+    expect(idxNames).toContain('idx_journal_status')
+    expect(idxNames).toContain('idx_journal_hash')
     expect(idxNames).not.toContain('idx_messages_session')
+  })
+})
+
+describe('session_journal DAO (issue #21 P1)', () => {
+  it('saveJournalEntry inserts row, getJournalPendingCount counts pending', () => {
+    expect(db.getJournalPendingCount()).toBe(0)
+
+    const id = db.saveJournalEntry({
+      sessionId: null,
+      messageId: null,
+      content: 'first outcome candidate',
+      score: 1,
+      reasonsJson: '["decision-language"]',
+      projectId: null,
+    })
+
+    expect(id).toBeGreaterThan(0)
+    expect(db.getJournalPendingCount()).toBe(1)
+  })
+
+  it('saveJournalEntry deduplicates by content_hash (UNIQUE INDEX idempotency)', () => {
+    const first = db.saveJournalEntry({ content: 'duplicate content', score: 0 })
+    expect(first).toBeGreaterThan(0)
+
+    const second = db.saveJournalEntry({ content: 'duplicate content', score: 0 })
+    expect(second).toBe(0) // INSERT OR IGNORE → lastInsertRowid 0 表示被擋下
+
+    expect(db.getJournalPendingCount()).toBe(1)
+  })
+
+  it('saveJournalEntry stores score 0 entries (no threshold gate)', () => {
+    // P1 核心: 移除 KNOWLEDGE_THRESHOLD ≥ 2 gate, score 0/1 也進 journal
+    const id = db.saveJournalEntry({ content: 'low-score outcome', score: 0 })
+    expect(id).toBeGreaterThan(0)
+    expect(db.getJournalPendingCount()).toBe(1)
   })
 })
 
