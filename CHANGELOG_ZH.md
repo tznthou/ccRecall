@@ -8,6 +8,89 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.3.0] — 2026-05-06
+
+### ⚠️ Breaking — harvest 寫入路徑
+
+Hook auto-harvester（`POST /session/end`）改寫到新建的 `session_journal`
+表,不再寫 `memories`。Manual `recall_save` 不受影響——仍直寫 `memories`。
+這是 issue #21（也是 issue #25 0/39 命中率底層根因）的架構修正:rule scorer
+原本架在 persistence gate,實際位置應該是 trust grade。再補 regex 只會延後
+下次撞牆。把 low-trust harvest 跟 high-trust memories 分開後,harvester 可以
+廣捕候選,但 recall 結果保持乾淨。
+
+`recall_query` / `recall_context` 結果不受 journal 影響——by design 它們只
+讀 `memories`。
+
+**Response 欄位改名**: `POST /session/end` 回 `journalSaved`(原 `memoriesSaved`)。
+Hook 端不解析 response body,既裝 hook 不需重裝。
+
+### 新增
+
+- **Schema v22**: `session_journal` 表含 `(session_id, message_id, content,
+  content_hash, score, reasons_json, status, expires_at, promoted_memory_id,
+  project_id, created_at)`。`idx_journal_status` 與 `idx_journal_hash UNIQUE`
+  支撐 sweep + idempotency。
+- **`ccmem promote <id>`** — manual 升級到 memories。Atomic: saveMemory
+  → saveMemoryTopics → rebuildKnowledgeMap → promoteJournalEntry。
+  optional `--type`(預設 `discovery`)、`--confidence`(預設 `0.7`)。已 promoted
+  回 409;不存在回 404。
+- **`ccmem reject <id>`** — soft-delete,7 天 TTL via `expires_at`。decay sweep
+  到期後清理。
+- **`/health` endpoint** 加 `journalPendingCount`。surfacing pending queue 是
+  user 發現可 promote 候選的方式——manual-only by design;auto-promote 會
+  重蹈 threshold gate 覆轍。
+- **Decay sweep** 在既有 `MaintenanceCoordinator` tick 內: rejected 過
+  `expires_at` + pending 超過 30 天 → DELETE。promoted 留作 audit trail。
+  memories 表不被碰(manual 寫入由 table 邊界自動 exempt)。
+
+### 變更
+
+- `summarizer.ts` 移除 `score >= KNOWLEDGE_THRESHOLD`(≥ 2)persistence gate。
+  hard floor 保留: `noise` / `process-report` 仍 short-circuit(這些不論落
+  到哪裡都不是 knowledge)。
+- `buildMemoryFromSession` rename 為 `buildJournalCandidate`,return
+  `JournalEntryInput` 含重新 score 後的 `score` + `reasonsJson` metadata。
+  Score 在 journal 寫入時重算(<2KB 文字 regex,成本低),不需 v23 migration
+  加 `harvest_score` 欄位。
+
+### Migration
+
+- v22 migration 在 daemon startup 自動跑。pre-check: `memories` 表必須存在
+  (否則 dangle FK,throw 提示從 pre-v22 backup restore)。
+- **升級前建議先 backup**:
+  `cp ~/.ccrecall/ccrecall.db ~/.ccrecall/ccrecall.db.pre-v22.bak`
+- 既有 memories rows 不變。v0.2.x 17 筆 `type='query'` 記憶不被搬到 journal
+  ——凍結在原位,新 harvest 從現在開始寫 journal。
+
+### 測試
+
+- 跨 5 個 commit 加 +22 tests(schema target / journal DAO / trust boundary
+  / promote+reject endpoints / sweep TTL / health 欄位)
+- 535 → 557 tests passing。
+
+### 首發觀察期
+
+Plan-critic acceptance criteria:
+
+| 天數 | 指標 | 通過閾值 | 不通過解讀 |
+|---|---|---|---|
+| 14 | journal 寫入總筆數 | ≥ 50 | 移除 gate 沒解到問題——上游 `pickLastSubstantialAssistant` 才是真根因 |
+| 30 | manual promote 累計 | ≥ 3 | surfacing 不夠——啟動 issue #21 P2 規劃 |
+
+追蹤: [issue #21](https://github.com/tznthou/ccRecall/issues/21)。
+
+### 升級清單
+
+- `pnpm install -g @tznthou/ccrecall@0.3.0`(或您慣用的安裝路徑)。
+- 可選: 重啟前先 backup DB(見 Migration 段)。
+- `launchctl kickstart -k gui/$UID/com.tznthou.ccrecall` 重啟 daemon,
+  v22 migration 在第一次連線時跑。
+- `curl http://127.0.0.1:7749/health` 驗 `version: "0.3.0"` 及新增的
+  `journalPendingCount` 欄位。
+
+---
+
 ## [0.2.7] — 2026-05-06
 
 ### 修正

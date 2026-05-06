@@ -11,6 +11,99 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.3.0] — 2026-05-06
+
+### ⚠️ Breaking — harvest write path
+
+Hook auto-harvester (`POST /session/end`) now writes to a new
+`session_journal` table instead of `memories`. Manual `recall_save` is
+unchanged — it still writes directly to `memories`. This is the
+architectural fix for issue #21 (and the underlying root cause of
+issue #25's 0/39 hit rate): the rule scorer was on the persistence
+gate, not on a trust grade. Adding more regex patterns would have only
+delayed the next failure mode. Splitting low-trust harvest from
+high-trust memories lets the harvester record candidates broadly while
+recall results stay clean.
+
+`recall_query` / `recall_context` / `recall_query` results are not
+affected by journal entries — by design they only read `memories`.
+
+**Response field rename**: `POST /session/end` returns `journalSaved`
+(was `memoriesSaved`). Hooks ignore the response body, so installed
+hooks continue to work without reinstall.
+
+### Added
+
+- **Schema v22**: `session_journal` table with `(session_id, message_id,
+  content, content_hash, score, reasons_json, status, expires_at,
+  promoted_memory_id, project_id, created_at)`. `idx_journal_status`
+  and `idx_journal_hash UNIQUE` for sweep + idempotency.
+- **`ccmem promote <id>`** — manual promotion to memories. Atomic:
+  saveMemory → saveMemoryTopics → rebuildKnowledgeMap →
+  promoteJournalEntry. Optional `--type` (default `discovery`) and
+  `--confidence` (default `0.7`) flags. Returns 409 if already
+  promoted, 404 if not found.
+- **`ccmem reject <id>`** — soft-delete with 7-day TTL via `expires_at`.
+  Decay sweep cleans up after expiry.
+- **`/health` endpoint** gains `journalPendingCount`. Surfacing the
+  pending queue is how users discover candidates worth promoting —
+  manual-only on purpose; auto-promote would re-introduce the failure
+  mode we just removed.
+- **Decay sweep** in the existing `MaintenanceCoordinator` tick:
+  rejected past `expires_at` and pending older than 30 days are
+  deleted. Promoted entries kept as audit trail. Memories table never
+  touched (manual saves exempt by table boundary).
+
+### Changed
+
+- `summarizer.ts` removed the `score >= KNOWLEDGE_THRESHOLD` (≥ 2)
+  persistence gate. Hard floor preserved: `noise` / `process-report`
+  reasons still short-circuit (these are not knowledge regardless of
+  where they land).
+- `buildMemoryFromSession` renamed to `buildJournalCandidate`, returns
+  `JournalEntryInput` with re-scored `score` + `reasonsJson` metadata.
+  Score is recomputed at journal-write time (cheap regex on <2KB text)
+  so we don't need a v23 migration for `harvest_score` columns.
+
+### Migration
+
+- v22 migration runs automatically on daemon startup. Pre-check throws
+  if `memories` table is missing (would dangle FK), recommending
+  restore from pre-v22 backup.
+- **Backup recommended before upgrading**:
+  `cp ~/.ccrecall/ccrecall.db ~/.ccrecall/ccrecall.db.pre-v22.bak`
+- Existing memories rows stay queryable as before. The 17 historical
+  `type='query'` rows from v0.2.x harvest are not migrated to journal —
+  they're frozen in place; new harvest writes go to journal from now.
+
+### Tests
+
+- +22 tests across 5 commits (schema target / journal DAO / trust
+  boundary / promote+reject endpoints / sweep TTL / health field)
+- 535 → 557 tests passing.
+
+### First-run observation period
+
+Plan-critic acceptance criteria:
+
+| Day | Indicator | Threshold | Failure reading |
+|-----|-----------|-----------|-----------------|
+| 14  | journal write count | ≥ 50 | gate-removal didn't unblock — issue is upstream of `pickLastSubstantialAssistant` |
+| 30  | manual promote count | ≥ 3  | surfacing is insufficient — escalate to issue #21 P2 (promotion UX) |
+
+Tracking: [issue #21](https://github.com/tznthou/ccRecall/issues/21).
+
+### Upgrade checklist
+
+- `pnpm install -g @tznthou/ccrecall@0.3.0` (or your usual install path).
+- Optional: backup DB before restart (see Migration section).
+- `launchctl kickstart -k gui/$UID/com.tznthou.ccrecall` to restart the
+  daemon. v22 migration runs on first connection.
+- `curl http://127.0.0.1:7749/health` — verify `version: "0.3.0"` and
+  the new `journalPendingCount` field.
+
+---
+
 ## [0.2.7] — 2026-05-06
 
 ### Fixed
