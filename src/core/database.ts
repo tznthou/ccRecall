@@ -1718,6 +1718,31 @@ export class Database {
     return info.changes > 0
   }
 
+  /** Decay sweep (P1 step 7):
+   *   - rejected entries past expires_at → DELETE
+   *   - pending entries older than 30 days → DELETE
+   *  promoted entries 留著作 audit trail (有 promoted_memory_id 指 memories.id)。
+   *  manual memories 在 memories table,本方法完全不碰。 */
+  sweepJournal(now: Date = new Date()): { rejectedDeleted: number; pendingDeleted: number } {
+    const nowIso = now.toISOString()
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
+
+    const rejectedInfo = this.db.prepare(`
+      DELETE FROM session_journal
+      WHERE status = 'rejected' AND expires_at IS NOT NULL AND expires_at < ?
+    `).run(nowIso)
+
+    const pendingInfo = this.db.prepare(`
+      DELETE FROM session_journal
+      WHERE status = 'pending' AND created_at < ?
+    `).run(thirtyDaysAgo)
+
+    return {
+      rejectedDeleted: rejectedInfo.changes,
+      pendingDeleted: pendingInfo.changes,
+    }
+  }
+
   queryMemories(query: string, limit: number, projectId?: string | null): Memory[] {
     const rawQuery = query
     const q = Database.fts5QuoteIfNeeded(query)

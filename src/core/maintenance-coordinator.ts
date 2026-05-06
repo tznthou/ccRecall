@@ -28,6 +28,7 @@ export interface MaintenanceOptions {
 }
 
 export class MaintenanceCoordinator {
+  private readonly db: Database
   private readonly compression: CompressionPipeline
   private readonly intervalMs: number
   private readonly batchSize: number
@@ -39,6 +40,7 @@ export class MaintenanceCoordinator {
     svc: MemoryService,
     opts: MaintenanceOptions = {},
   ) {
+    this.db = db
     this.compression = new CompressionPipeline(db, svc)
     this.intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS
     this.batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE
@@ -63,16 +65,34 @@ export class MaintenanceCoordinator {
     }
   }
 
-  /** Run one compression pass. Returns null if a prior tick is still in flight
-   *  (single-flight drop). The await before the synchronous runOnce() is load-
-   *  bearing: it yields the microtask queue so concurrent callers observe the
-   *  inflight flag before this body starts its DB work. */
+  /** Run one compression pass + journal sweep. Returns compression stats; sweep
+   *  results are logged (not in the return type, to keep callers backward-
+   *  compatible). Null if a prior tick is still in flight (single-flight drop).
+   *
+   *  The await before the synchronous runOnce() is load-bearing: it yields the
+   *  microtask queue so concurrent callers observe the inflight flag before this
+   *  body starts its DB work.
+   *
+   *  Journal sweep (#21 P1 step 7): rejected past expires_at + pending older
+   *  than 30 days are deleted. Sweep error is caught and logged separately so
+   *  it does not mask a successful compression pass. */
   async tick(): Promise<CompressionStats | null> {
     if (this.inflight) return null
     this.inflight = true
     try {
       await Promise.resolve()
-      return this.compression.runOnce({ batchSize: this.batchSize })
+      const stats = this.compression.runOnce({ batchSize: this.batchSize })
+      try {
+        const sweep = this.db.sweepJournal()
+        if (sweep.rejectedDeleted > 0 || sweep.pendingDeleted > 0) {
+          console.log(
+            `[maintenance] journal sweep: rejected=${sweep.rejectedDeleted} pending=${sweep.pendingDeleted}`,
+          )
+        }
+      } catch (err) {
+        console.warn('[maintenance] journal sweep error:', scrubErrorMessage(err))
+      }
+      return stats
     } catch (err) {
       // DB errors can carry memory content in .message; scrub before logging.
       console.warn('[maintenance] tick error:', scrubErrorMessage(err))
