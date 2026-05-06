@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import http from 'node:http'
 import { URL } from 'node:url'
-import { sendJson, readBody } from './server.js'
+import { sendJson, parseJsonBody } from './server.js'
 import type { Database, MemoryInput } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
 import { runLint } from '../core/lint.js'
@@ -266,25 +266,9 @@ export function createRequestHandler(
         sendJson(res, 403, { error: 'cross-origin requests forbidden' })
         return
       }
-      let bodyText: string
-      try {
-        bodyText = await readBody(req)
-      } catch (err) {
-        const msg = (err as Error).message
-        if (msg === 'body too large') {
-          sendJson(res, 413, { error: msg })
-          return
-        }
-        throw err
-      }
-      let parsed: unknown
-      try {
-        parsed = bodyText ? JSON.parse(bodyText) : {}
-      } catch {
-        sendJson(res, 400, { error: 'invalid JSON body' })
-        return
-      }
-      const v = validateSaveBody(parsed)
+      const body = await parseJsonBody(req, res)
+      if (!body.ok) return
+      const v = validateSaveBody(body.parsed)
       if ('error' in v) {
         sendJson(res, 400, v)
         return
@@ -300,18 +284,9 @@ export function createRequestHandler(
         sendJson(res, 403, { error: 'cross-origin requests forbidden' })
         return
       }
-      let bodyText: string
-      try {
-        bodyText = await readBody(req)
-      } catch (err) {
-        const msg = (err as Error).message
-        if (msg === 'body too large') { sendJson(res, 413, { error: msg }); return }
-        throw err
-      }
-      let parsed: unknown
-      try { parsed = bodyText ? JSON.parse(bodyText) : {} }
-      catch { sendJson(res, 400, { error: 'invalid JSON body' }); return }
-      const b = parsed as { id?: unknown; type?: unknown; confidence?: unknown }
+      const body = await parseJsonBody(req, res)
+      if (!body.ok) return
+      const b = body.parsed as { id?: unknown; type?: unknown; confidence?: unknown }
       if (typeof b.id !== 'number' || !Number.isInteger(b.id) || b.id <= 0) {
         sendJson(res, 400, { error: 'id must be positive integer' })
         return
@@ -396,18 +371,9 @@ export function createRequestHandler(
         sendJson(res, 403, { error: 'cross-origin requests forbidden' })
         return
       }
-      let bodyText: string
-      try {
-        bodyText = await readBody(req)
-      } catch (err) {
-        const msg = (err as Error).message
-        if (msg === 'body too large') { sendJson(res, 413, { error: msg }); return }
-        throw err
-      }
-      let parsed: unknown
-      try { parsed = bodyText ? JSON.parse(bodyText) : {} }
-      catch { sendJson(res, 400, { error: 'invalid JSON body' }); return }
-      const b = parsed as { id?: unknown }
+      const body = await parseJsonBody(req, res)
+      if (!body.ok) return
+      const b = body.parsed as { id?: unknown }
       if (typeof b.id !== 'number' || !Number.isInteger(b.id) || b.id <= 0) {
         sendJson(res, 400, { error: 'id must be positive integer' })
         return
@@ -429,25 +395,9 @@ export function createRequestHandler(
         sendJson(res, 403, { error: 'cross-origin requests forbidden' })
         return
       }
-      let bodyText: string
-      try {
-        bodyText = await readBody(req)
-      } catch (err) {
-        const msg = (err as Error).message
-        if (msg === 'body too large') {
-          sendJson(res, 413, { error: msg })
-          return
-        }
-        throw err
-      }
-      let parsed: unknown
-      try {
-        parsed = bodyText ? JSON.parse(bodyText) : {}
-      } catch {
-        sendJson(res, 400, { error: 'invalid JSON body' })
-        return
-      }
-      const v = validateSessionEndBody(parsed)
+      const body = await parseJsonBody(req, res)
+      if (!body.ok) return
+      const v = validateSessionEndBody(body.parsed)
       if ('error' in v) {
         sendJson(res, 400, v)
         return
@@ -558,25 +508,9 @@ export function createRequestHandler(
         sendJson(res, 403, { error: 'cross-origin requests forbidden' })
         return
       }
-      let bodyText: string
-      try {
-        bodyText = await readBody(req)
-      } catch (err) {
-        const msg = (err as Error).message
-        if (msg === 'body too large') {
-          sendJson(res, 413, { error: msg })
-          return
-        }
-        throw err
-      }
-      let parsed: unknown
-      try {
-        parsed = bodyText ? JSON.parse(bodyText) : {}
-      } catch {
-        sendJson(res, 400, { error: 'invalid JSON body' })
-        return
-      }
-      const v = validateCheckpointBody(parsed)
+      const body = await parseJsonBody(req, res)
+      if (!body.ok) return
+      const v = validateCheckpointBody(body.parsed)
       if ('error' in v) {
         sendJson(res, 400, v)
         return

@@ -6,35 +6,7 @@ import os from 'node:os'
 import http from 'node:http'
 import { Database } from '../src/core/database.js'
 import { createServer } from '../src/api/server.js'
-
-function postJson(
-  url: string,
-  payload: unknown,
-): Promise<{ status: number; body: unknown }> {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url)
-    const data = JSON.stringify(payload)
-    const req = http.request({
-      hostname: u.hostname, port: u.port, path: u.pathname + u.search,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data),
-      },
-    }, (res) => {
-      const chunks: Buffer[] = []
-      res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString())
-        resolve({ status: res.statusCode!, body })
-      })
-      res.on('error', reject)
-    })
-    req.on('error', reject)
-    req.write(data)
-    req.end()
-  })
-}
+import { postJson, fetchJson } from './fixtures/helpers.js'
 
 describe('POST /journal/promote (#21 P1 step 6)', () => {
   let tmpDir: string
@@ -184,17 +156,7 @@ describe('GET /journal/pending (Codex review fix-up)', () => {
       score: 1,
     })
 
-    const resp = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
-      http.get(`http://127.0.0.1:${port}/journal/pending`, (res) => {
-        const chunks: Buffer[] = []
-        res.on('data', (c: Buffer) => chunks.push(c))
-        res.on('end', () => {
-          const body = JSON.parse(Buffer.concat(chunks).toString())
-          resolve({ status: res.statusCode!, body })
-        })
-        res.on('error', reject)
-      }).on('error', reject)
-    })
+    const resp = await fetchJson(`http://127.0.0.1:${port}/journal/pending`)
 
     expect(resp.status).toBe(200)
     const b = resp.body as {
@@ -214,17 +176,7 @@ describe('GET /journal/pending (Codex review fix-up)', () => {
         score: 0,
       })
     }
-    const resp = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
-      http.get(`http://127.0.0.1:${port}/journal/pending?limit=3`, (res) => {
-        const chunks: Buffer[] = []
-        res.on('data', (c: Buffer) => chunks.push(c))
-        res.on('end', () => {
-          const body = JSON.parse(Buffer.concat(chunks).toString())
-          resolve({ status: res.statusCode!, body })
-        })
-        res.on('error', reject)
-      }).on('error', reject)
-    })
+    const resp = await fetchJson(`http://127.0.0.1:${port}/journal/pending?limit=3`)
 
     expect(resp.status).toBe(200)
     expect((resp.body as { total: number }).total).toBe(3)
@@ -242,16 +194,7 @@ describe('GET /journal/pending (Codex review fix-up)', () => {
 
     db.saveJournalEntry({ sessionId: 'sess-keep', content: 'still pending', score: 1 })
 
-    const resp = await new Promise<{ body: unknown }>((resolve, reject) => {
-      http.get(`http://127.0.0.1:${port}/journal/pending`, (res) => {
-        const chunks: Buffer[] = []
-        res.on('data', (c: Buffer) => chunks.push(c))
-        res.on('end', () => {
-          resolve({ body: JSON.parse(Buffer.concat(chunks).toString()) })
-        })
-        res.on('error', reject)
-      }).on('error', reject)
-    })
+    const resp = await fetchJson(`http://127.0.0.1:${port}/journal/pending`)
 
     const entries = (resp.body as { entries: Array<{ contentPreview: string }> }).entries
     expect(entries).toHaveLength(1)

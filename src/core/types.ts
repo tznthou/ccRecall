@@ -251,6 +251,18 @@ export interface JournalEntryInput {
   projectId?: string | null
 }
 
+/** Pending journal listing 用 — 截 200 字 preview, 不含 contentHash / status / expiresAt
+ *  / promotedMemoryId（status 已固定 'pending', 其餘欄位對 list view 無用）。 */
+export interface JournalEntryPreview {
+  id: number
+  sessionId: string | null
+  score: number
+  reasonsJson: string | null
+  contentPreview: string
+  projectId: string | null
+  createdAt: string
+}
+
 // ── ccRecall 新增：元認知型別（Phase 3） ──
 
 /** 知識深度（由 mention_count 衍生：>=5 deep, >=2 medium, >=1 shallow, else none） */

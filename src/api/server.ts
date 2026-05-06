@@ -44,3 +44,30 @@ export function readBody(req: http.IncomingMessage): Promise<string> {
     req.on('error', reject)
   })
 }
+
+/** Read + JSON-parse a request body. On size overflow sends 413, on parse
+ *  error sends 400, then returns { ok: false } so the caller can early-return.
+ *  The ok branch returns parsed (object/null/array — same shape as JSON.parse).
+ *  Empty body parses as {} so endpoint validators see the no-keys case. */
+export async function parseJsonBody(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<{ ok: true; parsed: unknown } | { ok: false }> {
+  let bodyText: string
+  try {
+    bodyText = await readBody(req)
+  } catch (err) {
+    const msg = (err as Error).message
+    if (msg === 'body too large') {
+      sendJson(res, 413, { error: msg })
+      return { ok: false }
+    }
+    throw err
+  }
+  try {
+    return { ok: true, parsed: bodyText ? JSON.parse(bodyText) : {} }
+  } catch {
+    sendJson(res, 400, { error: 'invalid JSON body' })
+    return { ok: false }
+  }
+}
