@@ -5,6 +5,7 @@ import os from 'node:os'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { Database } from '../core/database.js'
+import { readPackageVersion } from '../core/version.js'
 import { registerTools } from './tools.js'
 
 const DB_PATH = process.env.CCRECALL_DB_PATH ?? path.join(os.homedir(), '.ccrecall', 'ccrecall.db')
@@ -12,7 +13,7 @@ const DB_PATH = process.env.CCRECALL_DB_PATH ?? path.join(os.homedir(), '.ccreca
 async function main(): Promise<void> {
   const db = new Database(DB_PATH)
   const server = new McpServer(
-    { name: 'ccrecall', version: '0.2.0' },
+    { name: 'ccrecall', version: readPackageVersion() },
     {
       instructions:
         'ccRecall is a local memory service for Claude Code. ' +
