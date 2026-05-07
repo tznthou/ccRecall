@@ -91,6 +91,12 @@ describe('scoreKnowledgeBearing — process-report short-circuit', () => {
     expect(scoreKnowledgeBearing('今天我把檔案存檔完成,然後修了 src/auth.ts:42 的 bug').reasons).not.toContain('process-report')
     expect(scoreKnowledgeBearing('用戶要求存檔完成後再 push').reasons).not.toContain('process-report')
   })
+
+  it('does NOT flag opener 存檔完成 followed by real outcome content (Codex catch)', () => {
+    // Codex Step 1: opener + punctuation alone is too broad; lookahead must require save-t process signal.
+    // Real bug-fix summary may open with 存檔完成 but carry root-cause + file:line content downstream.
+    expect(scoreKnowledgeBearing('存檔完成,但 root cause 是 src/auth.ts:42 的權限檢查漏掉; 12/12 tests pass').reasons).not.toContain('process-report')
+  })
 })
 
 describe('scoreKnowledgeBearing — decision-language', () => {

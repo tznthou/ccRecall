@@ -28,8 +28,9 @@ const NOISE_RES: ReadonlyArray<RegExp> = [
 const PROCESS_REPORT_RES: ReadonlyArray<RegExp> = [
   /^[#\s💾🟢✅_*-]*\/?save[\s-]?t(?:\s*[:：]\s*|\s+)(?:完成|流程完整|完整|done|finished|completed?)/iu,
   // #27: save-t skill output may open with CJK verb form 「存檔完成」 instead of /save-t literal.
-  // Trailing punctuation requirement guards against mid-sentence false-positive.
-  /^[#\s💾🟢✅_*-]*存檔完成\s*[—,，.。:：!！]/u,
+  // Lookahead requires save-t process-report signal within 80 chars OR 「## 更新摘要/清單」 heading,
+  // narrow enough to let real outcome openers (e.g. 「存檔完成,但 root cause 是 ...」) pass through.
+  /^[#\s💾🟢✅_*-]*存檔完成\s*[—,，.。:：!！](?=(?:[^\n]{0,80}(?:\/compact|結束 session|雙寫同步|diff 為空)|\s*\n\s*##\s*(?:更新摘要|更新清單)))/u,
 ]
 
 interface SignalCategory {
