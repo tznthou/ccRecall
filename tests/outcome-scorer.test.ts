@@ -78,6 +78,19 @@ describe('scoreKnowledgeBearing — process-report short-circuit', () => {
     const result = scoreKnowledgeBearing(oversized)
     expect(result.reasons).not.toContain('process-report')
   })
+
+  it('flags CJK verb-form 存檔完成 openers (#27)', () => {
+    // 3 corroborating samples from v0.3.0 first-week dogfood (journal id=2/6/8)
+    expect(scoreKnowledgeBearing('存檔完成 — 雙寫同步、diff 為空。').reasons).toEqual(['process-report'])
+    expect(scoreKnowledgeBearing('存檔完成,可以安全 `/compact` 或結束 session。').reasons).toEqual(['process-report'])
+    expect(scoreKnowledgeBearing('存檔完成。\n\n## 更新摘要').reasons).toEqual(['process-report'])
+  })
+
+  it('does NOT flag mid-sentence 存檔完成 mentions (#27 false-positive guard)', () => {
+    // Trailing punctuation requirement keeps narrow — verb form embedded in real outcome text must pass through
+    expect(scoreKnowledgeBearing('今天我把檔案存檔完成,然後修了 src/auth.ts:42 的 bug').reasons).not.toContain('process-report')
+    expect(scoreKnowledgeBearing('用戶要求存檔完成後再 push').reasons).not.toContain('process-report')
+  })
 })
 
 describe('scoreKnowledgeBearing — decision-language', () => {

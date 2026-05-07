@@ -27,6 +27,9 @@ const NOISE_RES: ReadonlyArray<RegExp> = [
 // Anchor 在開頭(^),長文本 mid-text 提及 save-t 不誤殺。
 const PROCESS_REPORT_RES: ReadonlyArray<RegExp> = [
   /^[#\s💾🟢✅_*-]*\/?save[\s-]?t(?:\s*[:：]\s*|\s+)(?:完成|流程完整|完整|done|finished|completed?)/iu,
+  // #27: save-t skill output may open with CJK verb form 「存檔完成」 instead of /save-t literal.
+  // Trailing punctuation requirement guards against mid-sentence false-positive.
+  /^[#\s💾🟢✅_*-]*存檔完成\s*[—,，.。:：!！]/u,
 ]
 
 interface SignalCategory {
