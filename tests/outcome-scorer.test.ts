@@ -97,6 +97,12 @@ describe('scoreKnowledgeBearing — process-report short-circuit', () => {
     // Real bug-fix summary may open with 存檔完成 but carry root-cause + file:line content downstream.
     expect(scoreKnowledgeBearing('存檔完成,但 root cause 是 src/auth.ts:42 的權限檢查漏掉; 12/12 tests pass').reasons).not.toContain('process-report')
   })
+
+  it('does NOT flag opener 存檔完成 with diagnostic terms in real outcome (Security A08)', () => {
+    // Security review: 'diff 為空' is a generic diagnostic phrase, not a save-t-exclusive marker.
+    // After removing it from the lookahead list, real bug-fix outcomes mentioning it must pass through.
+    expect(scoreKnowledgeBearing('存檔完成,但 diff 為空 的原因是 WAL 沒有 flush, root cause: fsync missing').reasons).not.toContain('process-report')
+  })
 })
 
 describe('scoreKnowledgeBearing — decision-language', () => {
