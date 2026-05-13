@@ -8,6 +8,53 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.3.1] — 2026-05-13
+
+### 修正
+
+- **SessionStart hook keyword echo chamber。** 原本 `hooks/session-start.mjs`
+  用 `projectNameFromCwd(cwd)` 當唯一 FTS5 keyword 打 `GET /memory/query`，
+  導致只有 content 含專案名稱字串的記憶能 surface。Manual 寫的 atomic
+  knowledge（沒提到專案名的）全 cold，user-prompt 殘片（含專案名的）
+  反而每次 session start 都被 inject，`access_count` 累積成假象。線上 DB
+  audit 證實訊號倒置：5/6 trust split 後 4 筆 manual `recall_save` 100%
+  cold；9 筆 prompt 殘片（佔 corpus 7.6%）貢獻 45% 全部 access。修法：
+  opt-in `CCRECALL_SESSION_START_STRATEGY=startup-v1` 把 hook 切到新的
+  `GET /memory/startup` endpoint，走 3 階層 selection（cold project-scoped
+  → recent-confidence fill → FTS fallback）。預設 strategy 維持 `legacy`
+  不打擾 v0.3.0 觀察期。
+
+- **Hook injection path 缺 token budget。** `GET /memory/query` 跟
+  SessionStart hook 原本沒做 token cap，單筆長 memory 可能靜默吃掉幾千
+  token 的 context。兩條路徑現在都收 optional `maxTokens`（`/memory/startup`
+  預設 300），套 CJK-aware per-row truncation via 新增的 `applyRowBudget`
+  helper，且 `memoryService.touch` 只動 budget-emitted rows，避免 dropped
+  rows 污染 `access_count`。
+
+### 新增
+
+- **`GET /memory/startup?project=&limit=&maxTokens=&q=<fallback>`** —
+  SessionStart-tier retrieval。project 必填。回 `{ memories, emittedIds,
+  candidateCount, totalTokenEstimate, droppedCount, truncated, project, limit }`。
+- **`Database.getStartupMemories(projectId, limit, fallbackKeyword?)`** —
+  3 階層 selection helper，供想跳過 HTTP overhead 的 caller 使用。
+- **`applyRowBudget(rows, maxTokens, perRowCharCap)`** 加進
+  `src/core/token-budget.ts` — generic CJK-aware row budget helper，
+  `/memory/query` 跟 `/memory/startup` 用同一份。
+- **`CCRECALL_SESSION_START_STRATEGY` 環境變數** — `legacy`（預設）|
+  `startup-v1` | `off`，控制 SessionStart hook 用哪條 retrieval 路徑。
+- **Opt-in JSONL telemetry** 寫到 `~/.ccrecall/startup-recall.log.jsonl`，
+  只在 `startup-v1` 啟用時寫（`CCRECALL_TELEMETRY=off` 可關）。每次 session
+  start 紀錄 `{ ts, projectId, emittedIds, droppedCount }` — 足夠讓 7 天
+  dogfood gate 量化 atomic knowledge surface 改善程度。
+
+### 升級
+
+不動 schema。既有 `~/.claude/settings.json` 裡的 hook 不必重裝；新 strategy
+完全 opt-in via 環境變數。
+
+---
+
 ## [0.3.0] — 2026-05-06
 
 ### ⚠️ Breaking — harvest 寫入路徑

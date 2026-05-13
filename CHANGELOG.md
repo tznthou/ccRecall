@@ -11,6 +11,60 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.3.1] — 2026-05-13
+
+### Fixed
+
+- **SessionStart keyword echo chamber.** `hooks/session-start.mjs` used to
+  fire `GET /memory/query` with `projectNameFromCwd(cwd)` as the sole FTS5
+  keyword, so only memories whose content literally contained the project
+  name could surface. Manual atomic-knowledge entries stayed cold while
+  prompt-fragment rows quoting the project name were injected every session
+  start, inflating `access_count` on noise. A live-DB audit confirmed the
+  inverted signal: 4 of 4 post-trust-split manual `recall_save` rows were
+  100% cold, while 9 prompt-fragment rows (7.6% of the corpus) produced
+  45% of all access events. The fix is an opt-in
+  `CCRECALL_SESSION_START_STRATEGY=startup-v1`, which routes the hook
+  through a new `GET /memory/startup` endpoint backed by 3-tier selection
+  (cold project-scoped → recent-confidence fill → FTS fallback). Default
+  remains `legacy` so the v0.3.0 observation period is undisturbed.
+
+- **No token budget on the hook injection path.** `GET /memory/query` and
+  the SessionStart hook previously had no token cap, so a single long
+  memory row could silently consume thousands of context tokens. Both
+  paths now accept an optional `maxTokens` (default 300 on
+  `/memory/startup`), apply CJK-aware per-row truncation via the new
+  `applyRowBudget` helper, and `memoryService.touch` runs only on
+  budget-emitted rows so dropped rows do not poison `access_count`.
+
+### Added
+
+- **`GET /memory/startup?project=&limit=&maxTokens=&q=<fallback>`** —
+  SessionStart-tier retrieval. Project param required. Returns
+  `{ memories, emittedIds, candidateCount, totalTokenEstimate,
+  droppedCount, truncated, project, limit }`.
+- **`Database.getStartupMemories(projectId, limit, fallbackKeyword?)`** —
+  3-tier selection helper, public for callers that want the selection
+  logic without HTTP overhead.
+- **`applyRowBudget(rows, maxTokens, perRowCharCap)`** in
+  `src/core/token-budget.ts` — generic CJK-aware row budget helper.
+  Reused by `/memory/query` and `/memory/startup`.
+- **`CCRECALL_SESSION_START_STRATEGY` env var** — `legacy` (default) |
+  `startup-v1` | `off`. Controls which retrieval path the SessionStart
+  hook uses.
+- **Opt-in JSONL telemetry** at `~/.ccrecall/startup-recall.log.jsonl`
+  while `startup-v1` is active (disable with `CCRECALL_TELEMETRY=off`).
+  Records `{ ts, projectId, emittedIds, droppedCount }` per session
+  start — enough for a 7-day dogfood gate to measure whether
+  atomic-knowledge surfacing actually improved.
+
+### Migration
+
+No schema migration. Existing `~/.claude/settings.json` hooks continue
+to work unchanged; the new strategy is opt-in via env var only.
+
+---
+
 ## [0.3.0] — 2026-05-06
 
 ### ⚠️ Breaking — harvest write path
