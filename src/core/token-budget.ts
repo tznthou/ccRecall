@@ -42,7 +42,6 @@ export function truncateToChars(text: string, maxChars: number): string {
 
 export interface BudgetRow {
   content: string
-  [key: string]: unknown
 }
 
 export interface BudgetResult<R extends BudgetRow> {
@@ -55,13 +54,11 @@ export interface BudgetResult<R extends BudgetRow> {
 /**
  * Apply a token budget to a list of row-like objects with a `content` field.
  * Per-row content is truncated to perRowCharCap (ellipsis-aware), cumulative
- * cost tracked; rows that would exceed maxTokens are dropped. Pass-through
- * for non-content fields preserves caller-shaped row identity (id, type, etc).
+ * cost tracked; rows that would exceed maxTokens are dropped. Non-content
+ * fields pass through unchanged (caller's row shape preserved).
  *
- * Returns: emitted rows (with content possibly clipped), how many were
- * dropped from the tail, total approx tokens used, and whether any row was
- * truncated. Callers should touch/log only `emitted` ids — dropped rows
- * never reached the client.
+ * Callers should touch/log only `emitted` ids — dropped rows never reached
+ * the client.
  */
 export function applyRowBudget<R extends BudgetRow>(
   rows: R[],
@@ -84,7 +81,7 @@ export function applyRowBudget<R extends BudgetRow>(
         truncated,
       }
     }
-    emitted.push({ ...row, content: clipped })
+    emitted.push({ ...row, content: clipped } as R)
     used += cost
   }
   return { emitted, droppedCount: 0, usedTokens: used, truncated }
