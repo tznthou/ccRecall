@@ -1878,6 +1878,94 @@ export class Database {
     }
   }
 
+  /** SessionStart-tier retrieval that does NOT depend on memory content
+   *  containing the project name (closes the keyword echo chamber: GitHub
+   *  finding 2026-05-13, see memory #119). Three-tier selection:
+   *
+   *  1. Cold project-scoped (access_count=0 OR last_accessed IS NULL),
+   *     excluding type='query' legacy noise — surfaces atomic knowledge
+   *     that has never been injected before.
+   *  2. Recent / high-confidence project-scoped fill — if cold pool is
+   *     short, top up with confident project memories regardless of
+   *     access history.
+   *  3. Legacy keyword FTS fallback (if fallbackKeyword provided) — last
+   *     resort to fill remaining slots, retains discoverability for
+   *     small / new corpora.
+   *
+   *  Dedupes across tiers. Honors both session-backed and manual project
+   *  scoping (mirrors queryMemories precedent). Caller (typically the
+   *  SessionStart hook via /memory/startup) is responsible for token-budget
+   *  truncation + emit-only touch — see applyRowBudget in token-budget.ts. */
+  getStartupMemories(
+    projectId: string,
+    limit: number,
+    fallbackKeyword?: string,
+  ): Memory[] {
+    const cappedLimit = Math.min(Math.max(limit, 1), 50)
+    const collected: Memory[] = []
+    const seen = new Set<number>()
+
+    const pushUnique = (rows: Memory[]): void => {
+      for (const row of rows) {
+        if (collected.length >= cappedLimit) return
+        if (!seen.has(row.id)) {
+          seen.add(row.id)
+          collected.push(row)
+        }
+      }
+    }
+
+    try {
+      // Tier 1: cold project-scoped, exclude type='query' legacy noise
+      const tier1Rows = this.db.prepare(`
+        SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+        FROM memories m
+        LEFT JOIN sessions s ON m.session_id = s.id
+        WHERE (m.access_count = 0 OR m.last_accessed IS NULL)
+          AND m.type != 'query'
+          AND (
+            (m.session_id IS NOT NULL AND s.project_id = ?) OR
+            (m.session_id IS NULL AND m.project_id = ?)
+          )
+        ORDER BY m.created_at DESC
+        LIMIT ?
+      `).all(projectId, projectId, cappedLimit) as MemoryRow[]
+      pushUnique(tier1Rows.map(mapMemoryRow))
+
+      // Tier 2: recent/high-confidence project-scoped fill
+      if (collected.length < cappedLimit) {
+        const needed = cappedLimit - collected.length
+        const excludeIds = Array.from(seen)
+        const excludeClause = excludeIds.length > 0
+          ? `AND m.id NOT IN (${excludeIds.map(() => '?').join(',')})`
+          : ''
+        const tier2Rows = this.db.prepare(`
+          SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+          FROM memories m
+          LEFT JOIN sessions s ON m.session_id = s.id
+          WHERE (
+              (m.session_id IS NOT NULL AND s.project_id = ?) OR
+              (m.session_id IS NULL AND m.project_id = ?)
+            )
+            ${excludeClause}
+          ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.created_at DESC, m.id DESC
+          LIMIT ?
+        `).all(projectId, projectId, ...excludeIds, needed) as MemoryRow[]
+        pushUnique(tier2Rows.map(mapMemoryRow))
+      }
+
+      // Tier 3: legacy FTS fallback for small/new corpora
+      if (collected.length < cappedLimit && fallbackKeyword) {
+        const fallbackRows = this.queryMemories(fallbackKeyword, cappedLimit, projectId)
+        pushUnique(fallbackRows)
+      }
+    } catch (err) {
+      console.warn('[memories] getStartupMemories error:', scrubErrorMessage(err))
+    }
+
+    return collected
+  }
+
   /** Phase 4b: Increment access_count + stamp last_accessed for each id.
    *  Caller is responsible for dedup (use MemoryService.touch for that). Runs
    *  inside a transaction so partial failure does not leave half-applied state. */

@@ -39,3 +39,53 @@ export function truncateToChars(text: string, maxChars: number): string {
   if (maxChars === 1) return ELLIPSIS
   return chars.slice(0, maxChars - 1).join('') + ELLIPSIS
 }
+
+export interface BudgetRow {
+  content: string
+  [key: string]: unknown
+}
+
+export interface BudgetResult<R extends BudgetRow> {
+  emitted: R[]
+  droppedCount: number
+  usedTokens: number
+  truncated: boolean
+}
+
+/**
+ * Apply a token budget to a list of row-like objects with a `content` field.
+ * Per-row content is truncated to perRowCharCap (ellipsis-aware), cumulative
+ * cost tracked; rows that would exceed maxTokens are dropped. Pass-through
+ * for non-content fields preserves caller-shaped row identity (id, type, etc).
+ *
+ * Returns: emitted rows (with content possibly clipped), how many were
+ * dropped from the tail, total approx tokens used, and whether any row was
+ * truncated. Callers should touch/log only `emitted` ids — dropped rows
+ * never reached the client.
+ */
+export function applyRowBudget<R extends BudgetRow>(
+  rows: R[],
+  maxTokens: number = DEFAULT_MAX_TOKENS,
+  perRowCharCap: number = DEFAULT_PER_ROW_CHAR_CAP,
+): BudgetResult<R> {
+  const emitted: R[] = []
+  let used = 0
+  let truncated = false
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const clipped = truncateToChars(row.content, perRowCharCap)
+    if (clipped !== row.content) truncated = true
+    const cost = approximateTokens(clipped)
+    if (used + cost > maxTokens) {
+      return {
+        emitted,
+        droppedCount: rows.length - i,
+        usedTokens: used,
+        truncated,
+      }
+    }
+    emitted.push({ ...row, content: clipped })
+    used += cost
+  }
+  return { emitted, droppedCount: 0, usedTokens: used, truncated }
+}

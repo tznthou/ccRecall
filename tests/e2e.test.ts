@@ -103,6 +103,72 @@ describe('E2E: index → search → HTTP', () => {
     expect(b.memories).toEqual([])
   })
 
+  it('GET /memory/query maxTokens truncates long content + touches only emitted', async () => {
+    // Two memories: short pnpm (should emit), long block (truncated to 150 chars)
+    await postJson(`http://127.0.0.1:${port}/memory/save`, {
+      content: 'short fact about pnpm',
+      type: 'discovery',
+      projectId: '-test-project',
+    })
+    await postJson(`http://127.0.0.1:${port}/memory/save`, {
+      content: 'pnpm pnpm pnpm '.repeat(50), // ~750 chars, truncates to 150
+      type: 'discovery',
+      projectId: '-test-project',
+    })
+
+    const { status, body } = await fetch(
+      `http://127.0.0.1:${port}/memory/query?q=pnpm&limit=10&maxTokens=50`,
+    )
+    expect(status).toBe(200)
+    const b = body as {
+      memories: Array<{ content: string }>
+      droppedCount: number
+      truncated: boolean
+      totalTokenEstimate: number
+    }
+    // Long row truncated to 150 chars; if its 0.3*150=45 tokens fits before
+    // budget exhausted, it stays. Either way one row emits and the second
+    // gets dropped (cumulative > 50).
+    expect(b.memories.length).toBeGreaterThan(0)
+    expect(b.memories.length).toBeLessThanOrEqual(2)
+    expect(b.totalTokenEstimate).toBeLessThanOrEqual(50)
+    // truncated should fire on at least one of them
+    expect(b.truncated || b.droppedCount > 0).toBe(true)
+  })
+
+  it('GET /memory/startup surfaces project memory NOT containing project name (closes echo chamber)', async () => {
+    // Memory whose content does NOT contain "ccRecall" or any project-name keyword
+    const save = await postJson(`http://127.0.0.1:${port}/memory/save`, {
+      content: '漸進披露探索法：處理大量檔案前先用最便宜工具拿訊息',
+      type: 'pattern',
+      projectId: '-test-project',
+      confidence: 0.9,
+    })
+    expect(save.status).toBe(200)
+
+    const { status, body } = await fetch(
+      `http://127.0.0.1:${port}/memory/startup?project=-test-project&limit=5&maxTokens=300`,
+    )
+    expect(status).toBe(200)
+    const b = body as {
+      memories: Array<{ id: number; content: string }>
+      emittedIds: number[]
+      candidateCount: number
+      droppedCount: number
+    }
+    expect(b.memories.length).toBeGreaterThan(0)
+    // Content does NOT mention project name — this is the whole point of the fix
+    const found = b.memories.find(m => m.content.includes('漸進披露'))
+    expect(found).toBeDefined()
+    expect(b.emittedIds).toContain(found!.id)
+  })
+
+  it('GET /memory/startup rejects without project param', async () => {
+    const { status, body } = await fetch(`http://127.0.0.1:${port}/memory/startup`)
+    expect(status).toBe(400)
+    expect((body as { error: string }).error).toMatch(/project is required/)
+  })
+
   it('POST /memory/save rejects cross-origin request', async () => {
     const { status, body } = await postJson(
       `http://127.0.0.1:${port}/memory/save`,

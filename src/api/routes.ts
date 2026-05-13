@@ -7,6 +7,7 @@ import { MemoryService } from '../core/memory-service.js'
 import { runLint } from '../core/lint.js'
 import { scrubErrorMessage } from '../core/log-safe.js'
 import { scoreKnowledgeBearing } from '../core/outcome-scorer.js'
+import { applyRowBudget, DEFAULT_MAX_TOKENS, DEFAULT_PER_ROW_CHAR_CAP } from '../core/token-budget.js'
 import type {
   HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
@@ -214,7 +215,7 @@ export function createRequestHandler(
       return
     }
 
-    // GET /memory/query?q=...&limit=...&project=...
+    // GET /memory/query?q=...&limit=...&project=...&maxTokens=...
     if (req.method === 'GET' && path === '/memory/query') {
       // Phase 4c touch made this a stateful endpoint (access_count / last_accessed).
       // Apply the same origin gate as POST so browser prefetches or CSRF from a
@@ -227,28 +228,91 @@ export function createRequestHandler(
       const rawLimit = parseInt(url.searchParams.get('limit') ?? '5', 10)
       const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 5 : rawLimit
       const project = url.searchParams.get('project')
+      const rawMaxTokens = url.searchParams.get('maxTokens')
+      const maxTokens = rawMaxTokens === null
+        ? null
+        : (() => {
+            const n = parseInt(rawMaxTokens, 10)
+            return Number.isNaN(n) || n < 1 ? null : n
+          })()
 
       if (!q) {
-        sendJson(res, 200, { memories: [], totalTokenEstimate: 0, query: q, limit })
+        sendJson(res, 200, { memories: [], totalTokenEstimate: 0, droppedCount: 0, truncated: false, query: q, limit })
         return
       }
 
       const rows = db.queryMemories(q, limit, project)
-      // Phase 4c: touch surfaced memories so their access_count and last_accessed
-      // feed into the decay formula at next query time. MemoryService.touch
-      // noops on empty input, no need to guard here.
-      memoryService.touch(rows.map(m => m.id))
-      const memories = rows.map(m => ({
+      // Apply token budget if requested. Truncation is per-row + cumulative;
+      // dropped rows must NOT be touched (they never reached the caller).
+      const budgeted = maxTokens !== null
+        ? applyRowBudget(rows, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
+        : { emitted: rows, droppedCount: 0, usedTokens: 0, truncated: false }
+      memoryService.touch(budgeted.emitted.map(m => m.id))
+      const memories = budgeted.emitted.map(m => ({
         content: m.content,
         source: memorySource(m),
         confidence: m.confidence,
         depth: null,
       }))
-      const totalTokenEstimate = Math.ceil(
-        memories.reduce((sum, m) => sum + m.content.length, 0) / 4,
-      )
+      const totalTokenEstimate = maxTokens !== null
+        ? budgeted.usedTokens
+        : Math.ceil(memories.reduce((sum, m) => sum + m.content.length, 0) / 4)
 
-      sendJson(res, 200, { memories, totalTokenEstimate, query: q, limit })
+      sendJson(res, 200, {
+        memories,
+        totalTokenEstimate,
+        droppedCount: budgeted.droppedCount,
+        truncated: budgeted.truncated,
+        query: q,
+        limit,
+      })
+      return
+    }
+
+    // GET /memory/startup?project=...&limit=...&maxTokens=...&q=<fallback>
+    // SessionStart-tier retrieval: cold + recent-conf + FTS fallback,
+    // closes the keyword echo chamber (see memory #119 / pi-plan 2026-05-13).
+    if (req.method === 'GET' && path === '/memory/startup') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      const project = url.searchParams.get('project')
+      if (!project) {
+        sendJson(res, 400, { error: 'project is required' })
+        return
+      }
+      const rawLimit = parseInt(url.searchParams.get('limit') ?? '5', 10)
+      const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 5 : rawLimit
+      const rawMaxTokens = url.searchParams.get('maxTokens')
+      const maxTokens = (() => {
+        if (rawMaxTokens === null) return DEFAULT_MAX_TOKENS
+        const n = parseInt(rawMaxTokens, 10)
+        return Number.isNaN(n) || n < 1 ? DEFAULT_MAX_TOKENS : n
+      })()
+      const fallback = url.searchParams.get('q') ?? undefined
+
+      const rows = db.getStartupMemories(project, limit, fallback)
+      const budgeted = applyRowBudget(rows, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
+      memoryService.touch(budgeted.emitted.map(m => m.id))
+
+      const memories = budgeted.emitted.map(m => ({
+        id: m.id,
+        content: m.content,
+        source: memorySource(m),
+        confidence: m.confidence,
+      }))
+
+      sendJson(res, 200, {
+        memories,
+        emittedIds: budgeted.emitted.map(m => m.id),
+        candidateCount: rows.length,
+        totalTokenEstimate: budgeted.usedTokens,
+        droppedCount: budgeted.droppedCount,
+        truncated: budgeted.truncated,
+        project,
+        limit,
+      })
       return
     }
 

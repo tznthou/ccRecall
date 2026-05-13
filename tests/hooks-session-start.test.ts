@@ -2,7 +2,9 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const SCRIPT_PATH = path.resolve(
@@ -14,17 +16,18 @@ type MemoryShape = { content: string; source: string; confidence: number; depth:
 type Received = { path: string | undefined; method: string | undefined }
 
 function startMockServer(
-  responder: (received: Received) => { status: number; memories: MemoryShape[] },
+  responder: (received: Received) => { status: number; memories: MemoryShape[]; extra?: Record<string, unknown> },
 ): Promise<{ server: http.Server; port: number; received: Received[] }> {
   return new Promise((resolve) => {
     const received: Received[] = []
     const server = http.createServer((req, res) => {
       const entry: Received = { path: req.url, method: req.method }
       received.push(entry)
-      const { status, memories } = responder(entry)
+      const { status, memories, extra } = responder(entry)
       res.statusCode = status
       res.setHeader('Content-Type', 'application/json')
-      res.end(JSON.stringify({ memories, totalTokenEstimate: 0, query: '', limit: 5 }))
+      const body = { memories, totalTokenEstimate: 0, query: '', limit: 5, ...(extra ?? {}) }
+      res.end(JSON.stringify(body))
     })
     server.listen(0, '127.0.0.1', () => {
       const port = (server.address() as { port: number }).port
@@ -36,10 +39,11 @@ function startMockServer(
 function runHook(
   port: number,
   stdinData: string,
+  envOverrides: Record<string, string> = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const proc = spawn('node', [SCRIPT_PATH], {
-      env: { ...process.env, CCRECALL_PORT: String(port) },
+      env: { ...process.env, CCRECALL_PORT: String(port), ...envOverrides },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
@@ -165,5 +169,72 @@ describe('hooks/session-start.mjs', () => {
     expect(code).toBe(0)
     expect(stdout).toBe('')
     expect(stderr).toContain('query error')
+  })
+
+  it('default (legacy) strategy hits /memory/query with maxTokens=300', async () => {
+    const ctx = await startMockServer(() => ({ status: 200, memories: [] }))
+    server = ctx.server
+    await runHook(ctx.port, JSON.stringify({
+      session_id: 'x',
+      cwd: '/Users/tznthou/Documents/ccRecall',
+      source: 'startup',
+      hook_event_name: 'SessionStart',
+    }))
+    expect(ctx.received).toHaveLength(1)
+    expect(ctx.received[0].path).toContain('/memory/query')
+    expect(ctx.received[0].path).toContain('maxTokens=300')
+  })
+
+  it('startup-v1 strategy hits /memory/startup and writes telemetry JSONL', async () => {
+    const ctx = await startMockServer(() => ({
+      status: 200,
+      memories: [
+        { content: '漸進披露探索法', source: 'manual', confidence: 0.9, depth: null },
+      ],
+      extra: { emittedIds: [42], candidateCount: 3, droppedCount: 1 },
+    }))
+    server = ctx.server
+
+    const tmpHome = await mkdtemp(path.join(os.tmpdir(), 'cchooks-'))
+    try {
+      const { code, stdout } = await runHook(ctx.port, JSON.stringify({
+        session_id: 'x',
+        cwd: '/Users/tznthou/Documents/ccRecall',
+        source: 'startup',
+        hook_event_name: 'SessionStart',
+      }), { CCRECALL_SESSION_START_STRATEGY: 'startup-v1', HOME: tmpHome })
+
+      expect(code).toBe(0)
+      expect(ctx.received).toHaveLength(1)
+      expect(ctx.received[0].path).toContain('/memory/startup')
+      expect(ctx.received[0].path).toContain('project=-Users-tznthou-Documents-ccRecall')
+      expect(ctx.received[0].path).toContain('maxTokens=300')
+      expect(stdout).toContain('漸進披露探索法')
+
+      const logPath = path.join(tmpHome, '.ccrecall', 'startup-recall.log.jsonl')
+      const logContent = await readFile(logPath, 'utf8')
+      const lines = logContent.trim().split('\n')
+      expect(lines).toHaveLength(1)
+      const record = JSON.parse(lines[0])
+      expect(record.emittedIds).toEqual([42])
+      expect(record.droppedCount).toBe(1)
+      expect(record.projectId).toBe('-Users-tznthou-Documents-ccRecall')
+    } finally {
+      await rm(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('off strategy makes no HTTP call and emits nothing', async () => {
+    const ctx = await startMockServer(() => ({ status: 200, memories: [] }))
+    server = ctx.server
+    const { code, stdout } = await runHook(ctx.port, JSON.stringify({
+      session_id: 'x',
+      cwd: '/Users/tznthou/Documents/ccRecall',
+      source: 'startup',
+      hook_event_name: 'SessionStart',
+    }), { CCRECALL_SESSION_START_STRATEGY: 'off' })
+    expect(code).toBe(0)
+    expect(stdout).toBe('')
+    expect(ctx.received).toHaveLength(0)
   })
 })
