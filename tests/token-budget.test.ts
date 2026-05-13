@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   approximateTokens,
   truncateToChars,
+  applyRowBudget,
   DEFAULT_MAX_TOKENS,
   DEFAULT_PER_ROW_CHAR_CAP,
 } from '../src/core/token-budget'
@@ -94,5 +95,63 @@ describe('constants', () => {
   it('defaults match plan', () => {
     expect(DEFAULT_MAX_TOKENS).toBe(300)
     expect(DEFAULT_PER_ROW_CHAR_CAP).toBe(150)
+  })
+})
+
+describe('applyRowBudget', () => {
+  it('passes rows through when under budget', () => {
+    const rows = [{ id: 1, content: 'hello', type: 'discovery' }]
+    const result = applyRowBudget(rows, 300, 150)
+    expect(result.emitted).toHaveLength(1)
+    expect(result.emitted[0].id).toBe(1)
+    expect(result.emitted[0].content).toBe('hello')
+    expect(result.droppedCount).toBe(0)
+    expect(result.truncated).toBe(false)
+  })
+
+  it('per-row truncates content beyond perRowCharCap', () => {
+    const rows = [{ id: 1, content: 'a'.repeat(200) }]
+    const result = applyRowBudget(rows, 300, 150)
+    expect(result.emitted[0].content).toBe('a'.repeat(149) + '…')
+    expect(result.truncated).toBe(true)
+  })
+
+  it('drops trailing rows when cumulative budget exceeded', () => {
+    // CJK 1 token/char, so 100 CJK chars = 100 tokens
+    const rows = [
+      { id: 1, content: '中'.repeat(100) }, // 100 tokens; cumulative 100
+      { id: 2, content: '文'.repeat(100) }, // 100 tokens; cumulative 200
+      { id: 3, content: '測'.repeat(100) }, // 100 tokens; cumulative 300 (== budget, allowed)
+      { id: 4, content: '試'.repeat(100) }, // would push to 400 > 300, dropped
+    ]
+    const result = applyRowBudget(rows, 300, 150)
+    expect(result.emitted.map(r => r.id)).toEqual([1, 2, 3])
+    expect(result.droppedCount).toBe(1)
+    expect(result.usedTokens).toBe(300)
+  })
+
+  it('preserves non-content fields on emitted rows', () => {
+    const rows = [{ id: 42, content: 'x', type: 'discovery', confidence: 0.9 }]
+    const result = applyRowBudget(rows, 300, 150)
+    expect(result.emitted[0]).toMatchObject({ id: 42, type: 'discovery', confidence: 0.9 })
+  })
+
+  it('returns empty for empty input', () => {
+    const result = applyRowBudget([], 300, 150)
+    expect(result.emitted).toEqual([])
+    expect(result.droppedCount).toBe(0)
+    expect(result.usedTokens).toBe(0)
+    expect(result.truncated).toBe(false)
+  })
+
+  it('drops first row if it exceeds budget alone', () => {
+    const rows = [
+      { id: 1, content: '中'.repeat(150) }, // truncates to 150 CJK chars = 150 tokens
+      { id: 2, content: '文'.repeat(150) }, // would push to 300; tied, allowed
+    ]
+    // budget is 100, first row alone (150 tokens after truncation) exceeds it
+    const result = applyRowBudget(rows, 100, 150)
+    expect(result.emitted).toEqual([])
+    expect(result.droppedCount).toBe(2)
   })
 })
