@@ -43,7 +43,14 @@ function runHook(
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const proc = spawn('node', [SCRIPT_PATH], {
-      env: { ...process.env, CCRECALL_PORT: String(port), ...envOverrides },
+      env: {
+        ...process.env,
+        // Strip operator env override so the default-strategy assertions
+        // pass under a parent shell that exports startup-v1 / off.
+        CCRECALL_SESSION_START_STRATEGY: undefined,
+        CCRECALL_PORT: String(port),
+        ...envOverrides,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
