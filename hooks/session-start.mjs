@@ -149,7 +149,7 @@ async function main() {
   if (!query) return
   const projectId = projectIdFromCwd(input.cwd)
 
-  let memories = []
+  let memories
   if (STRATEGY === 'startup-v1') {
     const result = await queryStartupV1(query, projectId)
     memories = result.memories
