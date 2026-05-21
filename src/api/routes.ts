@@ -8,6 +8,7 @@ import { runLint } from '../core/lint.js'
 import { scrubErrorMessage } from '../core/log-safe.js'
 import { scoreKnowledgeBearing } from '../core/outcome-scorer.js'
 import { applyRowBudget, DEFAULT_MAX_TOKENS, DEFAULT_PER_ROW_CHAR_CAP } from '../core/token-budget.js'
+import { appendRecallTelemetry } from '../core/recall-telemetry.js'
 import type {
   HealthResult, Memory, MemoryType, SessionMeta, OutcomeStatus,
   KnowledgeDepth, Topic, TopicDetail, MetacognitionSummary, CheckpointResult,
@@ -265,6 +266,14 @@ export function createRequestHandler(
         truncated: budgeted.truncated,
         query: q,
         limit,
+      })
+
+      appendRecallTelemetry({
+        query: q,
+        hitCount: memories.length,
+        projectId: project,
+        limit,
+        maxTokens,
       })
       return
     }
