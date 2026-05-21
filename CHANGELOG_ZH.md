@@ -8,6 +8,44 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.3.2] — 2026-05-21
+
+### 新增
+
+- **`recall_query` telemetry,為 hit-rate 分析鋪基。** 每次 `GET /memory/query`
+  呼叫現在會 append 一筆 JSONL 到 `~/.ccrecall/recall-query.log.jsonl`:
+  truncate 過的 query(80 chars)、原始 `queryLen`、`hitCount`、`projectId`、
+  `limit`、`maxTokens`。Append 失敗會被吞掉 — telemetry 絕不能影響 endpoint
+  回應。兩個 opt-out 開關:`CCRECALL_RECALL_TELEMETRY_OFF=1` 關掉寫入;
+  `CCRECALL_RECALL_TELEMETRY_PATH` 改寫 log 路徑(test 用,避免污染 host 真實 log)。
+
+- **`scripts/recall-hit-rate-report.ts` 分析腳本。** 讀 telemetry log + 對照
+  `memories` 表,把 zero-hit query 拆兩桶 — *literal mismatch*(keyword 出現在
+  某筆 memory body 但 FTS5 沒抓到) vs *truly absent*(keyword 不存在任一
+  memory)。輸出(markdown 或 `--json`):總數、hit rate、zero-hit 拆分、
+  per-project 計數、query length 分布、每類最多 10 筆 sample。設計為 L0
+  quick-fix 餵 v0.4.0 batch 排序:1 天 instrumentation + 7 天觀察 → 用實證
+  決定 `#28` surfacing UX、`#15` tag first-class + Topic CJK、`#29` scorer
+  epistemic 之間的優先序。
+
+### 為什麼
+
+Cold rate 訊號(116 筆 memories 96 筆從未召回,4 批重大事件落到 auto memory
+而非 ccRecall DB)需要 evidence 基底才能決定 v0.4.0 batch 方向。本版純
+instrumentation — 不動 scoring、schema、recall 行為 — 讓 7 天觀察期保持乾淨。
+
+### 備註
+
+- Privacy:query 字串 log 前 truncate 到 80 chars。`queryLen` 保留原長度可看
+  長 query 分布。考慮過 hashing 但拒絕,因為 hashing 會阻擋拆分 literal
+  mismatch / truly absent 所需的 substring 對照。
+- 效能:`appendFileSync` 跑在 response path 上;E2E test 驗證 telemetry 開
+  狀態下整段 round-trip 仍 < 100ms。
+- 本版**不**翻 `CCRECALL_SESSION_START_STRATEGY` 預設值 — 等 metric 證據到位後
+  跟 v0.4.0 一起出。
+
+---
+
 ## [0.3.1] — 2026-05-13
 
 ### 修正
