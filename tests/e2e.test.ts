@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import http from 'node:http'
@@ -14,6 +14,8 @@ describe('E2E: index → search → HTTP', () => {
   let db: Database
   let server: http.Server
   let port: number
+  const originalTelemetryPath = process.env.CCRECALL_RECALL_TELEMETRY_PATH
+  const originalTelemetryOff = process.env.CCRECALL_RECALL_TELEMETRY_OFF
 
   // issue #18: harvest source switched from first user prompt to scored outcome
   // cluster — sample needs commit invocation + a last assistant message that
@@ -42,6 +44,11 @@ describe('E2E: index → search → HTTP', () => {
     // Run indexer
     await runIndexer(db, undefined, path.join(tmpDir, 'projects'))
 
+    // Isolate recall-telemetry writes so /memory/query tests don't append
+    // to the real ~/.ccrecall/recall-query.log.jsonl on the host.
+    process.env.CCRECALL_RECALL_TELEMETRY_PATH = path.join(tmpDir, 'recall-query.log.jsonl')
+    delete process.env.CCRECALL_RECALL_TELEMETRY_OFF
+
     // Start server on random port
     server = createServer(db)
     await new Promise<void>((resolve) => {
@@ -55,6 +62,16 @@ describe('E2E: index → search → HTTP', () => {
   afterEach(async () => {
     server.close()
     db.close()
+    if (originalTelemetryPath === undefined) {
+      delete process.env.CCRECALL_RECALL_TELEMETRY_PATH
+    } else {
+      process.env.CCRECALL_RECALL_TELEMETRY_PATH = originalTelemetryPath
+    }
+    if (originalTelemetryOff === undefined) {
+      delete process.env.CCRECALL_RECALL_TELEMETRY_OFF
+    } else {
+      process.env.CCRECALL_RECALL_TELEMETRY_OFF = originalTelemetryOff
+    }
     await rm(tmpDir, { recursive: true, force: true })
   })
 
@@ -134,6 +151,54 @@ describe('E2E: index → search → HTTP', () => {
     expect(b.totalTokenEstimate).toBeLessThanOrEqual(50)
     // truncated should fire on at least one of them
     expect(b.truncated || b.droppedCount > 0).toBe(true)
+  })
+
+  it('GET /memory/query writes telemetry row per call (with 80-char query truncation)', async () => {
+    await postJson(`http://127.0.0.1:${port}/memory/save`, {
+      content: 'evidence-first debugging principles',
+      type: 'pattern',
+      projectId: '-test-project',
+      confidence: 0.8,
+    })
+
+    await fetch(`http://127.0.0.1:${port}/memory/query?q=evidence&limit=5&project=-test-project`)
+
+    const longQuery = 'a'.repeat(200)
+    await fetch(`http://127.0.0.1:${port}/memory/query?q=${encodeURIComponent(longQuery)}&limit=5`)
+
+    const logPath = process.env.CCRECALL_RECALL_TELEMETRY_PATH!
+    const content = await readFile(logPath, 'utf8')
+    const lines = content.trim().split('\n')
+    expect(lines.length).toBe(2)
+
+    const row1 = JSON.parse(lines[0])
+    expect(row1.query).toBe('evidence')
+    expect(row1.queryLen).toBe(8)
+    expect(row1.hitCount).toBeGreaterThan(0)
+    expect(row1.projectId).toBe('-test-project')
+    expect(row1.limit).toBe(5)
+    expect(row1.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+
+    const row2 = JSON.parse(lines[1])
+    expect(row2.query.length).toBe(80)
+    expect(row2.queryLen).toBe(200)
+    expect(row2.hitCount).toBe(0)
+  })
+
+  it('GET /memory/query telemetry write does not block endpoint (timing under 100ms wall)', async () => {
+    await postJson(`http://127.0.0.1:${port}/memory/save`, {
+      content: 'telemetry timing sentinel',
+      type: 'discovery',
+      projectId: '-test-project',
+    })
+
+    const t0 = Date.now()
+    await fetch(`http://127.0.0.1:${port}/memory/query?q=telemetry&limit=5&project=-test-project`)
+    const elapsed = Date.now() - t0
+    // Wall-time budget is generous (100ms) to absorb CI flake; the goal is to
+    // catch a regression where appendFileSync blocks for hundreds of ms,
+    // not to micro-benchmark sync I/O.
+    expect(elapsed).toBeLessThan(100)
   })
 
   it('GET /memory/startup surfaces project memory NOT containing project name (closes echo chamber)', async () => {
