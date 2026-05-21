@@ -11,6 +11,50 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.3.2] — 2026-05-21
+
+### Added
+
+- **`recall_query` telemetry for hit-rate analysis.** Every `GET /memory/query`
+  call now appends one JSONL row to `~/.ccrecall/recall-query.log.jsonl`:
+  truncated query (80 chars), original `queryLen`, `hitCount`, `projectId`,
+  `limit`, `maxTokens`. Append failures are swallowed — telemetry must never
+  affect endpoint response. Two opt-out knobs:
+  `CCRECALL_RECALL_TELEMETRY_OFF=1` disables writes; `CCRECALL_RECALL_TELEMETRY_PATH`
+  redirects the log (used by the test suite to keep host telemetry clean).
+
+- **`scripts/recall-hit-rate-report.ts` analysis tool.** Reads the telemetry log
+  and cross-references the `memories` table to split zero-hit queries into two
+  buckets — *literal mismatch* (keyword appears in some memory body but FTS5
+  missed it) vs *truly absent* (keyword nowhere in any memory). Output (markdown
+  or `--json`): totals, hit rate, zero-hit breakdown, per-project counts,
+  query-length percentiles, and up to 10 samples per category. Designed as the
+  L0 quick-fix that feeds the v0.4.0 batch ordering: 1 day of instrumentation +
+  7 days of observation → evidence-driven decision between `#28` surfacing UX,
+  `#15` tag first-class + Topic CJK, and `#29` scorer epistemic.
+
+### Why
+
+The cold-rate signal (96/116 memories never recalled, 4 batches of major events
+that landed in auto memory instead of ccRecall DB) needs an evidence base before
+the v0.4.0 batch can pick a direction. This release is pure instrumentation —
+no scoring, schema, or recall behaviour changes — so the 7-day observation
+period stays clean.
+
+### Notes
+
+- Privacy: query string is truncated to 80 chars before logging. `queryLen`
+  preserves the original length so we can still characterise long-query
+  distribution. Hashing was considered and rejected because hashing would
+  prevent the substring cross-reference that splits literal-mismatch from
+  truly-absent.
+- Performance: `appendFileSync` runs on the response path; E2E tests assert the
+  total round-trip stays under 100ms even with telemetry on.
+- This release does NOT flip `CCRECALL_SESSION_START_STRATEGY` default — that
+  ships with v0.4.0 once the metric evidence is in.
+
+---
+
 ## [0.3.1] — 2026-05-13
 
 ### Fixed
