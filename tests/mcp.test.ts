@@ -13,16 +13,22 @@ describe('MCP recall_query handler', () => {
   let tmpDir: string
   let db: Database
   let svc: MemoryService
+  let originalTelemetryPath: string | undefined
 
   beforeEach(() => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-mcp-test-'))
     db = new Database(path.join(tmpDir, 'test.db'))
     svc = new MemoryService(db)
+    // Redirect telemetry to tmp so tests never touch ~/.ccrecall/.
+    originalTelemetryPath = process.env.CCRECALL_RECALL_TELEMETRY_PATH
+    process.env.CCRECALL_RECALL_TELEMETRY_PATH = path.join(tmpDir, 'recall-query.log.jsonl')
   })
 
   afterEach(() => {
     db.close()
     rmSync(tmpDir, { recursive: true, force: true })
+    if (originalTelemetryPath === undefined) delete process.env.CCRECALL_RECALL_TELEMETRY_PATH
+    else process.env.CCRECALL_RECALL_TELEMETRY_PATH = originalTelemetryPath
   })
 
   it('returns empty-result message when no memories match', () => {
@@ -190,16 +196,22 @@ describe('MCP recall_save handler', () => {
   let tmpDir: string
   let db: Database
   let svc: MemoryService
+  let originalTelemetryPath: string | undefined
 
   beforeEach(() => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-mcp-save-'))
     db = new Database(path.join(tmpDir, 'test.db'))
     svc = new MemoryService(db)
+    // One test in this block calls recallQueryHandler; redirect telemetry.
+    originalTelemetryPath = process.env.CCRECALL_RECALL_TELEMETRY_PATH
+    process.env.CCRECALL_RECALL_TELEMETRY_PATH = path.join(tmpDir, 'recall-query.log.jsonl')
   })
 
   afterEach(() => {
     db.close()
     rmSync(tmpDir, { recursive: true, force: true })
+    if (originalTelemetryPath === undefined) delete process.env.CCRECALL_RECALL_TELEMETRY_PATH
+    else process.env.CCRECALL_RECALL_TELEMETRY_PATH = originalTelemetryPath
   })
 
   it('saves a memory and returns confirmation with id', () => {
