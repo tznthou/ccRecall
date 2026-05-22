@@ -11,6 +11,32 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.3.3] — 2026-05-22
+
+### Fixed
+
+- **`recall_query` MCP path missed telemetry instrumentation.** v0.3.2 added
+  `appendRecallTelemetry` to the HTTP `GET /memory/query` route but not to the
+  MCP `recall_query` tool handler (`src/mcp/tools.ts`). Since most clients
+  (Claude Code, Claude Desktop) reach the daemon over MCP rather than direct
+  HTTP, the telemetry log (`~/.ccrecall/recall-query.log.jsonl`) only captured
+  ship smoke-test traffic — actual user calls were silently dropped. Fix:
+  `recallQueryHandler` now calls `appendRecallTelemetry` with
+  `hitCount = emittedIds.length` (post-budget, matching HTTP semantics) and
+  `projectId = null` (the MCP schema does not carry a project parameter).
+  Regression coverage added in `tests/mcp.test.ts` using
+  `CCRECALL_RECALL_TELEMETRY_PATH` to isolate the test log.
+
+### Notes
+
+- Anyone observing the v0.3.2 7-day hit-rate window should treat the original
+  5/28 deadline as void and restart from v0.3.3 ship date (new target: 6/04).
+  Samples gathered during the bug window only reflect HTTP-direct traffic and
+  cannot be extrapolated to the population — cold-rate estimates from that
+  window are not reliable evidence for v0.4.0 batch decisions.
+
+---
+
 ## [0.3.2] — 2026-05-21
 
 ### Added
