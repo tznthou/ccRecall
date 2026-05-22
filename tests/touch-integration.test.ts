@@ -11,16 +11,22 @@ import { sessionParams } from './fixtures/helpers.js'
 let tmpDir: string
 let db: Database
 let svc: MemoryService
+let originalTelemetryPath: string | undefined
 
 beforeEach(() => {
   tmpDir = mkdtempSync(path.join(os.tmpdir(), 'ccrecall-touch-'))
   db = new Database(path.join(tmpDir, 'test.db'))
   svc = new MemoryService(db)
+  // Redirect telemetry so handler tests never touch ~/.ccrecall/.
+  originalTelemetryPath = process.env.CCRECALL_RECALL_TELEMETRY_PATH
+  process.env.CCRECALL_RECALL_TELEMETRY_PATH = path.join(tmpDir, 'recall-query.log.jsonl')
 })
 
 afterEach(() => {
   db.close()
   rmSync(tmpDir, { recursive: true, force: true })
+  if (originalTelemetryPath === undefined) delete process.env.CCRECALL_RECALL_TELEMETRY_PATH
+  else process.env.CCRECALL_RECALL_TELEMETRY_PATH = originalTelemetryPath
 })
 
 function accessCount(id: number): number {
