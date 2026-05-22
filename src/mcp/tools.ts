@@ -12,6 +12,7 @@ import {
   DEFAULT_MAX_TOKENS,
   DEFAULT_PER_ROW_CHAR_CAP,
 } from '../core/token-budget.js'
+import { appendRecallTelemetry } from '../core/recall-telemetry.js'
 
 // Reserve tokens for trailer + possible unmatched-keyword note before
 // selecting memory rows, so final text respects the maxTokens target.
@@ -88,13 +89,23 @@ export function recallQueryHandler(
   memoryService: MemoryService,
   args: { query: string; limit?: number; maxTokens?: number },
 ): McpTextResult {
+  const limit = args.limit ?? 10
   try {
-    const memories = db.queryMemories(args.query, args.limit ?? 10)
+    const memories = db.queryMemories(args.query, limit)
     const { text, emittedIds } = formatMemories(memories, args.query, args.maxTokens)
     // Phase 4c: touch only memories that actually reached the caller.
     // Budget-dropped rows are not "surfaced" — bumping their access_count
     // would skew decay / compression toward unused content.
     memoryService.touch(emittedIds)
+    // hitCount uses emittedIds (post-budget) to match HTTP /memory/query
+    // semantics — telemetry records what reached the caller, not raw DB hits.
+    appendRecallTelemetry({
+      query: args.query,
+      hitCount: emittedIds.length,
+      projectId: null,
+      limit,
+      maxTokens: args.maxTokens ?? null,
+    })
     return textResult(text)
   } catch (err) {
     return textError('Error querying memories', err)
