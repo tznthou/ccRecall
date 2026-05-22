@@ -8,6 +8,30 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.3.3] — 2026-05-22
+
+### 修正
+
+- **`recall_query` MCP path 漏 instrument telemetry。** v0.3.2 只在 HTTP
+  `GET /memory/query` route 加 `appendRecallTelemetry`,沒同步加到 MCP
+  `recall_query` tool handler(`src/mcp/tools.ts`)。大多數 client
+  (Claude Code、Claude Desktop)是透過 MCP 而非直接 HTTP 連 daemon,所以
+  telemetry log(`~/.ccrecall/recall-query.log.jsonl`)實際只記到 ship
+  smoke-test 流量,正常 user 呼叫全被靜默丟掉。修法:`recallQueryHandler`
+  現在會呼叫 `appendRecallTelemetry`,`hitCount = emittedIds.length`
+  (post-budget,跟 HTTP 語意一致)、`projectId = null`(MCP schema 未帶
+  project 參數)。Regression test 加在 `tests/mcp.test.ts`,用
+  `CCRECALL_RECALL_TELEMETRY_PATH` 隔離 test log。
+
+### 備註
+
+- 在觀察 v0.3.2 7 天 hit-rate window 的人,原訂 5/28 deadline 應視為失效,
+  從 v0.3.3 ship 日重新起算(新目標:6/04)。Bug 期內取得的樣本只反映
+  HTTP-direct 流量,無法外推到母體 — 該期間推估的 cold-rate 數值不是
+  v0.4.0 batch 決策的可靠證據。
+
+---
+
 ## [0.3.2] — 2026-05-21
 
 ### 新增

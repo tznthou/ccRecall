@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { Database } from '../src/core/database.js'
@@ -73,6 +73,49 @@ describe('MCP recall_query handler', () => {
     const result = recallQueryHandler(db, svc, { query: 'keyword' })
     const lines = result.content[0].text.split('\n').filter(Boolean)
     expect(lines.length).toBe(10)
+  })
+
+  // Regression: MCP path bypassed appendRecallTelemetry in v0.3.2, leaving
+  // recall-query.log.jsonl populated only by direct HTTP /memory/query calls.
+  it('writes telemetry row on hit', () => {
+    const logPath = path.join(tmpDir, 'recall-query.log.jsonl')
+    const original = process.env.CCRECALL_RECALL_TELEMETRY_PATH
+    process.env.CCRECALL_RECALL_TELEMETRY_PATH = logPath
+    try {
+      db.saveMemory({
+        sessionId: null,
+        messageId: null,
+        content: 'apache license decision body',
+        type: 'decision',
+        confidence: 1,
+      })
+      recallQueryHandler(db, svc, { query: 'apache', limit: 5 })
+      const lines = readFileSync(logPath, 'utf8').trim().split('\n')
+      expect(lines.length).toBe(1)
+      const row = JSON.parse(lines[0])
+      expect(row.query).toBe('apache')
+      expect(row.hitCount).toBe(1)
+      expect(row.limit).toBe(5)
+    } finally {
+      if (original === undefined) delete process.env.CCRECALL_RECALL_TELEMETRY_PATH
+      else process.env.CCRECALL_RECALL_TELEMETRY_PATH = original
+    }
+  })
+
+  it('writes telemetry row with hitCount=0 on miss', () => {
+    const logPath = path.join(tmpDir, 'recall-query.log.jsonl')
+    const original = process.env.CCRECALL_RECALL_TELEMETRY_PATH
+    process.env.CCRECALL_RECALL_TELEMETRY_PATH = logPath
+    try {
+      recallQueryHandler(db, svc, { query: 'nonexistent-zzzz' })
+      const lines = readFileSync(logPath, 'utf8').trim().split('\n')
+      expect(lines.length).toBe(1)
+      const row = JSON.parse(lines[0])
+      expect(row.hitCount).toBe(0)
+    } finally {
+      if (original === undefined) delete process.env.CCRECALL_RECALL_TELEMETRY_PATH
+      else process.env.CCRECALL_RECALL_TELEMETRY_PATH = original
+    }
   })
 })
 
