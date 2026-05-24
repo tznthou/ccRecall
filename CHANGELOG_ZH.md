@@ -8,6 +8,30 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.3.4] — 2026-05-24
+
+### 修正
+
+- **`recall_query` 跨所有 project 搜尋,而非只搜當前 project。** MCP
+  `recall_query` tool 呼叫 `db.queryMemories(query, limit)` 時沒帶 `projectId`,
+  走進無過濾分支 — 在 project A 查詢可能撈到 project B 的記憶。`recall_query`
+  早於 `project_id` 機制(phase-4b),在 query handler 接上 scoping 時(phase-4c)
+  被漏掉;`recall_context`、`recall_save`、HTTP `/memory/query` 都已正確 scoped。
+  跨 project 可見性是開發初期就明確排除的 non-goal。修法:`recall_query` 現在接
+  required `projectId`(對齊 `recall_context`),傳入 `db.queryMemories` 與
+  `appendRecallTelemetry`(telemetry `projectId` 原本寫死 `null`,也一併修好
+  per-project 分組)。Cross-project isolation 測試加在 `tests/mcp.test.ts`。
+
+### 備註
+
+- 此修正後跨 project 的「偶然命中」會消失,6/04 hit-rate window 的 cold-rate
+  數字可能上升。先前 baseline 被這個 bug 虛高 — 修正後的數字才反映真實
+  project-scoped 召回率,應如此判讀。
+- `projectId` 由 client 提供(從 cwd 推導),跟其他 MCP tools 一致。是否改成
+  server-side project binding 記錄在 #41,等未來威脅模型超出本機單機使用時再評估。
+
+---
+
 ## [0.3.3] — 2026-05-22
 
 ### 修正

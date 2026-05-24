@@ -11,6 +11,35 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.3.4] — 2026-05-24
+
+### Fixed
+
+- **`recall_query` searched across all projects instead of the current one.**
+  The MCP `recall_query` tool called `db.queryMemories(query, limit)` without a
+  `projectId`, hitting the no-filter branch — a query in project A could surface
+  project B's memories. `recall_query` predated the `project_id` mechanism
+  (phase-4b) and was missed when query handlers were wired for scoping
+  (phase-4c); `recall_context`, `recall_save`, and the HTTP `/memory/query`
+  route all already scoped correctly. Cross-project visibility was an explicit
+  early-development non-goal. Fix: `recall_query` now takes a required
+  `projectId` (mirroring `recall_context`), threaded into `db.queryMemories` and
+  `appendRecallTelemetry` (the telemetry `projectId` was previously hardcoded
+  `null`, which also broke per-project grouping). Cross-project isolation test
+  added in `tests/mcp.test.ts`.
+
+### Notes
+
+- Cross-project "accidental hits" disappear with this fix, so cold-rate figures
+  in the 6/04 hit-rate window may rise. The prior baseline was inflated by the
+  bug — post-fix numbers reflect true project-scoped recall and should be read
+  that way.
+- `projectId` is client-supplied (derived from cwd), same as the other MCP
+  tools. Whether to move to server-side project binding is tracked in #41 for
+  if/when the threat model expands beyond local single-machine use.
+
+---
+
 ## [0.3.3] — 2026-05-22
 
 ### Fixed
