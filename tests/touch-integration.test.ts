@@ -38,15 +38,15 @@ function accessCount(id: number): number {
 describe('recallQueryHandler — touch integration', () => {
   it('increments access_count for every returned memory', () => {
     const id1 = db.saveMemory({
-      sessionId: null, messageId: null, type: 'decision', content: 'alpha one',
+      sessionId: null, messageId: null, type: 'decision', content: 'alpha one', projectId: 'proj-a',
     })
     const id2 = db.saveMemory({
-      sessionId: null, messageId: null, type: 'decision', content: 'alpha two',
+      sessionId: null, messageId: null, type: 'decision', content: 'alpha two', projectId: 'proj-a',
     })
     expect(accessCount(id1)).toBe(0)
     expect(accessCount(id2)).toBe(0)
 
-    recallQueryHandler(db, svc, { query: 'alpha' })
+    recallQueryHandler(db, svc, { query: 'alpha', projectId: 'proj-a' })
 
     expect(accessCount(id1)).toBe(1)
     expect(accessCount(id2)).toBe(1)
@@ -54,28 +54,28 @@ describe('recallQueryHandler — touch integration', () => {
 
   it('does not touch memories that were not surfaced', () => {
     const surfacedId = db.saveMemory({
-      sessionId: null, messageId: null, type: 'decision', content: 'beta matched',
+      sessionId: null, messageId: null, type: 'decision', content: 'beta matched', projectId: 'proj-a',
     })
     const untouchedId = db.saveMemory({
-      sessionId: null, messageId: null, type: 'decision', content: 'gamma unmatched',
+      sessionId: null, messageId: null, type: 'decision', content: 'gamma unmatched', projectId: 'proj-a',
     })
-    recallQueryHandler(db, svc, { query: 'beta' })
+    recallQueryHandler(db, svc, { query: 'beta', projectId: 'proj-a' })
     expect(accessCount(surfacedId)).toBe(1)
     expect(accessCount(untouchedId)).toBe(0)
   })
 
   it('touches same memory twice on separate calls', () => {
     const id = db.saveMemory({
-      sessionId: null, messageId: null, type: 'decision', content: 'repeated',
+      sessionId: null, messageId: null, type: 'decision', content: 'repeated', projectId: 'proj-a',
     })
-    recallQueryHandler(db, svc, { query: 'repeated' })
-    recallQueryHandler(db, svc, { query: 'repeated' })
+    recallQueryHandler(db, svc, { query: 'repeated', projectId: 'proj-a' })
+    recallQueryHandler(db, svc, { query: 'repeated', projectId: 'proj-a' })
     expect(accessCount(id)).toBe(2)
   })
 
   it('noops on empty result set (touch never called)', () => {
     // No memories at all — handler should not throw.
-    expect(() => recallQueryHandler(db, svc, { query: 'nothing' })).not.toThrow()
+    expect(() => recallQueryHandler(db, svc, { query: 'nothing', projectId: 'proj-a' })).not.toThrow()
   })
 })
 

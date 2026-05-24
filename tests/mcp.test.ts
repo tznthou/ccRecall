@@ -32,7 +32,7 @@ describe('MCP recall_query handler', () => {
   })
 
   it('returns empty-result message when no memories match', () => {
-    const result = recallQueryHandler(db, svc, { query: 'nonexistent' })
+    const result = recallQueryHandler(db, svc, { query: 'nonexistent', projectId: 'proj-a' })
     expect(result.isError).toBeUndefined()
     expect(result.content[0].text).toContain('No memories found')
   })
@@ -44,8 +44,9 @@ describe('MCP recall_query handler', () => {
       content: 'Use Apache-2.0 license for ccRecall',
       type: 'decision',
       confidence: 0.9,
+      projectId: 'proj-a',
     })
-    const result = recallQueryHandler(db, svc, { query: 'Apache' })
+    const result = recallQueryHandler(db, svc, { query: 'Apache', projectId: 'proj-a' })
     expect(result.content[0].text).toContain('[decision]')
     expect(result.content[0].text).toContain('Apache-2.0')
     expect(result.content[0].text).toContain('conf 0.90')
@@ -59,9 +60,10 @@ describe('MCP recall_query handler', () => {
         content: `test memory ${i} apache`,
         type: 'discovery',
         confidence: 1,
+        projectId: 'proj-a',
       })
     }
-    const result = recallQueryHandler(db, svc, { query: 'apache', limit: 2 })
+    const result = recallQueryHandler(db, svc, { query: 'apache', limit: 2, projectId: 'proj-a' })
     const lines = result.content[0].text.split('\n').filter(Boolean)
     expect(lines.length).toBe(2)
   })
@@ -74,9 +76,10 @@ describe('MCP recall_query handler', () => {
         content: `memory ${i} keyword`,
         type: 'pattern',
         confidence: 1,
+        projectId: 'proj-a',
       })
     }
-    const result = recallQueryHandler(db, svc, { query: 'keyword' })
+    const result = recallQueryHandler(db, svc, { query: 'keyword', projectId: 'proj-a' })
     const lines = result.content[0].text.split('\n').filter(Boolean)
     expect(lines.length).toBe(10)
   })
@@ -94,14 +97,16 @@ describe('MCP recall_query handler', () => {
         content: 'apache license decision body',
         type: 'decision',
         confidence: 1,
+        projectId: 'proj-a',
       })
-      recallQueryHandler(db, svc, { query: 'apache', limit: 5 })
+      recallQueryHandler(db, svc, { query: 'apache', limit: 5, projectId: 'proj-a' })
       const lines = readFileSync(logPath, 'utf8').trim().split('\n')
       expect(lines.length).toBe(1)
       const row = JSON.parse(lines[0])
       expect(row.query).toBe('apache')
       expect(row.hitCount).toBe(1)
       expect(row.limit).toBe(5)
+      expect(row.projectId).toBe('proj-a')
     } finally {
       if (original === undefined) delete process.env.CCRECALL_RECALL_TELEMETRY_PATH
       else process.env.CCRECALL_RECALL_TELEMETRY_PATH = original
@@ -113,7 +118,7 @@ describe('MCP recall_query handler', () => {
     const original = process.env.CCRECALL_RECALL_TELEMETRY_PATH
     process.env.CCRECALL_RECALL_TELEMETRY_PATH = logPath
     try {
-      recallQueryHandler(db, svc, { query: 'nonexistent-zzzz' })
+      recallQueryHandler(db, svc, { query: 'nonexistent-zzzz', projectId: 'proj-a' })
       const lines = readFileSync(logPath, 'utf8').trim().split('\n')
       expect(lines.length).toBe(1)
       const row = JSON.parse(lines[0])
@@ -122,6 +127,28 @@ describe('MCP recall_query handler', () => {
       if (original === undefined) delete process.env.CCRECALL_RECALL_TELEMETRY_PATH
       else process.env.CCRECALL_RECALL_TELEMETRY_PATH = original
     }
+  })
+
+  it('respects project isolation — only returns current-project memories', () => {
+    db.saveMemory({
+      sessionId: null,
+      messageId: null,
+      content: 'apache config lives in project alpha',
+      type: 'decision',
+      confidence: 1,
+      projectId: 'proj-a',
+    })
+    db.saveMemory({
+      sessionId: null,
+      messageId: null,
+      content: 'apache config lives in project beta',
+      type: 'decision',
+      confidence: 1,
+      projectId: 'proj-b',
+    })
+    const result = recallQueryHandler(db, svc, { query: 'apache', projectId: 'proj-a' })
+    expect(result.content[0].text).toContain('project alpha')
+    expect(result.content[0].text).not.toContain('project beta')
   })
 })
 
@@ -242,8 +269,8 @@ describe('MCP recall_save handler', () => {
   })
 
   it('persists memory queryable via recallQueryHandler', () => {
-    recallSaveHandler(db, { content: 'searchable via mcp tool', type: 'discovery' })
-    const result = recallQueryHandler(db, svc, { query: 'searchable' })
+    recallSaveHandler(db, { content: 'searchable via mcp tool', type: 'discovery', projectId: 'proj-a' })
+    const result = recallQueryHandler(db, svc, { query: 'searchable', projectId: 'proj-a' })
     expect(result.content[0].text).toContain('searchable via mcp tool')
     expect(result.content[0].text).toContain('[discovery]')
   })

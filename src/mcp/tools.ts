@@ -36,6 +36,7 @@ function textError(prefix: string, err: unknown): McpTextResult {
 
 const recallQueryInput = {
   query: z.string().min(1).describe('FTS5 search query (keywords or phrase)'),
+  projectId: z.string().min(1).describe('Project ID (derived from cwd, e.g. "-Users-foo-my-project")'),
   limit: z.number().int().positive().max(50).optional().describe('Max results (default 10, max 50)'),
   maxTokens: z.number().int().positive().max(2000).optional().describe(
     `Approximate total output token budget (default ${DEFAULT_MAX_TOKENS}). Results are truncated with per-row ellipsis and a trailer so clipping is always visible.`,
@@ -87,11 +88,11 @@ export function formatMemories(
 export function recallQueryHandler(
   db: Database,
   memoryService: MemoryService,
-  args: { query: string; limit?: number; maxTokens?: number },
+  args: { query: string; projectId: string; limit?: number; maxTokens?: number },
 ): McpTextResult {
   const limit = args.limit ?? 10
   try {
-    const memories = db.queryMemories(args.query, limit)
+    const memories = db.queryMemories(args.query, limit, args.projectId)
     const { text, emittedIds } = formatMemories(memories, args.query, args.maxTokens)
     // Phase 4c: touch only memories that actually reached the caller.
     // Budget-dropped rows are not "surfaced" — bumping their access_count
@@ -102,7 +103,7 @@ export function recallQueryHandler(
     appendRecallTelemetry({
       query: args.query,
       hitCount: emittedIds.length,
-      projectId: null,
+      projectId: args.projectId,
       limit,
       maxTokens: args.maxTokens ?? null,
     })
