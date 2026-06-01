@@ -385,6 +385,18 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 
 ---
 
+## Roadmap
+
+| Version | Theme | Status |
+|---------|-------|--------|
+| **v0.3.x** | Manual save, automatic recall — memories come from explicit `recall_save` calls; SessionStart hook and MCP tools inject them into future sessions | **Current** |
+| **v0.4.0** | Lower promotion friction — journal routing by entry type, partial promote with supersession tracking, CLI and hook surfacing of pending candidates | Planned |
+| **v0.5+** | Automatic memory — active decision detection during conversations, auto-promote above confidence threshold, closing the manual gap | Planned |
+
+Tracked in [GitHub Issues](https://github.com/tznthou/ccRecall/issues).
+
+---
+
 ## Changelog
 
 Release notes and version history live in [CHANGELOG.md](CHANGELOG.md). Every tagged version has a matching entry; the `Unreleased` section tracks what's landed on `main` but not yet published to npm.

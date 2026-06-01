@@ -378,6 +378,18 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 
 ---
 
+## 路線圖
+
+| 版本 | 主題 | 狀態 |
+|------|------|------|
+| **v0.3.x** | 手動存、自動召回——記憶來自明確的 `recall_save` 呼叫；SessionStart hook 和 MCP 工具在未來 session 注入 | **目前版本** |
+| **v0.4.0** | 降低 promote 摩擦——依 entry type 拆分 journal routing、支援 supersession 追蹤的 partial promote、CLI 和 hook 浮出 pending 候選 | 規劃中 |
+| **v0.5+** | 自動記憶——對話中主動偵測決策活體、信心值超門檻自動 promote、補上手動缺口 | 規劃中 |
+
+追蹤於 [GitHub Issues](https://github.com/tznthou/ccRecall/issues)。
+
+---
+
 ## 變更記錄
 
 版本更新與歷程記錄在 [CHANGELOG_ZH.md](CHANGELOG_ZH.md)。每個 tag 都有對應條目；`Unreleased` 段是已進 `main`、尚未發 npm 的改動。
