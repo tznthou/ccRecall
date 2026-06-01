@@ -1807,7 +1807,7 @@ export class Database {
             WHERE memories_fts MATCH ?
               AND (
                 (m.session_id IS NOT NULL AND s.project_id = ?) OR
-                (m.session_id IS NULL AND m.project_id = ?)
+                (m.session_id IS NULL AND (m.project_id = ? OR m.project_id IS NULL))
               )
             ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, rank, m.id DESC
             LIMIT ?
@@ -1859,7 +1859,7 @@ export class Database {
             WHERE ${where}
               AND (
                 (m.session_id IS NOT NULL AND s.project_id = ?) OR
-                (m.session_id IS NULL AND m.project_id = ?)
+                (m.session_id IS NULL AND (m.project_id = ? OR m.project_id IS NULL))
               )
             ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.created_at DESC, m.id DESC
             LIMIT ?
@@ -1925,7 +1925,7 @@ export class Database {
           AND m.type != 'query'
           AND (
             (m.session_id IS NOT NULL AND s.project_id = ?) OR
-            (m.session_id IS NULL AND m.project_id = ?)
+            (m.session_id IS NULL AND (m.project_id = ? OR m.project_id IS NULL))
           )
         ORDER BY m.created_at DESC
         LIMIT ?
@@ -1945,7 +1945,7 @@ export class Database {
           LEFT JOIN sessions s ON m.session_id = s.id
           WHERE (
               (m.session_id IS NOT NULL AND s.project_id = ?) OR
-              (m.session_id IS NULL AND m.project_id = ?)
+              (m.session_id IS NULL AND (m.project_id = ? OR m.project_id IS NULL))
             )
             ${excludeClause}
           ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.created_at DESC, m.id DESC
