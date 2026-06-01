@@ -117,16 +117,16 @@ describe('queryMemories — explicit scope predicate (session-backed vs manual)'
     db.saveMemory({ sessionId: null, messageId: null, type: 'preference', content: 'alpha global' })
   })
 
-  it('query with projectId=proj-A returns only A-scoped memories (session + manual)', () => {
+  it('query with projectId=proj-A returns A-scoped + global memories', () => {
     const results = db.queryMemories('alpha', 20, 'proj-A')
     const contents = results.map(r => r.content).sort()
-    expect(contents).toEqual(['alpha manualA', 'alpha sessA'])
+    expect(contents).toEqual(['alpha global', 'alpha manualA', 'alpha sessA'])
   })
 
-  it('query with projectId=proj-B returns only B-scoped memories', () => {
+  it('query with projectId=proj-B returns B-scoped + global memories', () => {
     const results = db.queryMemories('alpha', 20, 'proj-B')
     const contents = results.map(r => r.content).sort()
-    expect(contents).toEqual(['alpha manualB', 'alpha sessB'])
+    expect(contents).toEqual(['alpha global', 'alpha manualB', 'alpha sessB'])
   })
 
   it('query without projectId returns everything including global', () => {
@@ -134,10 +134,10 @@ describe('queryMemories — explicit scope predicate (session-backed vs manual)'
     expect(results.length).toBe(5)
   })
 
-  it('manual memory without projectId (global) is excluded from per-project queries', () => {
+  it('manual memory without projectId (global) is visible in per-project queries', () => {
     const a = db.queryMemories('alpha', 20, 'proj-A')
     const b = db.queryMemories('alpha', 20, 'proj-B')
-    expect(a.map(r => r.content)).not.toContain('alpha global')
-    expect(b.map(r => r.content)).not.toContain('alpha global')
+    expect(a.map(r => r.content)).toContain('alpha global')
+    expect(b.map(r => r.content)).toContain('alpha global')
   })
 })
