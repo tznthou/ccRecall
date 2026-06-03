@@ -8,6 +8,29 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.4.0] — 2026-06-03
+
+### 變更
+
+- **SessionStart 預設策略從 `legacy` 切換為 `startup-v1`。**
+  legacy 策略用專案名稱關鍵字做 FTS 比對，造成 echo chamber——同樣 4-5 條記憶每次
+  session 都被撈出來。`startup-v1` 優先 surface 從未被讀取的冷記憶，再補填近期/高信心
+  記憶，打破 echo chamber，讓被埋沒的知識浮出。新格式顯示 pointer hint（「N memories
+  available — use recall_query to search more」）取代舊的「matched via project
+  keyword」footer。Legacy 仍可透過 `CCRECALL_SESSION_START_STRATEGY=legacy` 使用。
+
+- **`recall_save` tool description 重新定位為主要寫入路徑。**
+  新增具體「何時該存」場景、self-contained 記憶撰寫指引（包含 WHY、用具體細節、避免
+  代名詞），以及冷啟動引導（recall_query 結果為空時建議存下有價值的發現）。
+
+- **`recall_query` tool description 新增 sufficiency hint。**
+  結果稀疏時建議嘗試不同關鍵字或更具體的詞。
+
+### 修正
+
+- **全域記憶（project_id=NULL）現在納入 scoped startup 查詢。**
+  （來自 [0.3.4] PR #44——首次隨本版部署。）
+
 ## [0.3.4] — 2026-05-24
 
 ### 修正

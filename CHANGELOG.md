@@ -11,6 +11,34 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.4.0] — 2026-06-03
+
+### Changed
+
+- **SessionStart default strategy switched from `legacy` to `startup-v1`.**
+  The legacy strategy matched memories by project-name keyword via FTS, causing
+  an echo chamber where the same 4-5 keyword-matching memories surfaced every
+  session. `startup-v1` prioritizes cold (never-accessed) memories first, then
+  fills with recent/high-confidence ones — breaking the echo chamber and surfacing
+  previously buried knowledge. The new formatter shows a pointer hint
+  ("N memories available — use recall_query to search more") instead of the old
+  "matched via project keyword" footer. Legacy remains available via
+  `CCRECALL_SESSION_START_STRATEGY=legacy`.
+
+- **`recall_save` tool description repositioned as the primary write path.**
+  Description now includes concrete "WHEN TO SAVE" scenarios, self-contained
+  memory writing guidance (include WHY, use concrete details, avoid pronouns),
+  and a cold-start hint (empty recall_query results suggest saving findings).
+
+- **`recall_query` tool description adds a sufficiency hint.**
+  When results are sparse, the response now suggests trying different keywords
+  or more specific terms.
+
+### Fixed
+
+- **Global memories (project_id=NULL) now included in scoped startup queries.**
+  (Included from [0.3.4] PR #44 — first deployment in this release.)
+
 ## [0.3.4] — 2026-05-24
 
 ### Fixed
