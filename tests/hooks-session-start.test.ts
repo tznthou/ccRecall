@@ -17,15 +17,23 @@ type Received = { path: string | undefined; method: string | undefined }
 
 function startMockServer(
   responder: (received: Received) => { status: number; memories: MemoryShape[]; extra?: Record<string, unknown> },
+  opts?: { memoryCount?: number },
 ): Promise<{ server: http.Server; port: number; received: Received[] }> {
   return new Promise((resolve) => {
     const received: Received[] = []
     const server = http.createServer((req, res) => {
       const entry: Received = { path: req.url, method: req.method }
       received.push(entry)
+      res.setHeader('Content-Type', 'application/json')
+
+      if (req.url?.startsWith('/health')) {
+        res.statusCode = 200
+        res.end(JSON.stringify({ status: 'ok', memoryCount: opts?.memoryCount ?? 31 }))
+        return
+      }
+
       const { status, memories, extra } = responder(entry)
       res.statusCode = status
-      res.setHeader('Content-Type', 'application/json')
       const body = { memories, totalTokenEstimate: 0, query: '', limit: 5, ...(extra ?? {}) }
       res.end(JSON.stringify(body))
     })
@@ -72,7 +80,7 @@ describe('hooks/session-start.mjs', () => {
     server = null
   })
 
-  it('queries /memory/query with cwd basename and writes memories to stdout', async () => {
+  it('legacy strategy queries /memory/query with cwd basename and writes memories to stdout', async () => {
     const ctx = await startMockServer(() => ({
       status: 200,
       memories: [
@@ -87,7 +95,7 @@ describe('hooks/session-start.mjs', () => {
       cwd: '/Users/tznthou/Documents/ccRecall',
       source: 'startup',
       hook_event_name: 'SessionStart',
-    }))
+    }), { CCRECALL_SESSION_START_STRATEGY: 'legacy' })
 
     expect(code).toBe(0)
     expect(ctx.received).toHaveLength(1)
@@ -105,7 +113,7 @@ describe('hooks/session-start.mjs', () => {
   })
 
   it('writes nothing when no memories match', async () => {
-    const ctx = await startMockServer(() => ({ status: 200, memories: [] }))
+    const ctx = await startMockServer(() => ({ status: 200, memories: [] }), { memoryCount: 0 })
     server = ctx.server
 
     const { code, stdout } = await runHook(ctx.port, JSON.stringify({
@@ -117,7 +125,7 @@ describe('hooks/session-start.mjs', () => {
 
     expect(code).toBe(0)
     expect(stdout).toBe('')
-    expect(ctx.received).toHaveLength(1)
+    expect(ctx.received).toHaveLength(2)
   })
 
   it('skips when source is "resume"', async () => {
@@ -178,8 +186,12 @@ describe('hooks/session-start.mjs', () => {
     expect(stderr).toContain('query error')
   })
 
-  it('default (legacy) strategy hits /memory/query with maxTokens=300', async () => {
-    const ctx = await startMockServer(() => ({ status: 200, memories: [] }))
+  it('default (startup-v1) strategy hits /memory/startup and /health', async () => {
+    const ctx = await startMockServer(() => ({
+      status: 200,
+      memories: [],
+      extra: { emittedIds: [], candidateCount: 0, droppedCount: 0 },
+    }))
     server = ctx.server
     await runHook(ctx.port, JSON.stringify({
       session_id: 'x',
@@ -187,9 +199,12 @@ describe('hooks/session-start.mjs', () => {
       source: 'startup',
       hook_event_name: 'SessionStart',
     }))
-    expect(ctx.received).toHaveLength(1)
-    expect(ctx.received[0].path).toContain('/memory/query')
-    expect(ctx.received[0].path).toContain('maxTokens=300')
+    expect(ctx.received).toHaveLength(2)
+    const startupReq = ctx.received.find(r => r.path?.includes('/memory/startup'))
+    const healthReq = ctx.received.find(r => r.path?.includes('/health'))
+    expect(startupReq).toBeDefined()
+    expect(startupReq!.path).toContain('maxTokens=300')
+    expect(healthReq).toBeDefined()
   })
 
   it('startup-v1 strategy hits /memory/startup and writes telemetry JSONL', async () => {
@@ -212,11 +227,13 @@ describe('hooks/session-start.mjs', () => {
       }), { CCRECALL_SESSION_START_STRATEGY: 'startup-v1', HOME: tmpHome })
 
       expect(code).toBe(0)
-      expect(ctx.received).toHaveLength(1)
-      expect(ctx.received[0].path).toContain('/memory/startup')
-      expect(ctx.received[0].path).toContain('project=-Users-tznthou-Documents-ccRecall')
-      expect(ctx.received[0].path).toContain('maxTokens=300')
+      expect(ctx.received).toHaveLength(2)
+      const startupReq = ctx.received.find(r => r.path?.includes('/memory/startup'))
+      expect(startupReq).toBeDefined()
+      expect(startupReq!.path).toContain('project=-Users-tznthou-Documents-ccRecall')
+      expect(startupReq!.path).toContain('maxTokens=300')
       expect(stdout).toContain('漸進披露探索法')
+      expect(stdout).toContain('memories available')
 
       const logPath = path.join(tmpHome, '.ccrecall', 'startup-recall.log.jsonl')
       const logContent = await readFile(logPath, 'utf8')

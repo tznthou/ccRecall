@@ -13,3 +13,4 @@ coverage/
 .env.*
 *.key
 *.pem
+.claude/RESUME.md

@@ -18,7 +18,7 @@ const HOST = '127.0.0.1'
 const TIMEOUT_MS = 2000
 const MEMORY_LIMIT = 5
 const MAX_TOKENS = 300
-const STRATEGY = process.env.CCRECALL_SESSION_START_STRATEGY ?? 'legacy'
+const STRATEGY = process.env.CCRECALL_SESSION_START_STRATEGY ?? 'startup-v1'
 const TELEMETRY_OFF = process.env.CCRECALL_TELEMETRY === 'off'
 const TELEMETRY_PATH = path.join(os.homedir(), '.ccrecall', 'startup-recall.log.jsonl')
 
@@ -131,6 +131,22 @@ function formatMemories(memories, query) {
   ].join('\n')
 }
 
+function formatStartupV1(memories, query, totalMemoryCount) {
+  if (memories.length === 0 && totalMemoryCount === 0) return ''
+  const lines = memories.map((m) => {
+    const conf = m.confidence != null && m.confidence !== 1
+      ? ` (conf ${Number(m.confidence).toFixed(2)})`
+      : ''
+    return `- ${m.content}${conf}`
+  })
+  const parts = ['[ccRecall memory recall]', '']
+  if (lines.length > 0) parts.push(...lines, '')
+  if (totalMemoryCount > memories.length) {
+    parts.push(`(${totalMemoryCount} memories available — use recall_query to search more)`)
+  }
+  return parts.join('\n')
+}
+
 async function main() {
   let input
   try {
@@ -149,21 +165,27 @@ async function main() {
   if (!query) return
   const projectId = projectIdFromCwd(input.cwd)
 
-  let memories
+  let text
   if (STRATEGY === 'startup-v1') {
-    const result = await queryStartupV1(query, projectId)
-    memories = result.memories
+    const [result, health] = await Promise.all([
+      queryStartupV1(query, projectId),
+      httpGet('/health'),
+    ])
+    const memories = result.memories
+    const totalMemoryCount = health && typeof health.memoryCount === 'number'
+      ? health.memoryCount : 0
     writeTelemetry({
       ts: new Date().toISOString(),
       projectId,
       emittedIds: result.emittedIds,
       droppedCount: result.droppedCount,
     })
+    text = formatStartupV1(memories, query, totalMemoryCount)
   } else {
-    memories = await queryLegacy(query, projectId)
+    const memories = await queryLegacy(query, projectId)
+    text = formatMemories(memories, query)
   }
 
-  const text = formatMemories(memories, query)
   if (text) process.stdout.write(text)
 }
 
