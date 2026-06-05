@@ -37,6 +37,18 @@ function extractTopicsFromFile(filePath: string): string[] {
   return k ? [k] : []
 }
 
+/** 從記憶 content 文字抽出 topic keys（用於 recall_save 自動 topic extraction） */
+export function extractTopicsFromContent(content: string): string[] {
+  if (!content) return []
+  const topics = new Set<string>()
+  const words = content.split(/[\s,;:()[\]{}"'`|/\\]+/).filter(Boolean)
+  for (const w of words) {
+    const k = normalizeTopicKey(w)
+    if (k) topics.add(k)
+  }
+  return Array.from(topics).sort()
+}
+
 /** 從結構化欄位（tags, filesTouched）抽出 topic keys，已 normalize + dedup + sort */
 export function extractFromSession(source: TopicSource): string[] {
   const topics = new Set<string>()

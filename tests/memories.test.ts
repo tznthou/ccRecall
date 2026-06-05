@@ -47,6 +47,7 @@ describe('memories schema', () => {
     expect(names).toEqual([
       'id', 'session_id', 'message_id', 'content', 'type', 'confidence', 'created_at',
       'last_accessed', 'access_count', 'compressed_at', 'compression_level', 'project_id',
+      'key',
     ])
   })
 })
@@ -74,6 +75,76 @@ describe('saveMemory', () => {
     expect(row.session_id).toBe('sess-1')
     expect(row.message_id).toBe('msg-1')
     expect(row.confidence).toBe(0.95)
+  })
+
+  it('persists key column', () => {
+    const id = db.saveMemory(mem({ content: 'WAL mode', key: 'sqlite-wal-mode' }))
+    const row = db.rawAll<{ key: string }>(`SELECT key FROM memories WHERE id = ${id}`)[0]
+    expect(row.key).toBe('sqlite-wal-mode')
+  })
+
+  it('key defaults to NULL when omitted', () => {
+    const id = db.saveMemory(mem({ content: 'no key' }))
+    const row = db.rawAll<{ key: string | null }>(`SELECT key FROM memories WHERE id = ${id}`)[0]
+    expect(row.key).toBeNull()
+  })
+})
+
+describe('saveMemory key-based upsert', () => {
+  it('same key + same project_id updates instead of inserting', () => {
+    const id1 = db.saveMemory(mem({ content: 'v1', key: 'slug-a', projectId: 'proj-1' }))
+    const id2 = db.saveMemory(mem({ content: 'v2', key: 'slug-a', projectId: 'proj-1', confidence: 0.95 }))
+    expect(id2).toBe(id1)
+    expect(db.getMemoryCount()).toBe(1)
+    const row = db.rawAll<{ content: string; confidence: number }>(
+      `SELECT content, confidence FROM memories WHERE id = ${id1}`,
+    )[0]
+    expect(row.content).toBe('v2')
+    expect(row.confidence).toBe(0.95)
+  })
+
+  it('upsert resets access_count and last_accessed', () => {
+    const id = db.saveMemory(mem({ content: 'v1', key: 'slug-b', projectId: 'proj-1' }))
+    db.touchMemory([id])
+    const before = db.rawAll<{ access_count: number; last_accessed: string | null }>(
+      `SELECT access_count, last_accessed FROM memories WHERE id = ${id}`,
+    )[0]
+    expect(before.access_count).toBe(1)
+    expect(before.last_accessed).not.toBeNull()
+
+    db.saveMemory(mem({ content: 'v2', key: 'slug-b', projectId: 'proj-1' }))
+    const after = db.rawAll<{ access_count: number; last_accessed: string | null }>(
+      `SELECT access_count, last_accessed FROM memories WHERE id = ${id}`,
+    )[0]
+    expect(after.access_count).toBe(0)
+    expect(after.last_accessed).toBeNull()
+  })
+
+  it('different key same project inserts new row', () => {
+    db.saveMemory(mem({ content: 'v1', key: 'slug-a', projectId: 'proj-1' }))
+    db.saveMemory(mem({ content: 'v2', key: 'slug-b', projectId: 'proj-1' }))
+    expect(db.getMemoryCount()).toBe(2)
+  })
+
+  it('same key different project inserts new row', () => {
+    db.saveMemory(mem({ content: 'v1', key: 'slug-a', projectId: 'proj-1' }))
+    db.saveMemory(mem({ content: 'v2', key: 'slug-a', projectId: 'proj-2' }))
+    expect(db.getMemoryCount()).toBe(2)
+  })
+
+  it('same key with NULL project_id (global) upserts correctly', () => {
+    const id1 = db.saveMemory(mem({ content: 'global v1', key: 'global-slug' }))
+    const id2 = db.saveMemory(mem({ content: 'global v2', key: 'global-slug' }))
+    expect(id2).toBe(id1)
+    expect(db.getMemoryCount()).toBe(1)
+    const row = db.rawAll<{ content: string }>(`SELECT content FROM memories WHERE id = ${id1}`)[0]
+    expect(row.content).toBe('global v2')
+  })
+
+  it('no key always inserts (no upsert)', () => {
+    db.saveMemory(mem({ content: 'same content' }))
+    db.saveMemory(mem({ content: 'same content' }))
+    expect(db.getMemoryCount()).toBe(2)
   })
 })
 

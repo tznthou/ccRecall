@@ -217,6 +217,7 @@ export interface Memory {
   content: string
   type: MemoryType
   confidence: number
+  key: string | null
   createdAt: string
 }
 

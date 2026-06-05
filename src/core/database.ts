@@ -17,6 +17,9 @@ export interface MemoryInput {
    *  this from sessions.project_id if omitted. Manual memories should set this
    *  to avoid cross-project leakage. */
   projectId?: string | null
+  /** v0.4.1: stable slug for key-based upsert dedup. When provided, a second
+   *  save with the same (project_id, key) updates instead of inserting. */
+  key?: string | null
 }
 
 /** 寫入 messages 時使用的參數型別 */
@@ -124,6 +127,7 @@ interface MemoryRow {
   content: string
   type: string
   confidence: number
+  key: string | null
   created_at: string
 }
 
@@ -166,6 +170,7 @@ function mapMemoryRow(r: MemoryRow): Memory {
     content: r.content,
     type: r.type as MemoryType,
     confidence: r.confidence,
+    key: r.key,
     createdAt: r.created_at,
   }
 }
@@ -833,6 +838,20 @@ const migrations: Migration[] = [
         );
         CREATE INDEX idx_journal_status ON session_journal(status, expires_at);
         CREATE UNIQUE INDEX idx_journal_session_hash ON session_journal(session_id, content_hash);
+      `)
+    },
+  },
+  {
+    version: 23,
+    description: 'add key column to memories for upsert dedup (v0.4.1 Phase 1)',
+    up: (db) => {
+      const cols = db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>
+      if (cols.some(c => c.name === 'key')) return
+      db.exec(`
+        ALTER TABLE memories ADD COLUMN key TEXT;
+        CREATE UNIQUE INDEX idx_memories_project_key
+          ON memories (COALESCE(project_id, ''), key)
+          WHERE key IS NOT NULL;
       `)
     },
   },
@@ -1662,9 +1681,58 @@ export class Database {
     } else {
       projectId = input.projectId ?? null
     }
+
+    const key = input.key ?? null
+
+    // v0.4.1: key-based upsert — same (project_id, key) updates instead of inserting.
+    // Wrapped in transaction to prevent TOCTOU race between SELECT and UPDATE/INSERT.
+    if (key) {
+      const upsert = this.db.transaction(() => {
+        const existing = this.db.prepare(`
+          SELECT id FROM memories
+          WHERE key = ? AND COALESCE(project_id, '') = COALESCE(?, '')
+        `).get(key, projectId) as { id: number } | undefined
+
+        if (existing) {
+          this.db.prepare(`
+            UPDATE memories
+            SET content = ?, confidence = ?, type = ?,
+                session_id = COALESCE(?, session_id),
+                message_id = COALESCE(?, message_id),
+                access_count = 0, last_accessed = NULL,
+                compression_level = 0, compressed_at = NULL
+            WHERE id = ?
+          `).run(
+            input.content,
+            input.confidence ?? 0.8,
+            input.type,
+            input.sessionId,
+            input.messageId,
+            existing.id,
+          )
+          return existing.id
+        }
+
+        const info = this.db.prepare(`
+          INSERT INTO memories (session_id, message_id, content, type, confidence, project_id, key)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          input.sessionId,
+          input.messageId,
+          input.content,
+          input.type,
+          input.confidence ?? 0.8,
+          projectId,
+          key,
+        )
+        return Number(info.lastInsertRowid)
+      })
+      return upsert()
+    }
+
     const info = this.db.prepare(`
-      INSERT INTO memories (session_id, message_id, content, type, confidence, project_id)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (session_id, message_id, content, type, confidence, project_id, key)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.sessionId,
       input.messageId,
@@ -1672,6 +1740,7 @@ export class Database {
       input.type,
       input.confidence ?? 0.8,
       projectId,
+      key,
     )
     return Number(info.lastInsertRowid)
   }
@@ -1800,7 +1869,7 @@ export class Database {
       const cappedLimit = Math.min(limit, 100)
       const rows = projectId
         ? this.db.prepare(`
-            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
             FROM memories_fts
             JOIN memories m ON m.id = memories_fts.rowid
             LEFT JOIN sessions s ON m.session_id = s.id
@@ -1813,7 +1882,7 @@ export class Database {
             LIMIT ?
           `).all(q, projectId, projectId, cappedLimit)
         : this.db.prepare(`
-            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
             FROM memories_fts
             JOIN memories m ON m.id = memories_fts.rowid
             WHERE memories_fts MATCH ?
@@ -1853,7 +1922,7 @@ export class Database {
     try {
       const rows = projectId
         ? this.db.prepare(`
-            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
             FROM memories m
             LEFT JOIN sessions s ON m.session_id = s.id
             WHERE ${where}
@@ -1865,7 +1934,7 @@ export class Database {
             LIMIT ?
           `).all(...patterns, projectId, projectId, limit)
         : this.db.prepare(`
-            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+            SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
             FROM memories m
             WHERE ${where}
             ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.created_at DESC, m.id DESC
@@ -1918,7 +1987,7 @@ export class Database {
     try {
       // Tier 1: cold project-scoped, exclude type='query' legacy noise
       const tier1Rows = this.db.prepare(`
-        SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+        SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
         FROM memories m
         LEFT JOIN sessions s ON m.session_id = s.id
         WHERE (m.access_count = 0 OR m.last_accessed IS NULL)
@@ -1940,7 +2009,7 @@ export class Database {
           ? `AND m.id NOT IN (${excludeIds.map(() => '?').join(',')})`
           : ''
         const tier2Rows = this.db.prepare(`
-          SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+          SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
           FROM memories m
           LEFT JOIN sessions s ON m.session_id = s.id
           WHERE (
@@ -2002,7 +2071,7 @@ export class Database {
 
   getMemoriesBySessionId(sessionId: string): Memory[] {
     const rows = this.db.prepare(`
-      SELECT id, session_id, message_id, content, type, confidence, created_at
+      SELECT id, session_id, message_id, content, type, confidence, key, created_at
       FROM memories
       WHERE session_id = ?
       ORDER BY id ASC

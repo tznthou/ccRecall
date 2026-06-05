@@ -5,7 +5,7 @@ import type { Database } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
 import type { Memory, MemoryType, KnowledgeDepth } from '../core/types.js'
 import { deriveDepth } from '../core/types.js'
-import { normalizeTopicKey } from '../core/topic-extractor.js'
+import { normalizeTopicKey, extractTopicsFromContent } from '../core/topic-extractor.js'
 import {
   approximateTokens,
   truncateToChars,
@@ -120,7 +120,10 @@ const recallSaveInput = {
   messageId: z.string().nullable().optional().describe('Origin message ID (optional)'),
   confidence: z.number().min(0).max(1).optional().describe('Confidence 0-1 (default 1)'),
   projectId: z.string().nullable().optional().describe(
-    'Project ID for scoped queries. Session-backed memories derive this from sessions.project_id automatically; manual memories should set this to avoid cross-project leakage.',
+    'Project ID for scoped queries. Session-backed memories derive this from sessions.project_id automatically. Omit projectId for knowledge reusable across all projects.',
+  ),
+  key: z.string().min(1).max(100).optional().describe(
+    'Stable hyphenated slug for dedup (e.g. "sqlite-wal-truncate-checkpoint"). Same (projectId, key) updates instead of creating a duplicate.',
   ),
 }
 
@@ -273,6 +276,7 @@ export function recallSaveHandler(
     messageId?: string | null
     confidence?: number
     projectId?: string | null
+    key?: string
   },
 ): McpTextResult {
   try {
@@ -283,7 +287,30 @@ export function recallSaveHandler(
       type: args.type,
       confidence: args.confidence ?? 1,
       projectId: args.projectId ?? null,
+      key: args.key ?? null,
     })
+
+    // Auto topic extraction — Phase 3 Tier 0 needs memory_topics to exist.
+    // Resolve projectId the same way saveMemory does (session-backed →
+    // sessions.project_id; manual → caller-supplied) to stay in sync.
+    const topicKeys = extractTopicsFromContent(args.content)
+    if (topicKeys.length > 0) {
+      let resolvedProjectId: string | null = args.projectId ?? null
+      if (args.sessionId) {
+        const sess = db.getSessionById(args.sessionId)
+        if (sess) resolvedProjectId = sess.projectId
+      }
+      const topicProjectId = resolvedProjectId ?? ''
+      try {
+        db.saveMemoryTopics(id, topicProjectId, topicKeys)
+        if (topicProjectId) {
+          db.rebuildKnowledgeMap(topicProjectId)
+        }
+      } catch (err) {
+        console.warn('[recall_save] topic extraction failed:', err instanceof Error ? err.message : String(err))
+      }
+    }
+
     return textResult(`Saved memory #${id} (type: ${args.type})`)
   } catch (err) {
     return textError('Error saving memory', err)
@@ -388,8 +415,9 @@ export function registerTools(server: McpServer, db: Database): void {
         '  discussion" — a future reader has no context',
         '- One focused fact per memory; split compound findings',
         '',
-        'Set projectId to scope the memory to the current project; omit only',
-        'for cross-project knowledge.',
+        'Set projectId to scope the memory to the current project.',
+        'Omit projectId for knowledge reusable across all projects.',
+        'Assign a stable key slug for dedup — same key updates the existing memory.',
         '',
         // Keep in sync with README.md + README_ZH.md "Memory types" section
         'Types:',
