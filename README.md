@@ -150,7 +150,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 
 | Tool | Purpose |
 |------|---------|
-| `recall_query` | Raw FTS5 keyword search across memories |
+| `recall_query` | User-scoped FTS5 keyword search across memories with project-aware ranking. Cross-project memories surface via topic intersection |
 | `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
 | `recall_save` | Store a new memory with optional `key` slug for dedup (same key updates instead of duplicating). Auto-extracts topics for cross-project retrieval |
 

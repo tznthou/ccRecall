@@ -163,7 +163,7 @@ tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
 
 ---
 
-## 日常四情境
+## 日常五情境
 
 ### 情境一：跨 session 召回「上次那個 bug」
 
@@ -235,6 +235,27 @@ ccmem promote 123 --type decision --confidence 0.9
 ```
 
 為什麼要手動？v0.3.0 之前的設計把 rule scorer 卡在 harvest 持久化 gate 上——corpus audit 顯示對真實 outcome 的命中率是 0/39（scorer 一直低估）。修法不是再加 regex patterns，是讓 harvester 廣捕，讓你決定值不值得留。完整 rationale 見 [issue #21](https://github.com/tznthou/ccRecall/issues/21)。
+
+### 情境五：跨專案知識轉移（v0.4.1 起）
+
+你在 Project A 研究了 SQLite WAL mode 的心得。現在在 Project B 開 session，它也用 SQLite：
+
+```
+# 在 Project B 的 session——你從沒在這邊教過 WAL
+Claude：（SessionStart hook 觸發，getStartupMemories 執行）
+        → Tier 0 透過 topic intersection 找到 Project A 的高信心記憶
+Claude：順帶一提，之前在另一個專案發現 SQLite WAL checkpoint 應該用
+        TRUNCATE mode 比較適合這類寫入模式。這裡也適用。
+```
+
+原理：ccRecall 的 `knowledge_map` 追蹤每個專案涉及哪些 topic。當 Project B 的 topic map 有 `sqlite`（來自它自己的 session），Tier 0 就會掃描所有其他專案中也帶 `sqlite` topic 的記憶。記憶需 confidence ≥ 0.8，且每次 startup 最多 surface 3 條跨專案記憶。專案特定的細節（檔案路徑、設定）留在原專案——只有 topic 相關的知識才跨邊界。
+
+要讓記憶全域可見，存的時候不帶 `projectId`：
+
+```
+你：這個存成全域偏好——每個專案都適用，不只這個。
+Claude：（呼叫 recall_save，不帶 projectId，key='sqlite-wal-truncate'）
+```
 
 ---
 

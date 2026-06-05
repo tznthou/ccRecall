@@ -8,6 +8,51 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [Unreleased] — v0.4.1
+
+### 新增
+
+- **`recall_save` Key-based upsert** — 新增選填 `key` 參數（穩定的 hyphenated
+  slug）。同一 `(projectId, key)` 再次存會更新而非重複建立。Upsert 重設 access
+  count 和壓縮 metadata，讓更新後的內容重新進入 recall pool。Migration v23 加入
+  `key` 欄位與 partial unique index。
+
+- **`recall_save` 自動 topic extraction** — 每條存入的記憶自動產生
+  `memory_topics` 條目（從 content 抽取）。Phase 3 跨專案 topic-intersecting
+  檢索的前置條件。
+
+- **`GET /session/last?cwd=...` endpoint** — 回傳指定專案路徑的最新 session
+  metadata（sessionId、projectId、title、timestamps）。ccdm wrapper 使用。
+
+- **ccdm extraction pipeline** — 結構化 Haiku extraction prompt
+  (`scripts/ccdm-prompt.md`)，含 triage/extract 規則、scope 判定、key slug
+  生成、sanitization 指令。Shell wrapper template (`scripts/ccdm-wrapper.sh`)
+  含 daemon health check、`/session/last` API 呼叫、jq telemetry logging。
+
+- **跨專案記憶可見性（Tier 0）** — `getStartupMemories` 透過 topic intersection
+  從其他專案 surface 記憶。若 Project B 的 `knowledge_map` 與 Project A 的記憶
+  有共同 topic，該記憶會出現在 Project B 的 startup injection（最多 3 條，
+  confidence ≥ 0.8 gate）。全域記憶（`project_id = NULL`）在 topic 匹配時也會
+  出現。
+
+- **`backfillMemoryTopics()` + `cleanOrphanedMemoryTopics()`** — 既有記憶的
+  one-off 遷移用 database 方法。Backfill 從 content 抽取 topics；orphan cleanup
+  清除指向已刪除記憶的 `memory_topics` 條目。One-off script：
+  `scripts/backfill-memory-topics.ts`。
+
+### 變更
+
+- `recall_query` tool description 從「project-scoped long-term memory store」
+  改為「user-scoped memory store with project-aware ranking」——反映跨專案可見性。
+
+- `recall_save` tool description 更新跨專案引導：「Omit projectId for knowledge
+  reusable across all projects」及 key slug 文件。
+
+- `Memory` interface 及所有 SELECT 查詢現在包含 `key` 欄位。
+
+- `getStartupMemories` Tier 1 現在傳入扣除 Tier 0 已用量後的 LIMIT，與 Tier 2
+  一致。
+
 ## [0.4.0] — 2026-06-03
 
 ### 變更
