@@ -216,7 +216,7 @@ export function createRequestHandler(
       return
     }
 
-    // GET /session/last?cwd=... — most recent session for a project (ccdm wrapper)
+    // GET /session/last?cwd=... — most recent session for a project (extraction wrapper)
     if (req.method === 'GET' && path === '/session/last') {
       if (!isLoopbackOrigin(req.headers.origin)) {
         sendJson(res, 403, { error: 'cross-origin requests forbidden' })

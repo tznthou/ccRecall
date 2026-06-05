@@ -163,7 +163,7 @@ tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
 
 ---
 
-## Four Everyday Scenarios
+## Five Everyday Scenarios
 
 ### Scenario 1: Recalling "That Bug We Fixed"
 
@@ -237,6 +237,29 @@ ccmem promote 123 --type decision --confidence 0.9
 ```
 
 Why manual? The pre-0.3.0 design gated harvest on a rule scorer — corpus audit found a 0/39 hit rate on real outcomes (the scorer kept under-weighting them). The fix isn't more regex patterns; it's letting the harvester record broadly and letting you decide what's worth keeping. See [issue #21](https://github.com/tznthou/ccRecall/issues/21) for the full reasoning.
+
+### Scenario 5: Cross-Project Knowledge Transfer (since v0.4.1)
+
+You learned something about SQLite WAL mode while working on Project A. Now you open a new session in Project B, which also uses SQLite:
+
+```
+# In Project B's session — you never taught it about WAL here
+Claude: (SessionStart hook fires, getStartupMemories runs)
+        → Tier 0 finds a high-confidence memory from Project A
+          about SQLite WAL via topic intersection
+Claude: By the way, in a previous project we found that SQLite
+        WAL checkpoint should use TRUNCATE mode for ccRecall's
+        write pattern. That applies here too.
+```
+
+How it works: ccRecall's `knowledge_map` tracks which topics each project touches. When Project B has `sqlite` in its topic map (from its own sessions), Tier 0 scans memories from all other projects that also have `sqlite` topics. Memories must have confidence ≥ 0.8, and at most 3 cross-project memories surface per startup. Project-specific details (file paths, configs) stay in their origin project — only knowledge with shared topic relevance crosses the boundary.
+
+To make a memory globally visible, omit `projectId` when saving:
+
+```
+You: Save this as a global preference — applies everywhere, not just this project.
+Claude: (invokes recall_save without projectId, key='sqlite-wal-truncate')
+```
 
 ---
 

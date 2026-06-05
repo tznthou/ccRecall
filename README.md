@@ -7,7 +7,7 @@
 
 [中文版](README_ZH.md)
 
-A local memory service for Claude Code — indexes your conversation history, recalls relevant context on demand, and injects it into future sessions. Zero API cost.
+A local memory service for Claude Code — indexes your conversation history, recalls relevant context on demand, and injects it into future sessions. Zero API cost for the core service; optional post-session extraction via Haiku adds ~$0.001/session.
 
 ---
 
@@ -44,6 +44,7 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/cc
 | **Metacognition** | `knowledge_map` aggregates topic mentions from sessions + memories. Depth derived from mention count (shallow / medium / deep). Exposed via `/metacognition/check` and MCP `recall_context` |
 | **Forgetting curve** | Memories compress over time: raw → summary → one-liner → deleted. Confidence decays on unused memories. Background maintenance tick runs every 5 min |
 | **Trust two-tier** (v0.3.0) | Hooks write to a low-trust `session_journal` (reviewable, never recalled directly); manual `recall_save` writes high-trust `memories`. Promote candidates with `ccmem promote <id>`; rejected entries auto-clear after 7 days |
+| **Cross-project memory** (v0.4.1) | Memories surface across projects via topic intersection — if two projects share a `knowledge_map` topic, high-confidence memories from one appear in the other's startup injection (max 3 rows, confidence ≥ 0.8 gate) |
 | **Watch mode** | chokidar-based JSONL watcher picks up new sessions within 2 s; periodic 10 min full-resync covers missed filesystem events |
 | **Rescue reindex** | `/session/end` retries a reindex on cache miss — no fresh-session race between the hook and the daemon |
 | **Auto-start (macOS)** | `ccmem install-daemon` registers a LaunchAgent so the service stays up across reboots |
@@ -64,7 +65,7 @@ flowchart TB
         Parser["Parser<br/>parse conversations"]
         Summarizer["Summarizer<br/>rule-based extraction"]
         DB["SQLite + FTS5<br/>index & search"]
-        API["HTTP API<br/>8 endpoints"]
+        API["HTTP API<br/>12 endpoints"]
     end
 
     subgraph Consumers["Context Injection"]
@@ -89,7 +90,7 @@ flowchart TB
 | FTS5 | Full-text search | Built into SQLite, trigram tokenizer with LIKE fallback for short CJK / mixed-script queries |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
 | chokidar | Filesystem watcher | Cross-platform JSONL change detection with 2 s debounce + single-flight |
-| vitest | Testing | 562 tests across 37 files, integration-style |
+| vitest | Testing | 608 tests across 38 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
@@ -144,13 +145,13 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `/metacognition/check?projectId=...[&topic=...]` | GET | Knowledge map: summary (top/recent/stale topics + counts) or topic detail (memories + related topics) | Live |
 | `/session/checkpoint` | POST | Mid-session snapshot into dedicated `session_checkpoints` table (not harvested as memory) | Live |
 | `/lint/warnings` | GET | Lint report: orphan (session deleted) + stale (low-confidence, long-idle) memory warnings | Live |
-| `/session/last?cwd=...` | GET | Most recent session metadata for a project path (used by ccdm wrapper) | Live (v0.4.1) |
+| `/session/last?cwd=...` | GET | Most recent session metadata for a project path (used by post-session extraction wrapper) | Live (v0.4.1) |
 
 ## MCP Tools
 
 | Tool | Purpose |
 |------|---------|
-| `recall_query` | Raw FTS5 keyword search across memories |
+| `recall_query` | User-scoped FTS5 keyword search across memories with project-aware ranking. Cross-project memories surface via topic intersection |
 | `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
 | `recall_save` | Store a new memory with optional `key` slug for dedup (same key updates instead of duplicating). Auto-extracts topics for cross-project retrieval |
 
@@ -336,7 +337,7 @@ ccRecall/
 │   ├── tutorial.md               # End-user walkthrough (install → MCP → usage)
 │   ├── architecture.md           # Daemon design rationale (contributor-oriented)
 │   └── launchd.md                # macOS LaunchAgent install/troubleshoot
-├── tests/                        # 562 tests across 37 files (parser, scanner,
+├── tests/                        # 608 tests across 38 files (parser, scanner,
 │   │                             # summarizer, database, indexer, e2e, MCP,
 │   │                             # memories, hooks, watcher, CLI, migrations,
 │   │                             # FTS5 CJK edge cases, integrity monitor,
@@ -378,7 +379,7 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 
 **No Docker, no Electron, no vector database.** These are deliberate exclusions, not missing features. Docker adds deployment friction for what should be a `pnpm dev` experience. Electron is for GUIs — ccRecall has no UI (that's ccRewind's job). Vector databases solve a problem we don't have at this scale.
 
-**No LLM dependency for any operation.** If ccRecall needs an API key to function, it has failed. The whole point is zero-cost memory that runs locally. Summarization is rule-based. Search is FTS5. The day we need LLM calls is the day we've overscoped.
+**No LLM dependency for core operations.** If ccRecall needs an API key to index, search, or inject memories, it has failed. Summarization is rule-based. Search is FTS5. The optional post-session extraction wrapper currently uses Haiku (~$0.001/session) to save memories after a session ends — but the daemon itself never calls an LLM, and the long-term goal is to replace Haiku extraction with local rule-based methods. You can skip extraction entirely and use only manual `recall_save`.
 
 **No "smart" memory injection.** ccRecall doesn't decide what Claude should remember. It provides a search API — the injection layer (hooks, MCP) presents results, and Claude integrates them. Opinionated memory selection is a premature optimization that would be wrong in ways we can't predict.
 
@@ -392,7 +393,7 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 |---------|-------|--------|
 | **v0.3.x** | Manual save, automatic recall — memories come from explicit `recall_save` calls; SessionStart hook and MCP tools inject them into future sessions | Released |
 | **v0.4.0** | Startup-v1 default + tool description hardening | Released |
-| **v0.4.1** | Key-based upsert dedup, ccdm post-session extraction via Haiku, cross-project memory visibility via topic intersection | **In progress** |
+| **v0.4.1** | Key-based upsert dedup, post-session memory extraction via Haiku, cross-project memory visibility via topic intersection | **In progress** |
 | **v0.5+** | Scorer/journal/harvester deprecation, L1 keyword injection, memory lifecycle history | Planned |
 
 Tracked in [GitHub Issues](https://github.com/tznthou/ccRecall/issues).

@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# ccRecall ccdm wrapper — session start inject + session end extract
+# ccRecall post-session extraction wrapper
 # Source this file in ~/.zshrc or ~/.bashrc:
-#   source /path/to/ccRecall/scripts/ccdm-wrapper.sh
+#   source /path/to/ccRecall/scripts/post-session-extract.sh
 #
-# Usage: ccdm [claude args...]
+# Usage: ccrecall-extract [claude args...]
 #   Runs Claude Code with ccRecall startup injection, then extracts
 #   memories via Haiku after the session ends.
 #
 # Environment:
-#   CCRECALL_PORT        — daemon port (default 3177)
+#   CCRECALL_PORT         — daemon port (default 3177)
 #   CCRECALL_SKIP_EXTRACT — set to 1 to skip post-session extraction
-#   CCRECALL_CCDM_LOG    — telemetry log path (default ~/.ccrecall/ccdm.log.jsonl)
+#   CCRECALL_EXTRACT_LOG  — telemetry log path (default ~/.ccrecall/extract.log.jsonl)
 
 CCRECALL_PORT="${CCRECALL_PORT:-3177}"
-CCRECALL_CCDM_LOG="${CCRECALL_CCDM_LOG:-$HOME/.ccrecall/ccdm.log.jsonl}"
+CCRECALL_EXTRACT_LOG="${CCRECALL_EXTRACT_LOG:-$HOME/.ccrecall/extract.log.jsonl}"
 
 # Resolve the directory containing this script (for prompt file)
 CCRECALL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-ccdm() {
+ccrecall-extract() {
   local project_id
   project_id=$(echo "$PWD" | sed 's|/|-|g')
 
@@ -46,7 +46,7 @@ ccdm() {
   fi
 
   # Load the structured prompt
-  local prompt_file="${CCRECALL_SCRIPT_DIR}/ccdm-prompt.md"
+  local prompt_file="${CCRECALL_SCRIPT_DIR}/extraction-prompt.md"
   local prompt
   if [[ -f "$prompt_file" ]]; then
     prompt=$(cat "$prompt_file")
@@ -86,7 +86,7 @@ ccdm() {
   fi
 
   # Telemetry log (jq for proper JSON escaping of arbitrary strings)
-  mkdir -p "$(dirname "$CCRECALL_CCDM_LOG")"
+  mkdir -p "$(dirname "$CCRECALL_EXTRACT_LOG")"
   jq -n \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sid "$session_id" \
@@ -94,7 +94,7 @@ ccdm() {
     --argjson exit "$extract_exit" \
     --argjson dur "$extract_duration" \
     '{"ts":$ts,"sessionId":$sid,"projectId":$pid,"exitCode":$exit,"durationSec":$dur}' \
-    >> "$CCRECALL_CCDM_LOG"
+    >> "$CCRECALL_EXTRACT_LOG"
 
   return $claude_exit
 }

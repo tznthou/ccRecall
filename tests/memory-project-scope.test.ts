@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { Database } from '../src/core/database'
+import { extractTopicsFromContent } from '../src/core/topic-extractor'
 
 let tmpDir: string
 let db: Database
@@ -139,5 +140,188 @@ describe('queryMemories — explicit scope predicate (session-backed vs manual)'
     const b = db.queryMemories('alpha', 20, 'proj-B')
     expect(a.map(r => r.content)).toContain('alpha global')
     expect(b.map(r => r.content)).toContain('alpha global')
+  })
+})
+
+// ── Phase 3: Cross-Project Memory Visibility (v0.4.1) ──
+
+describe('backfillMemoryTopics', () => {
+  it('extracts topics for memories that have no memory_topics entries', () => {
+    db.upsertProject('proj-A', 'A')
+    db.rawExec(`
+      INSERT INTO sessions (id, project_id, file_path, started_at, ended_at)
+      VALUES ('s1', 'proj-A', '/tmp/s1.jsonl', '2026-06-01T00:00:00Z', '2026-06-01T01:00:00Z')
+    `)
+    db.saveMemory({ sessionId: 's1', messageId: null, type: 'decision', content: 'SQLite WAL mode is optimal for ccRecall' })
+    db.saveMemory({ sessionId: null, messageId: null, type: 'preference', content: 'Always use pnpm over npm', projectId: 'proj-A' })
+
+    const count = db.backfillMemoryTopics(extractTopicsFromContent)
+    expect(count).toBe(2)
+
+    const topicRows = db.rawAll<{ memory_id: number; topic_key: string }>(
+      'SELECT memory_id, topic_key FROM memory_topics ORDER BY memory_id, topic_key',
+    )
+    expect(topicRows.length).toBeGreaterThan(0)
+    expect(topicRows.some(r => r.topic_key === 'sqlite')).toBe(true)
+    expect(topicRows.some(r => r.topic_key === 'pnpm')).toBe(true)
+  })
+
+  it('is idempotent — second call backfills 0', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'Vitest supports concurrent tests' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+    const second = db.backfillMemoryTopics(extractTopicsFromContent)
+    expect(second).toBe(0)
+  })
+
+  it('resolves projectId from session for session-backed memories', () => {
+    db.upsertProject('proj-X', 'X')
+    db.rawExec(`
+      INSERT INTO sessions (id, project_id, file_path, started_at, ended_at)
+      VALUES ('sx', 'proj-X', '/tmp/sx.jsonl', '2026-06-01T00:00:00Z', '2026-06-01T01:00:00Z')
+    `)
+    db.saveMemory({ sessionId: 'sx', messageId: null, type: 'decision', content: 'TypeScript strict mode enabled' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+
+    const rows = db.rawAll<{ project_id: string }>('SELECT project_id FROM memory_topics LIMIT 1')
+    expect(rows[0].project_id).toBe('proj-X')
+  })
+
+  it('uses empty string as projectId for global memories', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'preference', content: 'Prettier is configured globally' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+
+    const rows = db.rawAll<{ project_id: string }>('SELECT project_id FROM memory_topics LIMIT 1')
+    expect(rows[0].project_id).toBe('')
+  })
+})
+
+describe('cleanOrphanedMemoryTopics', () => {
+  it('removes memory_topics entries referencing deleted memories', () => {
+    // Insert orphan directly (bypasses FK check) to simulate leftover from bulk cleanup
+    db.rawExec("PRAGMA foreign_keys = OFF")
+    db.rawExec("INSERT INTO memory_topics (memory_id, topic_key, project_id) VALUES (99999, 'sqlite', 'proj-X')")
+    db.rawExec("PRAGMA foreign_keys = ON")
+    expect(db.rawAll('SELECT * FROM memory_topics').length).toBe(1)
+
+    const removed = db.cleanOrphanedMemoryTopics()
+    expect(removed).toBe(1)
+    expect(db.rawAll('SELECT * FROM memory_topics').length).toBe(0)
+  })
+})
+
+describe('getStartupMemories — Tier 0 cross-project', () => {
+  beforeEach(() => {
+    db.upsertProject('proj-A', 'Project A')
+    db.upsertProject('proj-B', 'Project B')
+    db.rawExec(`
+      INSERT INTO sessions (id, project_id, file_path, started_at, ended_at) VALUES
+        ('sa', 'proj-A', '/tmp/sa.jsonl', '2026-06-01T00:00:00Z', '2026-06-01T01:00:00Z'),
+        ('sb', 'proj-B', '/tmp/sb.jsonl', '2026-06-01T00:00:00Z', '2026-06-01T01:00:00Z')
+    `)
+    // proj-B session has 'sqlite' topic → knowledge_map for proj-B
+    db.saveSessionTopics('sb', 'proj-B', ['sqlite', 'database'])
+    db.rebuildKnowledgeMap('proj-B')
+  })
+
+  it('surfaces cross-project memory via shared topic', () => {
+    // Memory in proj-A about sqlite
+    const memId = db.saveMemory({
+      sessionId: 'sa', messageId: null, type: 'decision',
+      content: 'SQLite WAL checkpoint should use TRUNCATE mode',
+    })
+    db.saveMemoryTopics(memId, 'proj-A', ['sqlite', 'checkpoint'])
+
+    const results = db.getStartupMemories('proj-B', 10)
+    expect(results.some(m => m.content.includes('WAL checkpoint'))).toBe(true)
+  })
+
+  it('surfaces global memory (project_id=NULL) via topic intersection', () => {
+    const memId = db.saveMemory({
+      sessionId: null, messageId: null, type: 'preference',
+      content: 'Always use WAL mode for SQLite databases',
+    })
+    db.saveMemoryTopics(memId, '', ['sqlite', 'wal-mode'])
+
+    const results = db.getStartupMemories('proj-B', 10)
+    expect(results.some(m => m.content.includes('WAL mode'))).toBe(true)
+  })
+
+  it('does NOT leak project-specific memory without topic intersection', () => {
+    // Memory in proj-A about 'react' — proj-B has no react topic
+    const memId = db.saveMemory({
+      sessionId: 'sa', messageId: null, type: 'decision',
+      content: 'Use React Server Components for the dashboard',
+    })
+    db.saveMemoryTopics(memId, 'proj-A', ['react', 'server-components'])
+
+    const results = db.getStartupMemories('proj-B', 10)
+    expect(results.every(m => !m.content.includes('React Server'))).toBe(true)
+  })
+
+  it('respects confidence >= 0.8 gate', () => {
+    const memId = db.saveMemory({
+      sessionId: 'sa', messageId: null, type: 'discovery',
+      content: 'SQLite FTS5 trigram low confidence finding',
+      confidence: 0.5,
+    })
+    db.saveMemoryTopics(memId, 'proj-A', ['sqlite', 'fts5'])
+
+    const results = db.getStartupMemories('proj-B', 10)
+    expect(results.every(m => !m.content.includes('trigram low confidence'))).toBe(true)
+  })
+
+  it('returns empty Tier 0 when knowledge_map has no entries (new project)', () => {
+    db.upsertProject('proj-new', 'New Project')
+    db.rawExec(`
+      INSERT INTO sessions (id, project_id, file_path, started_at, ended_at)
+      VALUES ('sn', 'proj-new', '/tmp/sn.jsonl', '2026-06-01T00:00:00Z', '2026-06-01T01:00:00Z')
+    `)
+    // No knowledge_map for proj-new
+
+    const memId = db.saveMemory({
+      sessionId: 'sa', messageId: null, type: 'decision',
+      content: 'SQLite cross-project test memory',
+    })
+    db.saveMemoryTopics(memId, 'proj-A', ['sqlite'])
+
+    // proj-new has no topics → Tier 0 returns nothing, falls through to Tier 1-3
+    const results = db.getStartupMemories('proj-new', 10)
+    expect(results.every(m => !m.content.includes('cross-project test'))).toBe(true)
+  })
+
+  it('Tier 0 max 3 rows — does not consume all startup slots', () => {
+    // Create 5 cross-project memories all matching sqlite topic
+    for (let i = 0; i < 5; i++) {
+      const id = db.saveMemory({
+        sessionId: 'sa', messageId: null, type: 'decision',
+        content: `SQLite cross-project finding number ${i}`,
+      })
+      db.saveMemoryTopics(id, 'proj-A', ['sqlite'])
+    }
+    // Also create a proj-B local memory (should appear via Tier 1)
+    db.saveMemory({
+      sessionId: 'sb', messageId: null, type: 'decision',
+      content: 'proj-B local memory about routing',
+    })
+
+    const results = db.getStartupMemories('proj-B', 10)
+    const crossProject = results.filter(m => m.content.includes('cross-project finding'))
+    const local = results.filter(m => m.content.includes('proj-B local'))
+
+    expect(crossProject.length).toBeLessThanOrEqual(3)
+    expect(local.length).toBe(1)
+  })
+
+  it('dedupes between Tier 0 and Tier 1 (global memory appears once)', () => {
+    // Global memory with sqlite topic — visible in both Tier 0 (topic intersection) and Tier 1 (project_id IS NULL)
+    const memId = db.saveMemory({
+      sessionId: null, messageId: null, type: 'preference',
+      content: 'Global SQLite preference for dedup test',
+    })
+    db.saveMemoryTopics(memId, '', ['sqlite'])
+
+    const results = db.getStartupMemories('proj-B', 10)
+    const matches = results.filter(m => m.content.includes('dedup test'))
+    expect(matches.length).toBe(1)
   })
 })

@@ -27,24 +27,42 @@ more like an iteration counter than a strict SemVer major).
 
 - **`GET /session/last?cwd=...` endpoint** — returns the most recent session's
   metadata (sessionId, projectId, title, timestamps) for a given project path.
-  Used by the ccdm wrapper to resolve session context after extraction.
+  Used by the post-session extraction wrapper to resolve session context.
 
-- **ccdm extraction pipeline** — structured Haiku extraction prompt
-  (`scripts/ccdm-prompt.md`) with triage/extract rules, scope determination,
-  key slug generation, and sanitization directives. Shell wrapper template
-  (`scripts/ccdm-wrapper.sh`) with daemon health check, `/session/last` API
-  call, and jq-based telemetry logging.
+- **Post-session memory extraction pipeline** — structured Haiku extraction
+  prompt (`scripts/extraction-prompt.md`) with triage/extract rules, scope
+  determination, key slug generation, and sanitization directives. Shell
+  wrapper template (`scripts/post-session-extract.sh`) with daemon health check,
+  `/session/last` API call, and jq-based telemetry logging.
 
 - **`getLastSession(projectId)` database method** — `LIMIT 1` variant of
   `getSessions` to avoid materializing the full session list.
 
+- **Cross-project memory visibility (Tier 0)** — `getStartupMemories` now
+  surfaces memories from other projects via topic intersection. If Project B's
+  `knowledge_map` shares topics with a memory in Project A, that memory appears
+  in Project B's startup injection (max 3 rows, confidence ≥ 0.8 gate).
+  Global memories (`project_id = NULL`) also surface when topics match.
+
+- **`backfillMemoryTopics()` + `cleanOrphanedMemoryTopics()`** — database
+  methods for one-off migration of existing memories. Backfill extracts topics
+  from content; orphan cleanup removes `memory_topics` rows referencing deleted
+  memories. One-off script: `scripts/backfill-memory-topics.ts`.
+
 ### Changed
+
+- `recall_query` tool description updated from "project-scoped long-term
+  memory store" to "user-scoped memory store with project-aware ranking" —
+  reflects the new cross-project visibility.
 
 - `recall_save` tool description updated for cross-project guidance: "Omit
   projectId for knowledge reusable across all projects" and key slug
   documentation.
 
 - `Memory` interface and all SELECT queries now include the `key` field.
+
+- `getStartupMemories` Tier 1 now passes a reduced LIMIT (subtracting Tier 0
+  consumed slots) for consistency with Tier 2.
 
 ## [0.4.0] — 2026-06-03
 
