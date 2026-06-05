@@ -22,11 +22,12 @@ ccRecall 的重要版本變更記錄在這裡。
   檢索的前置條件。
 
 - **`GET /session/last?cwd=...` endpoint** — 回傳指定專案路徑的最新 session
-  metadata（sessionId、projectId、title、timestamps）。ccdm wrapper 使用。
+  metadata（sessionId、projectId、title、timestamps）。Post-session extraction
+  wrapper 使用。
 
-- **ccdm extraction pipeline** — 結構化 Haiku extraction prompt
-  (`scripts/ccdm-prompt.md`)，含 triage/extract 規則、scope 判定、key slug
-  生成、sanitization 指令。Shell wrapper template (`scripts/ccdm-wrapper.sh`)
+- **Post-session memory extraction pipeline** — 結構化 Haiku extraction prompt
+  (`scripts/extraction-prompt.md`)，含 triage/extract 規則、scope 判定、key slug
+  生成、sanitization 指令。Shell wrapper template (`scripts/post-session-extract.sh`)
   含 daemon health check、`/session/last` API 呼叫、jq telemetry logging。
 
 - **跨專案記憶可見性（Tier 0）** — `getStartupMemories` 透過 topic intersection

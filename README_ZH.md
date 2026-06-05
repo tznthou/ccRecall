@@ -7,7 +7,7 @@
 
 [English](README.md)
 
-Claude Code 的本地記憶服務——索引你的對話歷史，按需召回相關 context，注入到未來的 session。零 API 成本。
+Claude Code 的本地記憶服務——索引你的對話歷史，按需召回相關 context，注入到未來的 session。核心服務零 API 成本；選配的 post-session extraction 透過 Haiku 約 $0.001/session。
 
 ---
 
@@ -44,6 +44,7 @@ ccRecall 是 [ccRewind](https://github.com/tznthou/ccRewind)（對話回放 GUI�
 | **元認知** | `knowledge_map` 聚合 session + memory 的主題提及。由 mention count 衍生深度（shallow / medium / deep）。透過 `/metacognition/check` 與 MCP `recall_context` 暴露 |
 | **遺忘曲線** | 記憶隨時間壓縮：原始→摘要→一行結論→刪除。未使用的記憶信心衰減。背景維護 tick 每 5 分鐘跑一次 |
 | **Trust 二層**（v0.3.0） | Hook 寫入 low-trust `session_journal`（可審閱、不被 recall）；manual `recall_save` 寫 high-trust `memories`。用 `ccmem promote <id>` 升級候選；reject 後 7 天 TTL 自動清 |
+| **跨專案記憶**（v0.4.1） | 記憶透過 topic intersection 跨專案浮出——若兩個專案的 `knowledge_map` 有共同 topic，高信心記憶會出現在另一個專案的 startup injection（最多 3 條，confidence ≥ 0.8 gate） |
 | **Watch mode** | 基於 chokidar 的 JSONL watcher 在 2 秒內偵測新 session；每 10 分鐘 full-resync 補救 FS 事件漏接 |
 | **Rescue reindex** | `/session/end` 遇到 cache miss 時會重 index 再試一次——hook 和 daemon 間不會有 fresh-session race |
 | **macOS 自動啟動** | `ccmem install-daemon` 安裝 LaunchAgent，重開機自動復原服務 |
@@ -64,7 +65,7 @@ flowchart TB
         Parser["Parser<br/>解析對話"]
         Summarizer["Summarizer<br/>規則式萃取"]
         DB["SQLite + FTS5<br/>索引與搜尋"]
-        API["HTTP API<br/>8 個端點"]
+        API["HTTP API<br/>12 個端點"]
     end
 
     subgraph Consumers["Context 注入"]
@@ -89,7 +90,7 @@ flowchart TB
 | FTS5 | 全文搜尋 | SQLite 內建、trigram tokenizer，短 token / 中英混合查詢透過 LIKE fallback 補齊 |
 | 原生 `http` | HTTP 伺服器 | 不用 Express——最小表面積、僅 localhost |
 | chokidar | 檔案系統 watcher | 跨平台 JSONL 變動偵測，2 秒 debounce + single-flight |
-| vitest | 測試 | 562 個測試（37 檔案）、整合式風格 |
+| vitest | 測試 | 608 個測試（38 檔案）、整合式風格 |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport，透過 WAL 共用 SQLite |
 
 ---
@@ -144,7 +145,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `/metacognition/check?projectId=...[&topic=...]` | GET | 知識地圖：summary（top/recent/stale topics + counts）或 topic detail（memories + related topics） | 已上線 |
 | `/session/checkpoint` | POST | 會話中途快照寫入獨立 `session_checkpoints` 表（不會被 harvest 成 memory） | 已上線 |
 | `/lint/warnings` | GET | Lint 報告：orphan（session 已刪）+ stale（低信心、長期未用）記憶警告 | 已上線 |
-| `/session/last?cwd=...` | GET | 回傳專案路徑的最新 session metadata（ccdm wrapper 使用） | 已上線（v0.4.1） |
+| `/session/last?cwd=...` | GET | 回傳專案路徑的最新 session metadata（post-session extraction wrapper 使用） | 已上線（v0.4.1） |
 
 ## MCP 工具
 
@@ -329,7 +330,7 @@ ccRecall/
 │   ├── tutorial_zh.md                # 使用者教學（安裝 → MCP → 日常使用）
 │   ├── architecture_zh.md            # Daemon 設計取捨（給 contributor 看）
 │   └── launchd.md                    # macOS LaunchAgent 安裝/troubleshoot
-├── tests/                            # 562 個測試橫跨 37 檔案（parser、scanner、
+├── tests/                            # 608 個測試橫跨 38 檔案（parser、scanner、
 │   │                                 # summarizer、database、indexer、e2e、MCP、
 │   │                                 # memories、hooks、watcher、CLI、migrations、
 │   │                                 # FTS5 CJK edge cases、integrity monitor、
@@ -371,7 +372,7 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 
 **不用 Docker、不用 Electron、不用向量資料庫。** 這些是刻意排除，不是缺失的功能。Docker 對一個 `pnpm dev` 就能跑的東西增加了部署摩擦。Electron 是給 GUI 用的——ccRecall 沒有 UI（那是 ccRewind 的事）。向量資料庫解決的是我們在這個規模不存在的問題。
 
-**任何操作都不依賴 LLM。** 如果 ccRecall 需要 API key 才能運作，它就失敗了。核心就是零成本、本地運行的記憶。摘要是規則式的，搜尋是 FTS5。需要 LLM 呼叫的那天，就是我們 overscope 的那天。
+**核心操作不依賴 LLM。** 如果 ccRecall 需要 API key 才能索引、搜尋、注入記憶，它就失敗了。摘要是規則式的，搜尋是 FTS5。選配的 post-session extraction wrapper 目前用 Haiku（~$0.001/session）在 session 結束後自動存記憶——但 daemon 本體永遠不呼叫 LLM，長期目標是用本地規則式方法取代 Haiku extraction。你完全可以跳過 extraction，只用手動 `recall_save`。
 
 **不做「智慧」記憶注入。** ccRecall 不替 Claude 決定該記住什麼。它提供搜尋 API——注入層（hooks、MCP）呈現結果，Claude 自己整合。帶偏見的記憶篩選是過早優化，而且會以我們無法預測的方式出錯。
 
@@ -385,7 +386,7 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 |------|------|------|
 | **v0.3.x** | 手動存、自動召回——記憶來自明確的 `recall_save` 呼叫；SessionStart hook 和 MCP 工具在未來 session 注入 | 已釋出 |
 | **v0.4.0** | Startup-v1 預設 + tool description 強化 | 已釋出 |
-| **v0.4.1** | Key-based upsert dedup、ccdm post-session extraction via Haiku、跨專案 topic intersection 記憶可見性 | **進行中** |
+| **v0.4.1** | Key-based upsert dedup、post-session memory extraction via Haiku、跨專案 topic intersection 記憶可見性 | **進行中** |
 | **v0.5+** | Scorer/journal/harvester 降級、L1 keyword injection、memory lifecycle history | 規劃中 |
 
 追蹤於 [GitHub Issues](https://github.com/tznthou/ccRecall/issues)。

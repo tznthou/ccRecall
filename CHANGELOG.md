@@ -27,13 +27,13 @@ more like an iteration counter than a strict SemVer major).
 
 - **`GET /session/last?cwd=...` endpoint** — returns the most recent session's
   metadata (sessionId, projectId, title, timestamps) for a given project path.
-  Used by the ccdm wrapper to resolve session context after extraction.
+  Used by the post-session extraction wrapper to resolve session context.
 
-- **ccdm extraction pipeline** — structured Haiku extraction prompt
-  (`scripts/ccdm-prompt.md`) with triage/extract rules, scope determination,
-  key slug generation, and sanitization directives. Shell wrapper template
-  (`scripts/ccdm-wrapper.sh`) with daemon health check, `/session/last` API
-  call, and jq-based telemetry logging.
+- **Post-session memory extraction pipeline** — structured Haiku extraction
+  prompt (`scripts/extraction-prompt.md`) with triage/extract rules, scope
+  determination, key slug generation, and sanitization directives. Shell
+  wrapper template (`scripts/post-session-extract.sh`) with daemon health check,
+  `/session/last` API call, and jq-based telemetry logging.
 
 - **`getLastSession(projectId)` database method** — `LIMIT 1` variant of
   `getSessions` to avoid materializing the full session list.
