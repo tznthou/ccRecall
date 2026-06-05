@@ -393,7 +393,7 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 |---------|-------|--------|
 | **v0.3.x** | Manual save, automatic recall — memories come from explicit `recall_save` calls; SessionStart hook and MCP tools inject them into future sessions | Released |
 | **v0.4.0** | Startup-v1 default + tool description hardening | Released |
-| **v0.4.1** | Key-based upsert dedup, post-session memory extraction via Haiku, cross-project memory visibility via topic intersection | **In progress** |
+| **v0.4.1** | Key-based upsert dedup, post-session memory extraction via Haiku, cross-project memory visibility via topic intersection | Released |
 | **v0.5+** | Scorer/journal/harvester deprecation, L1 keyword injection, memory lifecycle history | Planned |
 
 Tracked in [GitHub Issues](https://github.com/tznthou/ccRecall/issues).

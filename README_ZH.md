@@ -386,7 +386,7 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 |------|------|------|
 | **v0.3.x** | 手動存、自動召回——記憶來自明確的 `recall_save` 呼叫；SessionStart hook 和 MCP 工具在未來 session 注入 | 已釋出 |
 | **v0.4.0** | Startup-v1 預設 + tool description 強化 | 已釋出 |
-| **v0.4.1** | Key-based upsert dedup、post-session memory extraction via Haiku、跨專案 topic intersection 記憶可見性 | **進行中** |
+| **v0.4.1** | Key-based upsert dedup、post-session memory extraction via Haiku、跨專案 topic intersection 記憶可見性 | 已釋出 |
 | **v0.5+** | Scorer/journal/harvester 降級、L1 keyword injection、memory lifecycle history | 規劃中 |
 
 追蹤於 [GitHub Issues](https://github.com/tznthou/ccRecall/issues)。
