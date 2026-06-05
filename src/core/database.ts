@@ -1997,21 +1997,44 @@ export class Database {
     }
 
     try {
-      // Tier 1: cold project-scoped, exclude type='query' legacy noise
-      const tier1Rows = this.db.prepare(`
-        SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
+      // Tier 0: topic-intersecting cross-project (v0.4.1 Phase 3)
+      // Surfaces memories from OTHER projects that share knowledge_map topics
+      // with the current project. Global (project_id IS NULL) included — deduped
+      // against Tier 1/2 by pushUnique.
+      const tier0Limit = Math.min(3, cappedLimit)
+      const tier0Rows = this.db.prepare(`
+        SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type,
+               m.confidence, m.key, m.created_at
         FROM memories m
-        LEFT JOIN sessions s ON m.session_id = s.id
-        WHERE (m.access_count = 0 OR m.last_accessed IS NULL)
+        JOIN memory_topics mt ON m.id = mt.memory_id
+        JOIN knowledge_map km ON mt.topic_key = km.topic_key
+        WHERE km.project_id = ?
+          AND (m.project_id IS NULL OR m.project_id != ?)
+          AND m.confidence >= 0.8
           AND m.type != 'query'
-          AND (
-            (m.session_id IS NOT NULL AND s.project_id = ?) OR
-            (m.session_id IS NULL AND (m.project_id = ? OR m.project_id IS NULL))
-          )
-        ORDER BY m.created_at DESC
+        ORDER BY m.confidence DESC, m.created_at DESC
         LIMIT ?
-      `).all(projectId, projectId, cappedLimit) as MemoryRow[]
-      pushUnique(tier1Rows.map(mapMemoryRow))
+      `).all(projectId, projectId, tier0Limit) as MemoryRow[]
+      pushUnique(tier0Rows.map(mapMemoryRow))
+
+      // Tier 1: cold project-scoped, exclude type='query' legacy noise
+      if (collected.length < cappedLimit) {
+        const tier1Limit = cappedLimit - collected.length
+        const tier1Rows = this.db.prepare(`
+          SELECT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
+          FROM memories m
+          LEFT JOIN sessions s ON m.session_id = s.id
+          WHERE (m.access_count = 0 OR m.last_accessed IS NULL)
+            AND m.type != 'query'
+            AND (
+              (m.session_id IS NOT NULL AND s.project_id = ?) OR
+              (m.session_id IS NULL AND (m.project_id = ? OR m.project_id IS NULL))
+            )
+          ORDER BY m.created_at DESC
+          LIMIT ?
+        `).all(projectId, projectId, tier1Limit) as MemoryRow[]
+        pushUnique(tier1Rows.map(mapMemoryRow))
+      }
 
       // Tier 2: recent/high-confidence project-scoped fill
       if (collected.length < cappedLimit) {
@@ -2220,6 +2243,44 @@ export class Database {
       for (const k of keys) stmt.run(memoryId, k, projectId)
     })
     run(topicKeys)
+  }
+
+  cleanOrphanedMemoryTopics(): number {
+    return this.db.prepare(
+      'DELETE FROM memory_topics WHERE memory_id NOT IN (SELECT id FROM memories)',
+    ).run().changes
+  }
+
+  backfillMemoryTopics(extractTopics: (content: string) => string[]): number {
+    const rows = this.db.prepare(`
+      SELECT m.id, m.content, m.session_id, m.project_id
+      FROM memories m
+      WHERE m.id NOT IN (SELECT DISTINCT memory_id FROM memory_topics)
+    `).all() as Array<{ id: number; content: string; session_id: string | null; project_id: string | null }>
+
+    const sessStmt = this.db.prepare('SELECT project_id FROM sessions WHERE id = ?')
+    let count = 0
+
+    const run = this.db.transaction(() => {
+      for (const row of rows) {
+        const topics = extractTopics(row.content)
+        if (topics.length === 0) continue
+
+        let projectId: string
+        if (row.session_id) {
+          const sess = sessStmt.get(row.session_id) as { project_id: string } | undefined
+          projectId = sess?.project_id ?? row.project_id ?? ''
+        } else {
+          projectId = row.project_id ?? ''
+        }
+
+        this.saveMemoryTopics(row.id, projectId, topics)
+        count++
+      }
+    })
+    run()
+
+    return count
   }
 
   /** Full rebuild of knowledge_map for a project. project_id for memory_topics is derived
