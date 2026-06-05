@@ -144,6 +144,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `/metacognition/check?projectId=...[&topic=...]` | GET | Knowledge map: summary (top/recent/stale topics + counts) or topic detail (memories + related topics) | Live |
 | `/session/checkpoint` | POST | Mid-session snapshot into dedicated `session_checkpoints` table (not harvested as memory) | Live |
 | `/lint/warnings` | GET | Lint report: orphan (session deleted) + stale (low-confidence, long-idle) memory warnings | Live |
+| `/session/last?cwd=...` | GET | Most recent session metadata for a project path (used by ccdm wrapper) | Live (v0.4.1) |
 
 ## MCP Tools
 
@@ -151,7 +152,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 |------|---------|
 | `recall_query` | Raw FTS5 keyword search across memories |
 | `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
-| `recall_save` | Store a new memory (type: decision / discovery / preference / pattern / feedback) |
+| `recall_save` | Store a new memory with optional `key` slug for dedup (same key updates instead of duplicating). Auto-extracts topics for cross-project retrieval |
 
 **Memory types** (for `recall_save`):
 
@@ -389,9 +390,10 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 
 | Version | Theme | Status |
 |---------|-------|--------|
-| **v0.3.x** | Manual save, automatic recall — memories come from explicit `recall_save` calls; SessionStart hook and MCP tools inject them into future sessions | **Current** |
-| **v0.4.0** | Lower promotion friction — journal routing by entry type, partial promote with supersession tracking, CLI and hook surfacing of pending candidates | Planned |
-| **v0.5+** | Automatic memory — active decision detection during conversations, auto-promote above confidence threshold, closing the manual gap | Planned |
+| **v0.3.x** | Manual save, automatic recall — memories come from explicit `recall_save` calls; SessionStart hook and MCP tools inject them into future sessions | Released |
+| **v0.4.0** | Startup-v1 default + tool description hardening | Released |
+| **v0.4.1** | Key-based upsert dedup, ccdm post-session extraction via Haiku, cross-project memory visibility via topic intersection | **In progress** |
+| **v0.5+** | Scorer/journal/harvester deprecation, L1 keyword injection, memory lifecycle history | Planned |
 
 Tracked in [GitHub Issues](https://github.com/tznthou/ccRecall/issues).
 

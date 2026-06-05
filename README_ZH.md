@@ -144,6 +144,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `/metacognition/check?projectId=...[&topic=...]` | GET | 知識地圖：summary（top/recent/stale topics + counts）或 topic detail（memories + related topics） | 已上線 |
 | `/session/checkpoint` | POST | 會話中途快照寫入獨立 `session_checkpoints` 表（不會被 harvest 成 memory） | 已上線 |
 | `/lint/warnings` | GET | Lint 報告：orphan（session 已刪）+ stale（低信心、長期未用）記憶警告 | 已上線 |
+| `/session/last?cwd=...` | GET | 回傳專案路徑的最新 session metadata（ccdm wrapper 使用） | 已上線（v0.4.1） |
 
 ## MCP 工具
 
@@ -151,7 +152,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 |------|------|
 | `recall_query` | 純 FTS5 關鍵字搜尋 memories |
 | `recall_context` | 按 topic 分組的檢索——normalize keywords、依匹配 topic 分組 memories 並附 depth 訊號，無 topic 匹配時退回 per-keyword FTS |
-| `recall_save` | 儲存新記憶（type：decision / discovery / preference / pattern / feedback） |
+| `recall_save` | 儲存新記憶，支援選填 `key` slug 做 dedup（同 key 更新而非重複）。自動抽取 topics 供跨專案檢索 |
 
 **Memory types**（用於 `recall_save`）：
 
@@ -382,9 +383,10 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 
 | 版本 | 主題 | 狀態 |
 |------|------|------|
-| **v0.3.x** | 手動存、自動召回——記憶來自明確的 `recall_save` 呼叫；SessionStart hook 和 MCP 工具在未來 session 注入 | **目前版本** |
-| **v0.4.0** | 降低 promote 摩擦——依 entry type 拆分 journal routing、支援 supersession 追蹤的 partial promote、CLI 和 hook 浮出 pending 候選 | 規劃中 |
-| **v0.5+** | 自動記憶——對話中主動偵測決策活體、信心值超門檻自動 promote、補上手動缺口 | 規劃中 |
+| **v0.3.x** | 手動存、自動召回——記憶來自明確的 `recall_save` 呼叫；SessionStart hook 和 MCP 工具在未來 session 注入 | 已釋出 |
+| **v0.4.0** | Startup-v1 預設 + tool description 強化 | 已釋出 |
+| **v0.4.1** | Key-based upsert dedup、ccdm post-session extraction via Haiku、跨專案 topic intersection 記憶可見性 | **進行中** |
+| **v0.5+** | Scorer/journal/harvester 降級、L1 keyword injection、memory lifecycle history | 規劃中 |
 
 追蹤於 [GitHub Issues](https://github.com/tznthou/ccRecall/issues)。
 

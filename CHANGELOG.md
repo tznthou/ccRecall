@@ -11,6 +11,41 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased] — v0.4.1
+
+### Added
+
+- **Key-based upsert for `recall_save`** — new optional `key` parameter (stable
+  hyphenated slug). Saving with the same `(projectId, key)` updates the existing
+  memory instead of creating a duplicate. Upsert resets access count and
+  compression metadata so updated content re-enters the recall pool fresh.
+  Migration v23 adds the `key` column with a partial unique index.
+
+- **Auto topic extraction on `recall_save`** — every saved memory now
+  automatically gets `memory_topics` entries extracted from its content.
+  Prerequisite for Phase 3 cross-project topic-intersecting retrieval.
+
+- **`GET /session/last?cwd=...` endpoint** — returns the most recent session's
+  metadata (sessionId, projectId, title, timestamps) for a given project path.
+  Used by the ccdm wrapper to resolve session context after extraction.
+
+- **ccdm extraction pipeline** — structured Haiku extraction prompt
+  (`scripts/ccdm-prompt.md`) with triage/extract rules, scope determination,
+  key slug generation, and sanitization directives. Shell wrapper template
+  (`scripts/ccdm-wrapper.sh`) with daemon health check, `/session/last` API
+  call, and jq-based telemetry logging.
+
+- **`getLastSession(projectId)` database method** — `LIMIT 1` variant of
+  `getSessions` to avoid materializing the full session list.
+
+### Changed
+
+- `recall_save` tool description updated for cross-project guidance: "Omit
+  projectId for knowledge reusable across all projects" and key slug
+  documentation.
+
+- `Memory` interface and all SELECT queries now include the `key` field.
+
 ## [0.4.0] — 2026-06-03
 
 ### Changed
