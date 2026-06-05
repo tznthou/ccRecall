@@ -216,6 +216,33 @@ export function createRequestHandler(
       return
     }
 
+    // GET /session/last?cwd=... — most recent session for a project (ccdm wrapper)
+    if (req.method === 'GET' && path === '/session/last') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      const cwd = url.searchParams.get('cwd')
+      if (!cwd) {
+        sendJson(res, 400, { error: 'cwd query parameter required' })
+        return
+      }
+      const projectId = cwd.replace(/\//g, '-')
+      const last = db.getLastSession(projectId)
+      if (!last) {
+        sendJson(res, 404, { error: 'no sessions found for project' })
+        return
+      }
+      sendJson(res, 200, {
+        sessionId: last.id,
+        projectId: last.projectId,
+        title: last.title,
+        startedAt: last.startedAt,
+        endedAt: last.endedAt,
+      })
+      return
+    }
+
     // GET /memory/query?q=...&limit=...&project=...&maxTokens=...
     if (req.method === 'GET' && path === '/memory/query') {
       // Phase 4c touch made this a stateful endpoint (access_count / last_accessed).

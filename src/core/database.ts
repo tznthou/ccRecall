@@ -1178,6 +1178,18 @@ export class Database {
     return rows.map(mapSessionRow)
   }
 
+  getLastSession(projectId: string): SessionMeta | null {
+    const row = this.db.prepare(
+      `SELECT ${SESSION_SELECT_COLUMNS}
+       FROM sessions
+       WHERE project_id = ?
+         AND id ${Database.EXCLUDE_SUBAGENTS}
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    ).get(projectId) as SessionRow | undefined
+    return row ? mapSessionRow(row) : null
+  }
+
   getSessionById(sessionId: string): SessionMeta | null {
     const row = this.db.prepare(
       `SELECT ${SESSION_SELECT_COLUMNS}

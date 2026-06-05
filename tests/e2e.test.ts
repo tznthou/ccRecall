@@ -353,6 +353,29 @@ describe('E2E: index → search → HTTP', () => {
     })
     expect(res.status).toBe(403)
   })
+
+  it('GET /session/last?cwd=... returns most recent session', async () => {
+    const { status, body } = await fetch(
+      `http://127.0.0.1:${port}/session/last?cwd=/test/project`,
+    )
+    expect(status).toBe(200)
+    const b = body as { sessionId: string; projectId: string; title: string | null }
+    expect(b.sessionId).toBe('test-session-001')
+    expect(b.projectId).toBe('-test-project')
+  })
+
+  it('GET /session/last without cwd returns 400', async () => {
+    const { status, body } = await fetch(`http://127.0.0.1:${port}/session/last`)
+    expect(status).toBe(400)
+    expect((body as { error: string }).error).toContain('cwd')
+  })
+
+  it('GET /session/last with unknown project returns 404', async () => {
+    const { status } = await fetch(
+      `http://127.0.0.1:${port}/session/last?cwd=/nonexistent/project`,
+    )
+    expect(status).toBe(404)
+  })
 })
 
 describe('GET /health version + dbPath propagation', () => {
