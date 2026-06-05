@@ -274,6 +274,40 @@ describe('MCP recall_save handler', () => {
     expect(result.content[0].text).toContain('searchable via mcp tool')
     expect(result.content[0].text).toContain('[discovery]')
   })
+
+  it('passes key to saveMemory for upsert', () => {
+    recallSaveHandler(db, { content: 'v1', type: 'decision', key: 'my-key', projectId: 'proj-a' })
+    recallSaveHandler(db, { content: 'v2', type: 'decision', key: 'my-key', projectId: 'proj-a' })
+    expect(db.getMemoryCount()).toBe(1)
+    const memories = db.queryMemories('v2', 10, 'proj-a')
+    expect(memories).toHaveLength(1)
+    expect(memories[0].content).toBe('v2')
+    expect(memories[0].key).toBe('my-key')
+  })
+
+  it('auto-extracts topics from content into memory_topics', () => {
+    db.upsertProject('proj-t', 'Topic Test')
+    recallSaveHandler(db, {
+      content: 'SQLite WAL mode requires checkpoint tuning',
+      type: 'discovery',
+      projectId: 'proj-t',
+    })
+    const rows = db.rawAll<{ topic_key: string }>(
+      "SELECT topic_key FROM memory_topics ORDER BY topic_key",
+    )
+    const keys = rows.map(r => r.topic_key)
+    expect(keys).toContain('sqlite')
+    expect(keys).toContain('checkpoint')
+  })
+
+  it('skips topic extraction when no valid topics found', () => {
+    const result = recallSaveHandler(db, {
+      content: 'a b c',
+      type: 'pattern',
+    })
+    expect(result.isError).toBeUndefined()
+    expect(result.content[0].text).toMatch(/Saved memory #\d+/)
+  })
 })
 
 describe('MCP recall_context handler', () => {
