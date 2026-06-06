@@ -61,18 +61,81 @@ ccrecall-extract() {
 - projectId for this project: \"${project_id}\"
 - Current date: $(date -u +%Y-%m-%d)"
 
+  # ── Build session transcript from JSONL ──
+  # Text-only extraction is ~50x smaller than full JSONL
+  # (tool calls, tool results, thinking blocks omitted)
+  local transcript_mode="continue"
+  local full_prompt=""
+
+  # A4: validate session_id is a UUID before using in filesystem path
+  local claude_data_dir="${HOME}/.claude"
+  if [[ -n "$session_id" && "$session_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
+    local jsonl_path="${claude_data_dir}/projects/${project_id}/${session_id}.jsonl"
+
+    if [[ -f "$jsonl_path" ]]; then
+      local session_transcript
+      # A2: -R + fromjson? skips malformed JSONL lines instead of aborting
+      # A1+A5: head -c 200000 + iconv -c strips incomplete UTF-8 at boundary
+      session_transcript=$(jq -R -r '
+        fromjson? // empty |
+        if .type == "user" and .message then
+          .message.content |
+          if type == "array" then
+            [.[] | select(.type == "text") | .text // empty] | join("\n") |
+            if . != "" then "--- human ---\n" + . else empty end
+          elif type == "string" then
+            if . != "" then "--- human ---\n" + . else empty end
+          else empty end
+        elif .type == "assistant" and .message then
+          .message.content |
+          if type == "array" then
+            [.[] | select(.type == "text") | .text // empty] | join("\n") |
+            if . != "" then "--- assistant ---\n" + . else empty end
+          else empty end
+        else empty end
+      ' "$jsonl_path" 2>/dev/null | head -c 200000 | iconv -c -f utf-8 -t utf-8)
+
+      if [[ -n "$session_transcript" ]]; then
+        transcript_mode="jsonl"
+        full_prompt="# Session transcript to analyze
+
+Below is a text-only transcript of a completed Claude Code session.
+Tool calls, tool results, and thinking blocks are omitted — focus on
+decisions, discoveries, preferences, and patterns from the dialogue.
+
+${session_transcript}
+
+---
+
+${prompt}"
+      fi
+    fi
+  fi
+
   printf '\n🧠 ccRecall: extracting memories from session...\n'
 
   local extract_start
   extract_start=$(date +%s)
 
-  command claude -c -p \
-    --no-session-persistence \
-    --model haiku \
-    --max-budget-usd 0.10 \
-    --max-turns 5 \
-    --dangerously-skip-permissions \
-    "$prompt" 2>/dev/null
+  if [[ "$transcript_mode" == "jsonl" ]]; then
+    # Preferred: text-only transcript in prompt (works for any session size)
+    command claude -p \
+      --no-session-persistence \
+      --model haiku \
+      --max-budget-usd 0.10 \
+      --max-turns 5 \
+      --dangerously-skip-permissions \
+      "$full_prompt" 2>/dev/null
+  else
+    # Fallback: continue last session (may fail for very long sessions)
+    command claude -c -p \
+      --no-session-persistence \
+      --model haiku \
+      --max-budget-usd 0.10 \
+      --max-turns 5 \
+      --dangerously-skip-permissions \
+      "$prompt" 2>/dev/null
+  fi
 
   local extract_exit=$?
   local extract_end
@@ -91,9 +154,10 @@ ccrecall-extract() {
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sid "$session_id" \
     --arg pid "$project_id" \
+    --arg mode "$transcript_mode" \
     --argjson exit "$extract_exit" \
     --argjson dur "$extract_duration" \
-    '{"ts":$ts,"sessionId":$sid,"projectId":$pid,"exitCode":$exit,"durationSec":$dur}' \
+    '{"ts":$ts,"sessionId":$sid,"projectId":$pid,"mode":$mode,"exitCode":$exit,"durationSec":$dur}' \
     >> "$CCRECALL_EXTRACT_LOG"
 
   return $claude_exit
