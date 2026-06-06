@@ -54,6 +54,18 @@ ccRecall 的重要版本變更記錄在這裡。
 - `getStartupMemories` Tier 1 現在傳入扣除 Tier 0 已用量後的 LIMIT，與 Tier 2
   一致。
 
+### 修復
+
+- **Post-session extraction 在長 session 觸發「Prompt is too long」** — 以 JSONL
+  text-only extraction 取代 `claude -c`（載入完整對話歷史）。只萃取 human 和
+  assistant 的文字訊息（比原始 JSONL 小約 98%），消除任意長度 session 的 context
+  溢出問題。包含 session ID 的 UUID 驗證、寬容 JSONL 解析（`fromjson?`）、UTF-8
+  安全截斷。
+
+- **Extraction agent 產出對話式輸出** — 強化 extraction prompt 宣告非互動 pipeline
+  模式。Agent 現在只呼叫 `recall_save`，不再產生摘要、問題、或下一步建議等無人會閱讀
+  的文字。
+
 ## [0.4.0] — 2026-06-03
 
 ### 變更
