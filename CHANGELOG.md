@@ -11,6 +11,22 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.4.2] — 2026-06-06
+
+### Fixed
+
+- **Post-session extraction "Prompt is too long" on long sessions** — replaced
+  `claude -c` (loads full conversation history) with JSONL text-only extraction.
+  Only human and assistant text messages are extracted (~98% smaller than raw
+  JSONL), eliminating context overflow for sessions of any length. Includes
+  UUID validation on session IDs, lenient JSONL parsing (`fromjson?`), and
+  UTF-8 safe truncation.
+
+- **Extraction agent producing conversational output** — strengthened the
+  extraction prompt to declare non-interactive pipeline mode. The agent now
+  only calls `recall_save` without producing summaries, questions, or
+  next-step suggestions that no human would read.
+
 ## [0.4.1] — 2026-06-05
 
 ### Added
@@ -63,20 +79,6 @@ more like an iteration counter than a strict SemVer major).
 
 - `getStartupMemories` Tier 1 now passes a reduced LIMIT (subtracting Tier 0
   consumed slots) for consistency with Tier 2.
-
-### Fixed
-
-- **Post-session extraction "Prompt is too long" on long sessions** — replaced
-  `claude -c` (loads full conversation history) with JSONL text-only extraction.
-  Only human and assistant text messages are extracted (~98% smaller than raw
-  JSONL), eliminating context overflow for sessions of any length. Includes
-  UUID validation on session IDs, lenient JSONL parsing (`fromjson?`), and
-  UTF-8 safe truncation.
-
-- **Extraction agent producing conversational output** — strengthened the
-  extraction prompt to declare non-interactive pipeline mode. The agent now
-  only calls `recall_save` without producing summaries, questions, or
-  next-step suggestions that no human would read.
 
 ## [0.4.0] — 2026-06-03
 
