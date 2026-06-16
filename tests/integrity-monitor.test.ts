@@ -170,6 +170,17 @@ describe('Database.integrityCheck — fresh connection (S3-fresh)', () => {
     }
   })
 
+  it("anonymous temp DB (empty path) also falls back — db.memory covers it, not just ':memory:'", () => {
+    // Codex review: a `dbPath === ':memory:'` guard would miss '' / whitespace
+    // temp DBs (db.memory=true for all of them), throwing on the fresh readonly open.
+    const tmp = new Database('')
+    try {
+      expect(tmp.integrityCheck()).toEqual(['ok'])
+    } finally {
+      tmp.close()
+    }
+  })
+
   it('does not grow the main DB file (read-only — SSD-safe)', async () => {
     db.rawExec('CREATE TABLE probe(id INTEGER PRIMARY KEY, v TEXT)')
     db.checkpointTruncate()

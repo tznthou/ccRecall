@@ -934,11 +934,13 @@ export class Database {
    *  frames too, so nothing is missed). Opens readonly + one pragma + closes:
    *  zero writes to the main DB.
    *
-   *  :memory: / temp DBs cannot be opened readonly and have no shareable on-disk
-   *  file (a second connection would be a different empty DB), so fall back to
-   *  the live connection there — tests only; the daemon always uses a file path. */
+   *  In-memory / temp DBs (better-sqlite3 sets db.memory=true for ':memory:',
+   *  '', and other anonymous forms) cannot be opened readonly and have no
+   *  shareable on-disk file — a second connection would be a different empty DB.
+   *  Fall back to the live connection there: tests only; the daemon always uses
+   *  a file path. */
   integrityCheck(): string[] {
-    if (this.dbPath === ':memory:') {
+    if (this.db.memory) {
       const rows = this.db.pragma('integrity_check') as Array<{ integrity_check: string }>
       return rows.map(r => r.integrity_check)
     }
