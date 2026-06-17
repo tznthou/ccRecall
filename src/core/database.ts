@@ -918,12 +918,40 @@ export class Database {
     return { busy: rows[0].busy, checkpointed: rows[0].checkpointed }
   }
 
-  /** Run `PRAGMA integrity_check`. Returns `['ok']` on a clean DB, otherwise one
-   *  line per issue (e.g. 'row 48 missing from index idx_memories_access').
-   *  Read-only; safe to call on a live WAL DB. Consumed by IntegrityMonitor. */
+  /** Run `PRAGMA integrity_check` on a FRESH short-lived readonly connection
+   *  rather than this long-lived one. Returns `['ok']` on a clean DB, otherwise
+   *  one line per issue (e.g. 'row 48 missing from index idx_memories_access').
+   *  Consumed by IntegrityMonitor.
+   *
+   *  Why fresh: the daemon's long-lived connection accumulates page-cache state
+   *  that, under concurrent writes to the external-content FTS5 table
+   *  `memories_fts` (content='memories'), makes integrity_check report
+   *  false-positive 'malformed inverted index' while the on-disk index is
+   *  actually healthy. Confirmed 2026-06-16: a daemon restart cleared a
+   *  4.5h-persistent false→true, with the disk verified ok across 112
+   *  fresh-connection samples throughout. A fresh connection carries no such
+   *  drift, so the check reflects true on-disk state (it reads committed WAL
+   *  frames too, so nothing is missed). Opens readonly + one pragma + closes:
+   *  zero writes to the main DB.
+   *
+   *  In-memory / temp DBs (better-sqlite3 sets db.memory=true for ':memory:',
+   *  '', and other anonymous forms) cannot be opened readonly and have no
+   *  shareable on-disk file — a second connection would be a different empty DB.
+   *  Fall back to the live connection there: tests only; the daemon always uses
+   *  a file path. */
   integrityCheck(): string[] {
-    const rows = this.db.pragma('integrity_check') as Array<{ integrity_check: string }>
-    return rows.map(r => r.integrity_check)
+    if (this.db.memory) {
+      const rows = this.db.pragma('integrity_check') as Array<{ integrity_check: string }>
+      return rows.map(r => r.integrity_check)
+    }
+    const fresh = new BetterSqlite3(this.dbPath, { readonly: true })
+    try {
+      fresh.pragma('busy_timeout = 5000')
+      const rows = fresh.pragma('integrity_check') as Array<{ integrity_check: string }>
+      return rows.map(r => r.integrity_check)
+    } finally {
+      fresh.close()
+    }
   }
 
   /** ⚠️ 測試專用：接受任意 SQL，禁止接到 IPC handler */

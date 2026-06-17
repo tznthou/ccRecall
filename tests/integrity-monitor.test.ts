@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import path from 'node:path'
 import os from 'node:os'
-import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { Database } from '../src/core/database'
 import { IntegrityMonitor } from '../src/core/integrity-monitor'
 
@@ -141,5 +141,54 @@ describe('IntegrityMonitor — start() kicks off immediate tick', () => {
     await new Promise(resolve => setImmediate(resolve))
     expect(mon.getLastRecord()?.ok).toBe(true)
     mon.stop()
+  })
+})
+
+describe('Database.integrityCheck — fresh connection (S3-fresh)', () => {
+  // Root cause (2026-06-16 S2 experiment): the daemon's long-lived connection
+  // reports false-positive 'malformed inverted index' on external-content
+  // memories_fts under concurrent writes, while the on-disk index is healthy.
+  // integrityCheck() now runs on a fresh readonly connection to avoid that drift.
+  // Note: the drift itself cannot be reproduced in a unit test (it needs hours
+  // of daemon uptime + concurrent FTS writes); these tests cover the fresh-
+  // connection mechanics that the fix relies on. The drift-avoidance behaviour
+  // is evidenced by the S2 restart experiment, not by a unit test.
+
+  it('returns ok on a healthy file-backed DB (exercises the fresh readonly path)', () => {
+    // beforeEach builds a file-backed DB, so this goes through the fresh connection.
+    expect(db.integrityCheck()).toEqual(['ok'])
+  })
+
+  it(':memory: DB falls back to the live connection (readonly in-memory is impossible)', () => {
+    // Without the fallback, opening a fresh readonly :memory: throws
+    // "In-memory/temporary databases cannot be readonly".
+    const mem = new Database(':memory:')
+    try {
+      expect(mem.integrityCheck()).toEqual(['ok'])
+    } finally {
+      mem.close()
+    }
+  })
+
+  it("anonymous temp DB (empty path) also falls back — db.memory covers it, not just ':memory:'", () => {
+    // Codex review: a `dbPath === ':memory:'` guard would miss '' / whitespace
+    // temp DBs (db.memory=true for all of them), throwing on the fresh readonly open.
+    const tmp = new Database('')
+    try {
+      expect(tmp.integrityCheck()).toEqual(['ok'])
+    } finally {
+      tmp.close()
+    }
+  })
+
+  it('does not grow the main DB file (read-only — SSD-safe)', async () => {
+    db.rawExec('CREATE TABLE probe(id INTEGER PRIMARY KEY, v TEXT)')
+    db.checkpointTruncate()
+    const dbFile = path.join(tmpDir, 'test.db')
+    const before = await stat(dbFile)
+    db.integrityCheck()
+    db.integrityCheck()
+    const after = await stat(dbFile)
+    expect(after.size).toBe(before.size)
   })
 })
