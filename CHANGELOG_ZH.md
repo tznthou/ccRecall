@@ -8,6 +8,15 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.4.3] — 2026-06-17
+
+### 修復
+
+- **完整性監測誤報「FTS5 損壞」警報** — 週期性的 `PRAGMA integrity_check` 在 daemon
+  長連線上執行，對健康的磁碟資料可能誤報「malformed inverted index for FTS5
+  table」（external-content FTS5 在長連線下的暫態現象）。改為每次在全新的唯讀連線上
+  檢查，消除誤報。磁碟資料全程確認健康。
+
 ## [0.4.2] — 2026-06-06
 
 ### 修復

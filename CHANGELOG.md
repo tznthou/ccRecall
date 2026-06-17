@@ -11,6 +11,17 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.4.3] — 2026-06-17
+
+### Fixed
+
+- **Integrity monitor false-positive "malformed FTS5" alerts** — the periodic
+  `PRAGMA integrity_check` ran on the daemon's long-lived connection, which could
+  report a transient "malformed inverted index for FTS5 table" on healthy
+  on-disk data (an external-content FTS5 quirk under a long-held connection). The
+  check now runs on a fresh read-only connection each tick, eliminating the false
+  alarms. On-disk data was verified healthy throughout.
+
 ## [0.4.2] — 2026-06-06
 
 ### Fixed
