@@ -76,13 +76,16 @@ ccrecall-extract() {
   # (tool calls, tool results, thinking blocks omitted)
   local transcript_mode="none"
   local full_prompt=""
+  local skip_reason="no-session-id"  # refined as the build gets further
 
   # A4: validate session_id is a UUID before using in filesystem path
   local claude_data_dir="${HOME}/.claude"
   if [[ -n "$session_id" && "$session_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
+    skip_reason="no-jsonl"
     local jsonl_path="${claude_data_dir}/projects/${project_id}/${session_id}.jsonl"
 
     if [[ -f "$jsonl_path" ]]; then
+      skip_reason="empty-transcript"
       local session_transcript
       # A2: -R + fromjson? skips malformed JSONL lines instead of aborting
       # A1+A5: head -c 200000 + iconv -c strips incomplete UTF-8 at boundary
@@ -132,13 +135,14 @@ ${prompt}"
   # for frequently-zero output (verified 2026-06-20: continue runs cost
   # more and usually saved nothing). A missed session is cheaper than that.
   if [[ "$transcript_mode" != "jsonl" ]]; then
-    printf '\n⚠️  ccRecall: no text transcript (session not flushed yet?) — skipping extraction.\n'
+    printf '\n⚠️  ccRecall: no text transcript (%s) — skipping extraction.\n' "$skip_reason"
     mkdir -p "$(dirname "$CCRECALL_EXTRACT_LOG")"
     jq -n -c \
       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       --arg sid "$session_id" \
       --arg pid "$project_id" \
-      '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"skip",exitCode:null,durationSec:0}' \
+      --arg reason "$skip_reason" \
+      '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"skip",reason:$reason,exitCode:null,durationSec:0}' \
       >> "$CCRECALL_EXTRACT_LOG"
     return $claude_exit
   fi
@@ -148,31 +152,35 @@ ${prompt}"
   local extract_start
   extract_start=$(date +%s)
 
-  # Auth: with no ANTHROPIC_API_KEY set, `claude -p` runs on the Pro/Max
-  # subscription quota (not API billing). We intentionally omit
-  # --max-budget-usd: that flag gates on API-equivalent cost and falsely
-  # aborts subscription-backed runs that never actually charge — it was the
-  # root cause of the "Exceeded USD budget (0.1)" failures (verified 2026-06-20).
-  # --max-turns 5 + the head -c 200000 transcript cap bound the worst case.
-  local stderr_file
-  stderr_file=$(mktemp -t ccrecall-extract.XXXXXX)
-  command claude -p \
+  # Spend cap only matters under API billing. With no ANTHROPIC_API_KEY,
+  # `claude -p` runs on the Pro/Max subscription quota and --max-budget-usd
+  # would gate on phantom API-equivalent cost — the root cause of the
+  # "Exceeded USD budget (0.1)" failures. So cap only when a key is present;
+  # --max-turns 5 + the head -c 200000 transcript cap bound turns/input either way.
+  local -a budget_args=()
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    budget_args=(--max-budget-usd "${CCRECALL_EXTRACT_MAX_BUDGET_USD:-0.50}")
+  fi
+
+  # Capture stderr WITHOUT a temp file (no leak on interrupt/early exit):
+  # fd 3 holds the real stdout so the agent's output still streams to the
+  # terminal, while stderr is redirected into the command substitution.
+  local extract_stderr extract_exit
+  exec 3>&1
+  extract_stderr=$(command claude -p \
     --no-session-persistence \
     --model haiku \
+    "${budget_args[@]}" \
     --max-turns 5 \
     --dangerously-skip-permissions \
-    "$full_prompt" 2>"$stderr_file"
-  local extract_exit=$?
+    "$full_prompt" 2>&1 1>&3)
+  extract_exit=$?
+  exec 3>&-
+  extract_stderr=$(printf '%s' "$extract_stderr" | head -c 2000)
 
   local extract_end
   extract_end=$(date +%s)
   local extract_duration=$(( extract_end - extract_start ))
-
-  # Capture (truncated) stderr into telemetry instead of discarding it —
-  # the old 2>/dev/null hid the budget failures and forced manual repro.
-  local extract_stderr=""
-  [[ -s "$stderr_file" ]] && extract_stderr=$(head -c 2000 "$stderr_file")
-  rm -f "$stderr_file"
 
   if [[ $extract_exit -eq 0 ]]; then
     printf '✅ ccRecall: extraction complete (%ds).\n' "$extract_duration"
