@@ -80,6 +80,8 @@ For each memory, call `recall_save` with:
 - `key`: stable hyphenated slug (see above)
 - `confidence`: 0.8 for most; 0.9+ only for user-confirmed facts
 - `projectId`: include for project-specific, omit for cross-project
+- `sessionId`: the Origin session ID given in the transcript header above —
+  pass it verbatim so each memory can be traced back to its origin session
 
 ## Output
 

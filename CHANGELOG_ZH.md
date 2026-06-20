@@ -8,6 +8,34 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.4.4] — 2026-06-20
+
+### 修復
+
+- **Post-session extraction 誤報「Exceeded USD budget (0.1)」中止** —
+  `--max-budget-usd` 以 API 等價成本為閘門，但未設 `ANTHROPIC_API_KEY` 時
+  `claude -p` 走 Pro/Max 訂閱額度、不實際計費，該 flag 因此誤殺了已寫完記憶的
+  run。budget cap 現在只在 API key 計費下套用（預設 `0.50`，可用
+  `CCRECALL_EXTRACT_MAX_BUDGET_USD` 覆寫）。`claude -c` continue fallback——會載入
+  完整 session、為常態零產出燒額度——改為 skip，並記錄 `reason`。
+
+- **`extraction-prompt.md` 在 zsh 下從未被讀取** — `CCRECALL_SCRIPT_DIR` 以
+  `BASH_SOURCE[0]` 解析，但在 zsh 下為空，於是 fallback 成 `$PWD`，prompt 檔案
+  靜默地永遠找不到（改用內嵌 fallback prompt）。現在在 zsh 下改用 `%x` prompt
+  expansion 解析。
+
+### 安全
+
+- 在 extraction stderr 寫入 telemetry log 前，redact 掉 `sk-ant-*` API key。
+- 在 extraction prompt 標記 session transcript 為不可信資料，降低 prompt
+  injection 驅動 `recall_save` 失控呼叫的風險。
+
+### 變更
+
+- Extraction stderr 現在捕獲進 telemetry log（valid JSONL），不再以 `2>/dev/null`
+  丟棄。
+- 每條存入的記憶現在帶有 origin session ID 以供溯源。
+
 ## [0.4.3] — 2026-06-17
 
 ### 修復
