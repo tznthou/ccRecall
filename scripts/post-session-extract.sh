@@ -15,8 +15,18 @@
 CCRECALL_PORT="${CCRECALL_PORT:-3177}"
 CCRECALL_EXTRACT_LOG="${CCRECALL_EXTRACT_LOG:-$HOME/.ccrecall/extract.log.jsonl}"
 
-# Resolve the directory containing this script (for prompt file)
-CCRECALL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the directory containing this script (for prompt file).
+# zsh leaves BASH_SOURCE empty (the user's shell is zsh), so detect zsh and
+# use its %x prompt path; eval isolates the zsh-only ${(%):-%x} syntax from
+# bash's parser. Without this, CCRECALL_SCRIPT_DIR fell back to $PWD under zsh
+# and extraction-prompt.md was never read (silently using the inline fallback).
+if [ -n "${ZSH_VERSION:-}" ]; then
+  eval '_ccrecall_src="${(%):-%x}"'
+else
+  _ccrecall_src="${BASH_SOURCE[0]}"
+fi
+CCRECALL_SCRIPT_DIR="$(cd "$(dirname "$_ccrecall_src")" && pwd)"
+unset _ccrecall_src
 
 ccrecall-extract() {
   local project_id
@@ -64,7 +74,7 @@ ccrecall-extract() {
   # ── Build session transcript from JSONL ──
   # Text-only extraction is ~50x smaller than full JSONL
   # (tool calls, tool results, thinking blocks omitted)
-  local transcript_mode="continue"
+  local transcript_mode="none"
   local full_prompt=""
 
   # A4: validate session_id is a UUID before using in filesystem path
@@ -99,6 +109,10 @@ ccrecall-extract() {
         transcript_mode="jsonl"
         full_prompt="# Session transcript to analyze
 
+Origin session ID: ${session_id}
+Pass this verbatim as the sessionId argument on every recall_save call so
+each saved memory traces back to its origin session.
+
 Below is a text-only transcript of a completed Claude Code session.
 Tool calls, tool results, and thinking blocks are omitted — focus on
 decisions, discoveries, preferences, and patterns from the dialogue.
@@ -112,35 +126,53 @@ ${prompt}"
     fi
   fi
 
+  # No text transcript built → skip extraction. We deliberately do NOT
+  # fall back to `claude -c` (continue): that reloads the full session
+  # (tool calls, results, thinking blocks) and burns subscription usage
+  # for frequently-zero output (verified 2026-06-20: continue runs cost
+  # more and usually saved nothing). A missed session is cheaper than that.
+  if [[ "$transcript_mode" != "jsonl" ]]; then
+    printf '\n⚠️  ccRecall: no text transcript (session not flushed yet?) — skipping extraction.\n'
+    mkdir -p "$(dirname "$CCRECALL_EXTRACT_LOG")"
+    jq -n -c \
+      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg sid "$session_id" \
+      --arg pid "$project_id" \
+      '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"skip",exitCode:null,durationSec:0}' \
+      >> "$CCRECALL_EXTRACT_LOG"
+    return $claude_exit
+  fi
+
   printf '\n🧠 ccRecall: extracting memories from session...\n'
 
   local extract_start
   extract_start=$(date +%s)
 
-  if [[ "$transcript_mode" == "jsonl" ]]; then
-    # Preferred: text-only transcript in prompt (works for any session size)
-    command claude -p \
-      --no-session-persistence \
-      --model haiku \
-      --max-budget-usd 0.10 \
-      --max-turns 5 \
-      --dangerously-skip-permissions \
-      "$full_prompt" 2>/dev/null
-  else
-    # Fallback: continue last session (may fail for very long sessions)
-    command claude -c -p \
-      --no-session-persistence \
-      --model haiku \
-      --max-budget-usd 0.10 \
-      --max-turns 5 \
-      --dangerously-skip-permissions \
-      "$prompt" 2>/dev/null
-  fi
-
+  # Auth: with no ANTHROPIC_API_KEY set, `claude -p` runs on the Pro/Max
+  # subscription quota (not API billing). We intentionally omit
+  # --max-budget-usd: that flag gates on API-equivalent cost and falsely
+  # aborts subscription-backed runs that never actually charge — it was the
+  # root cause of the "Exceeded USD budget (0.1)" failures (verified 2026-06-20).
+  # --max-turns 5 + the head -c 200000 transcript cap bound the worst case.
+  local stderr_file
+  stderr_file=$(mktemp -t ccrecall-extract.XXXXXX)
+  command claude -p \
+    --no-session-persistence \
+    --model haiku \
+    --max-turns 5 \
+    --dangerously-skip-permissions \
+    "$full_prompt" 2>"$stderr_file"
   local extract_exit=$?
+
   local extract_end
   extract_end=$(date +%s)
   local extract_duration=$(( extract_end - extract_start ))
+
+  # Capture (truncated) stderr into telemetry instead of discarding it —
+  # the old 2>/dev/null hid the budget failures and forced manual repro.
+  local extract_stderr=""
+  [[ -s "$stderr_file" ]] && extract_stderr=$(head -c 2000 "$stderr_file")
+  rm -f "$stderr_file"
 
   if [[ $extract_exit -eq 0 ]]; then
     printf '✅ ccRecall: extraction complete (%ds).\n' "$extract_duration"
@@ -148,16 +180,16 @@ ${prompt}"
     printf '⚠️  ccRecall: extraction exited with code %d (%ds).\n' "$extract_exit" "$extract_duration"
   fi
 
-  # Telemetry log (jq for proper JSON escaping of arbitrary strings)
+  # Telemetry log (-c = one compact JSON object per line = valid JSONL)
   mkdir -p "$(dirname "$CCRECALL_EXTRACT_LOG")"
-  jq -n \
+  jq -n -c \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sid "$session_id" \
     --arg pid "$project_id" \
-    --arg mode "$transcript_mode" \
+    --arg stderr "$extract_stderr" \
     --argjson exit "$extract_exit" \
     --argjson dur "$extract_duration" \
-    '{"ts":$ts,"sessionId":$sid,"projectId":$pid,"mode":$mode,"exitCode":$exit,"durationSec":$dur}' \
+    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr}' \
     >> "$CCRECALL_EXTRACT_LOG"
 
   return $claude_exit
