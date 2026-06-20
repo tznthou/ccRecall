@@ -11,6 +11,38 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.4.4] — 2026-06-20
+
+### Fixed
+
+- **Post-session extraction false-aborted with "Exceeded USD budget (0.1)"** —
+  `--max-budget-usd` gates on API-equivalent cost, but with no `ANTHROPIC_API_KEY`
+  set, `claude -p` runs on the Pro/Max subscription quota and never actually
+  charges, so the flag killed runs that had already written their memories. The
+  cap now applies only under API-key billing (default `0.50`, overridable via
+  `CCRECALL_EXTRACT_MAX_BUDGET_USD`). The `claude -c` continue fallback — which
+  reloaded the full session and burned quota for frequently-zero output — is
+  replaced by a skip with a logged `reason`.
+
+- **`extraction-prompt.md` was never read under zsh** — `CCRECALL_SCRIPT_DIR`
+  resolved via `BASH_SOURCE[0]`, which is empty under zsh, so it fell back to
+  `$PWD` and the prompt file was silently never found (the inline fallback prompt
+  was used instead). Now resolved via zsh's `%x` prompt expansion when running
+  under zsh.
+
+### Security
+
+- Redact `sk-ant-*` API keys from captured extraction stderr before it reaches
+  the telemetry log.
+- Mark the session transcript as untrusted data in the extraction prompt, to
+  blunt prompt injection that could drive runaway `recall_save` calls.
+
+### Changed
+
+- Extraction stderr is now captured into the telemetry log (as valid JSONL)
+  instead of discarded via `2>/dev/null`.
+- Each saved memory now carries its origin session ID for traceability.
+
 ## [0.4.3] — 2026-06-17
 
 ### Fixed
