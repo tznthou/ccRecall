@@ -89,12 +89,15 @@ jobs:
       # workflow_dispatch reruns skip this step to avoid "release already
       # exists" errors on re-publishes.
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        # event_name == 'push' guard: github.ref can be a tag ref under
+        # workflow_dispatch too (gh workflow run --ref v1.2.3), which would
+        # otherwise publish a non-draft Latest release on a manual rerun.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
             echo "Release ${{ github.ref_name }} already exists — skipping create."
           else
-            gh release create "${{ github.ref_name }}" --generate-notes --latest --title "${{ github.ref_name }}"
+            gh release create "${{ github.ref_name }}" --verify-tag --generate-notes --latest --title "${{ github.ref_name }}"
           fi
