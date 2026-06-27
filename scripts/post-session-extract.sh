@@ -166,29 +166,29 @@ ${prompt}"
     budget_args=(--max-budget-usd "${CCRECALL_EXTRACT_MAX_BUDGET_USD:-0.50}")
   fi
 
-  # The extraction prompt tells Haiku to emit NO text — only its recall_save
-  # MCP tool calls carry the result, and those travel over MCP, never through
-  # stdout/stderr. Small models sometimes ignore that and print a stray summary
-  # anyway, which can even drift to an unrelated language (a Korean report was
-  # observed 2026-06-27). Such text never reaches the database; displaying it
-  # only risks alarming whoever sees the terminal. So capture BOTH streams
-  # (2>&1, no temp file = no leak on interrupt) into the telemetry log for
-  # later forensics and display NEITHER — the terminal shows only this
-  # wrapper's own status lines. Merging the streams also closes an
-  # observability gap: max-turns notices print to stdout, which the previous
-  # stderr-only capture silently dropped.
-  local extract_output extract_exit
-  extract_output=$(command claude -p \
+  # Haiku is prompted to emit NO text — only its recall_save MCP tool calls
+  # carry the result, and those travel over MCP, never through stdout. Small
+  # models sometimes ignore that and print a stray summary that can even drift
+  # to an unrelated language (a Korean report was observed 2026-06-27), which
+  # alarms whoever sees the terminal. So Haiku's stdout is discarded outright
+  # (1>/dev/null): it holds no extraction signal, and were it logged instead, a
+  # model that echoed transcript content could spill session secrets
+  # (GitHub/AWS/Bearer tokens, .env fragments, home paths) past the sk-ant-only
+  # scrubber. Only stderr — claude's own diagnostics — is captured, scrubbed,
+  # and logged. $? still reflects claude's exit (the assignment is the last
+  # command before it), and no temp file means no leak on interrupt.
+  local extract_stderr extract_exit
+  extract_stderr=$(command claude -p \
     --no-session-persistence \
     --model haiku \
     "${budget_args[@]}" \
     --max-turns 5 \
     --dangerously-skip-permissions \
-    "$full_prompt" 2>&1)
+    "$full_prompt" 2>&1 1>/dev/null)
   extract_exit=$?
   # Redact Anthropic API keys before they reach the telemetry log — claude
   # can echo the key in auth-error messages on the API-billing path.
-  extract_output=$(printf '%s' "$extract_output" | sed 's/sk-ant-[A-Za-z0-9_-]*/[REDACTED]/g' | head -c 2000)
+  extract_stderr=$(printf '%s' "$extract_stderr" | sed 's/sk-ant-[A-Za-z0-9_-]*/[REDACTED]/g' | head -c 2000)
 
   local extract_end
   extract_end=$(date +%s)
@@ -206,10 +206,10 @@ ${prompt}"
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sid "$session_id" \
     --arg pid "$project_id" \
-    --arg output "$extract_output" \
+    --arg stderr "$extract_stderr" \
     --argjson exit "$extract_exit" \
     --argjson dur "$extract_duration" \
-    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,output:$output}' \
+    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr}' \
     >> "$CCRECALL_EXTRACT_LOG"
 
   return $claude_exit
