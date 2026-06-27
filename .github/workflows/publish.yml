@@ -19,7 +19,7 @@ jobs:
     # id-token: write lets this job mint an OIDC token that npm exchanges
     # for a short-lived publish credential via Trusted Publishing. No long-
     # lived NPM_TOKEN is stored or needed. contents: write lets the trailing
-    # `gh release create --draft` step land a release on the repo.
+    # `gh release create` step land a release on the repo.
     permissions:
       contents: write
       id-token: write
@@ -78,13 +78,17 @@ jobs:
         if: steps.npm_check.outputs.skip != 'true'
         run: pnpm publish --access public --no-git-checks --provenance
 
-      # Auto-create a draft GitHub Release so we never forget one (v0.1.4 was
-      # published to npm but the GitHub Release was missed for hours).
-      # Draft, not published — humans polish the auto-generated notes (which
-      # are derived from commit history) and promote when ready. Only fires
-      # on tag pushes; workflow_dispatch reruns skip this step to avoid
-      # "release already exists" errors on re-publishes.
-      - name: Create draft GitHub Release
+      # Auto-create the GitHub Release on tag push so it never gets missed
+      # (v0.1.4 was published to npm but the Release was forgotten for hours).
+      # Published directly with auto-generated notes (derived from commit / PR
+      # history) and marked --latest. This previously created a DRAFT for a
+      # human to polish and promote, but the drafts sat un-promoted for weeks
+      # (v0.4.2–v0.4.5), leaving the repo's "Latest" badge stuck on an old
+      # version while npm moved on — so it now publishes straight away; polish
+      # the notes after the fact if needed. Only fires on tag pushes;
+      # workflow_dispatch reruns skip this step to avoid "release already
+      # exists" errors on re-publishes.
+      - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -92,5 +96,5 @@ jobs:
           if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
             echo "Release ${{ github.ref_name }} already exists — skipping create."
           else
-            gh release create "${{ github.ref_name }}" --draft --generate-notes --title "${{ github.ref_name }}"
+            gh release create "${{ github.ref_name }}" --generate-notes --latest --title "${{ github.ref_name }}"
           fi
