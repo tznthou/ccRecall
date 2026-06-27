@@ -11,6 +11,29 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.4.5] — 2026-06-27
+
+### Fixed
+
+- **Post-session extraction printed Haiku's stray output to the terminal** —
+  Haiku is prompted to emit no text (only `recall_save` tool calls carry the
+  result), but small models occasionally print a stray summary that can drift to
+  an unrelated language — a Korean report was observed. The wrapper had been
+  streaming Haiku's stdout to the terminal via `exec 3>&1` fd juggling; it now
+  discards stdout entirely (`2>&1 1>/dev/null`) and shows only its own status
+  lines. No memories were ever corrupted — the stray output never reached the
+  database.
+
+### Security
+
+- **Stdout is no longer logged, and the stderr scrub was broadened.** An interim
+  version of the fix above captured stdout into the telemetry log; review found
+  that if the model echoed transcript content, session secrets could be retained
+  there past the `sk-ant-`-only scrub, so stdout is now discarded rather than
+  logged. The stderr scrub was also widened from `sk-ant-` to also cover common
+  OpenAI (`sk-proj-`), GitHub (`ghp_` / `github_pat_`), and AWS (`AKIA`) token
+  prefixes.
+
 ## [0.4.4] — 2026-06-20
 
 ### Fixed

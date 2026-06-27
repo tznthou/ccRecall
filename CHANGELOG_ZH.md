@@ -8,6 +8,25 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.4.5] — 2026-06-27
+
+### 修復
+
+- **Post-session extraction 把 Haiku 的雜散輸出印到 terminal** — Haiku 被要求
+  不要產生任何文字（只有 `recall_save` tool call 帶結果），但小模型偶爾會印出
+  雜散摘要，且可能漂移到不相關的語言——曾觀察到一份韓文報告。wrapper 原本透過
+  `exec 3>&1` fd 操作把 Haiku 的 stdout 串流到 terminal；現在完全丟棄 stdout
+  （`2>&1 1>/dev/null`），只顯示自己的狀態行。記憶從未受損——雜散輸出根本沒進
+  到資料庫。
+
+### 安全
+
+- **stdout 不再寫入 log，stderr 脫敏範圍擴大。** 上述修復的中途版本曾把 stdout
+  捕獲進 telemetry log；審查發現若模型複述 transcript 內容，session secret 可能
+  繞過只認 `sk-ant-` 的脫敏而被留存，因此 stdout 改為丟棄而非記錄。stderr 脫敏
+  也從 `sk-ant-` 擴大到涵蓋常見的 OpenAI（`sk-proj-`）、GitHub（`ghp_` /
+  `github_pat_`）、AWS（`AKIA`）token 前綴。
+
 ## [0.4.4] — 2026-06-20
 
 ### 修復
