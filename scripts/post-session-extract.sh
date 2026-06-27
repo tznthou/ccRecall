@@ -166,23 +166,34 @@ ${prompt}"
     budget_args=(--max-budget-usd "${CCRECALL_EXTRACT_MAX_BUDGET_USD:-0.50}")
   fi
 
-  # Capture stderr WITHOUT a temp file (no leak on interrupt/early exit):
-  # fd 3 holds the real stdout so the agent's output still streams to the
-  # terminal, while stderr is redirected into the command substitution.
+  # Haiku is prompted to emit NO text — only its recall_save MCP tool calls
+  # carry the result, and those travel over MCP, never through stdout. Small
+  # models sometimes ignore that and print a stray summary that can even drift
+  # to an unrelated language (a Korean report was observed 2026-06-27), which
+  # alarms whoever sees the terminal. So Haiku's stdout is discarded outright
+  # (1>/dev/null): it holds no extraction signal, and were it logged instead, a
+  # model that echoed transcript content could spill session secrets
+  # (GitHub/AWS/Bearer tokens, .env fragments, home paths) past the sk-ant-only
+  # scrubber. Only stderr — claude's own diagnostics — is captured, scrubbed,
+  # and logged. $? still reflects claude's exit (the assignment is the last
+  # command before it), and no temp file means no leak on interrupt.
   local extract_stderr extract_exit
-  exec 3>&1
   extract_stderr=$(command claude -p \
     --no-session-persistence \
     --model haiku \
     "${budget_args[@]}" \
     --max-turns 5 \
     --dangerously-skip-permissions \
-    "$full_prompt" 2>&1 1>&3)
+    "$full_prompt" 2>&1 1>/dev/null)
   extract_exit=$?
-  exec 3>&-
-  # Redact Anthropic API keys before they reach the telemetry log — claude
-  # can echo the key in auth-error messages on the API-billing path.
-  extract_stderr=$(printf '%s' "$extract_stderr" | sed 's/sk-ant-[A-Za-z0-9_-]*/[REDACTED]/g' | head -c 2000)
+  # Scrub common credential formats before stderr reaches the telemetry log.
+  # claude echoes its own key (sk-ant-) in auth errors, and any MCP server
+  # loaded for extraction (this runs with --dangerously-skip-permissions) can
+  # surface its own token in an init/auth failure. This is a best-effort
+  # denylist of common prefixes, not exhaustive — but stdout, the higher-risk
+  # stream where the model could echo transcript secrets, is already discarded
+  # entirely, so this only hardens claude's own diagnostics.
+  extract_stderr=$(printf '%s' "$extract_stderr" | sed -E 's/(sk-ant-|sk-proj-|ghp_|gho_|ghu_|ghs_|github_pat_|AKIA)[A-Za-z0-9_-]*/[REDACTED]/g' | head -c 2000)
 
   local extract_end
   extract_end=$(date +%s)
