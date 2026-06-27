@@ -166,23 +166,29 @@ ${prompt}"
     budget_args=(--max-budget-usd "${CCRECALL_EXTRACT_MAX_BUDGET_USD:-0.50}")
   fi
 
-  # Capture stderr WITHOUT a temp file (no leak on interrupt/early exit):
-  # fd 3 holds the real stdout so the agent's output still streams to the
-  # terminal, while stderr is redirected into the command substitution.
-  local extract_stderr extract_exit
-  exec 3>&1
-  extract_stderr=$(command claude -p \
+  # The extraction prompt tells Haiku to emit NO text — only its recall_save
+  # MCP tool calls carry the result, and those travel over MCP, never through
+  # stdout/stderr. Small models sometimes ignore that and print a stray summary
+  # anyway, which can even drift to an unrelated language (a Korean report was
+  # observed 2026-06-27). Such text never reaches the database; displaying it
+  # only risks alarming whoever sees the terminal. So capture BOTH streams
+  # (2>&1, no temp file = no leak on interrupt) into the telemetry log for
+  # later forensics and display NEITHER — the terminal shows only this
+  # wrapper's own status lines. Merging the streams also closes an
+  # observability gap: max-turns notices print to stdout, which the previous
+  # stderr-only capture silently dropped.
+  local extract_output extract_exit
+  extract_output=$(command claude -p \
     --no-session-persistence \
     --model haiku \
     "${budget_args[@]}" \
     --max-turns 5 \
     --dangerously-skip-permissions \
-    "$full_prompt" 2>&1 1>&3)
+    "$full_prompt" 2>&1)
   extract_exit=$?
-  exec 3>&-
   # Redact Anthropic API keys before they reach the telemetry log — claude
   # can echo the key in auth-error messages on the API-billing path.
-  extract_stderr=$(printf '%s' "$extract_stderr" | sed 's/sk-ant-[A-Za-z0-9_-]*/[REDACTED]/g' | head -c 2000)
+  extract_output=$(printf '%s' "$extract_output" | sed 's/sk-ant-[A-Za-z0-9_-]*/[REDACTED]/g' | head -c 2000)
 
   local extract_end
   extract_end=$(date +%s)
@@ -200,10 +206,10 @@ ${prompt}"
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sid "$session_id" \
     --arg pid "$project_id" \
-    --arg stderr "$extract_stderr" \
+    --arg output "$extract_output" \
     --argjson exit "$extract_exit" \
     --argjson dur "$extract_duration" \
-    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr}' \
+    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,output:$output}' \
     >> "$CCRECALL_EXTRACT_LOG"
 
   return $claude_exit
