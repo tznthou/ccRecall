@@ -33,9 +33,9 @@ ccrecall-extract() {
   project_id=$(echo "$PWD" | sed 's|/|-|g')
 
   # ── Trust pre-flight ──
-  # ccdm always launches claude with --dangerously-skip-permissions, which bypasses
-  # the tool-permission layer but never triggers the workspace trust dialog. A project
-  # only ever opened via ccdm therefore stays hasTrustDialogAccepted:false forever, and
+  # ccrecall-extract always launches claude with --dangerously-skip-permissions, which
+  # bypasses the tool-permission layer but never triggers the workspace trust dialog.
+  # A project only ever opened via this wrapper therefore stays hasTrustDialogAccepted:false forever, and
   # Claude Code silently ignores that project's .claude/settings.json permissions.allow
   # + additionalDirectories. We deliberately do NOT auto-write trust into ~/.claude.json:
   # ccRecall stays read-only toward Claude Code's state, and silently trusting whatever
@@ -46,7 +46,7 @@ ccrecall-extract() {
   if [[ "$(jq -r --arg k "$PWD" '.projects[$k].hasTrustDialogAccepted' "$HOME/.claude.json" 2>/dev/null)" == "false" ]]; then
     printf '\n⚠️  ccRecall: this workspace is not trusted. Claude Code will ignore its\n'
     printf '    .claude/settings.json permissions (you may see "Ignoring ... permissions"\n'
-    printf '    warnings below). To fix, run plain `claude` here once — without ccdm —\n'
+    printf '    warnings below). To fix, run plain `claude` here once — without this wrapper —\n'
     printf '    and accept the trust prompt.\n'
   fi
 
