@@ -228,7 +228,18 @@ export function createRequestHandler(
         return
       }
       const projectId = cwd.replace(/\//g, '-')
-      const last = db.getLastSession(projectId)
+      let last = db.getLastSession(projectId)
+      if (!last && opts.rescueReindex) {
+        // Fresh-session race (#55): the extraction wrapper queries within
+        // seconds of session close, before the watcher has indexed the fresh
+        // JSONL. Same rescue as /session/end — reindex once and retry.
+        try {
+          await opts.rescueReindex()
+        } catch (err) {
+          console.warn('[session-last] rescue reindex failed:', scrubErrorMessage(err))
+        }
+        last = db.getLastSession(projectId)
+      }
       if (!last) {
         sendJson(res, 404, { error: 'no sessions found for project' })
         return
