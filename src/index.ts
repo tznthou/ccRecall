@@ -155,7 +155,7 @@ async function startDaemon(): Promise<void> {
   // shares (never drops) the run when /session/end and /session/last both miss
   // during the same session close.
   const server = createServer(db, {
-    rescueReindex: coalesceRescue(async () => { await runIndexer(db) }),
+    rescueReindex: coalesceRescue(() => runIndexer(db)),
     version: readPackageVersion(),
     dbPath: DB_PATH,
     integrityMonitor,

@@ -39,20 +39,20 @@ const simpleSession = makeSession('solo', '2026-07-03T10:00:00Z', '2026-07-03T10
 const freshSessionId = 'aaaabbbb-cccc-4ddd-8eee-ffff00001111'
 const oldSessionId = '99998888-7777-4666-8555-444433332222'
 
+async function listen(s: http.Server): Promise<number> {
+  return new Promise((resolve) => {
+    s.listen(0, '127.0.0.1', () => {
+      resolve((s.address() as { port: number }).port)
+    })
+  })
+}
+
 describe('GET /session/last — rescue reindex (fresh session race)', () => {
   let tmpDir: string
   let db: Database
   let server: http.Server
   let port: number
   let projectsDir: string
-
-  async function listen(s: http.Server): Promise<number> {
-    return new Promise((resolve) => {
-      s.listen(0, '127.0.0.1', () => {
-        resolve((s.address() as { port: number }).port)
-      })
-    })
-  }
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-last-rescue-'))
@@ -132,14 +132,6 @@ describe('GET /session/last — notBefore staleness (stale-session race)', () =>
   let port: number
   let projectsDir: string
   let projectDir: string
-
-  async function listen(s: http.Server): Promise<number> {
-    return new Promise((resolve) => {
-      s.listen(0, '127.0.0.1', () => {
-        resolve((s.address() as { port: number }).port)
-      })
-    })
-  }
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-last-stale-'))
