@@ -7,6 +7,7 @@ import http from 'node:http'
 import { Database } from '../src/core/database.js'
 import { runIndexer } from '../src/core/indexer.js'
 import { createServer } from '../src/api/server.js'
+import { coalesceRescue } from '../src/api/routes.js'
 import { fetchJson } from './fixtures/helpers.js'
 
 // #55: the extraction wrapper queries /session/last within seconds of session
@@ -14,16 +15,29 @@ import { fetchJson } from './fixtures/helpers.js'
 // 2026-07-03: four skips each exactly ~2s before the session row appeared —
 // so /session/last needs the same rescue-reindex fallback /session/end has.
 //
+// The stale variant of the same race: when the project already has an older
+// indexed session, getLastSession happily returns it and the wrapper extracts
+// the WRONG session (6 duplicate extractions observed in telemetry). The
+// wrapper passes notBefore=<its launch time>; a session whose endedAt predates
+// it cannot be the one that just closed. endedAt (not startedAt) so resumed
+// sessions — old start, fresh messages — survive the check.
+//
 // Minimal indexable session — /session/last only needs the row to exist,
-// unlike /session/end's outcome-scoring fixtures.
-const simpleSession = [
-  { type: 'user', uuid: 'u1', timestamp: '2026-07-03T10:00:00Z', message: { role: 'user', content: 'hello' } },
-  { type: 'assistant', uuid: 'a1', timestamp: '2026-07-03T10:00:30Z', message: { role: 'assistant', content: 'world' } },
-]
+// unlike /session/end's outcome-scoring fixtures. Message uuids must be
+// unique per session: the indexer dedups messages by uuid across sessions
+// (resume support), so shared uuids silently empty the later session.
+function makeSession(prefix: string, t1: string, t2: string) {
+  return [
+    { type: 'user', uuid: `${prefix}-u1`, timestamp: t1, message: { role: 'user', content: 'hello' } },
+    { type: 'assistant', uuid: `${prefix}-a1`, timestamp: t2, message: { role: 'assistant', content: 'world' } },
+  ]
+}
+const simpleSession = makeSession('solo', '2026-07-03T10:00:00Z', '2026-07-03T10:00:30Z')
 
-// UUID-shaped id: the extraction wrapper validates the returned sessionId
-// against a UUID regex, so the fixture mirrors production ids.
+// UUID-shaped ids: the extraction wrapper validates the returned sessionId
+// against a UUID regex, so fixtures mirror production ids.
 const freshSessionId = 'aaaabbbb-cccc-4ddd-8eee-ffff00001111'
+const oldSessionId = '99998888-7777-4666-8555-444433332222'
 
 describe('GET /session/last — rescue reindex (fresh session race)', () => {
   let tmpDir: string
@@ -108,5 +122,124 @@ describe('GET /session/last — rescue reindex (fresh session race)', () => {
       `http://127.0.0.1:${port}/session/last?cwd=/test/rescue`,
     )
     expect(status).toBe(404)
+  })
+})
+
+describe('GET /session/last — notBefore staleness (stale-session race)', () => {
+  let tmpDir: string
+  let db: Database
+  let server: http.Server
+  let port: number
+  let projectsDir: string
+  let projectDir: string
+
+  async function listen(s: http.Server): Promise<number> {
+    return new Promise((resolve) => {
+      s.listen(0, '127.0.0.1', () => {
+        resolve((s.address() as { port: number }).port)
+      })
+    })
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-last-stale-'))
+    projectsDir = path.join(tmpDir, 'projects')
+    projectDir = path.join(projectsDir, '-test-rescue')
+    await mkdir(projectDir, { recursive: true })
+
+    // Older session, indexed up front — the stale candidate.
+    await writeFile(
+      path.join(projectDir, `${oldSessionId}.jsonl`),
+      makeSession('old', '2026-07-03T08:00:00Z', '2026-07-03T08:30:00Z')
+        .map(l => JSON.stringify(l)).join('\n'),
+    )
+    db = new Database(path.join(tmpDir, 'test.db'))
+    await runIndexer(db, undefined, projectsDir)
+
+    // Fresh session written AFTER the initial index — unindexed, like the
+    // JSONL the watcher has not picked up yet.
+    await writeFile(
+      path.join(projectDir, `${freshSessionId}.jsonl`),
+      makeSession('fresh', '2026-07-03T10:00:00Z', '2026-07-03T10:00:30Z')
+        .map(l => JSON.stringify(l)).join('\n'),
+    )
+
+    server = createServer(db, {
+      rescueReindex: () => runIndexer(db, undefined, projectsDir),
+    })
+    port = await listen(server)
+  })
+
+  afterEach(async () => {
+    server.close()
+    db.close()
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('stale hit triggers rescue and returns the fresh session, not the old one', async () => {
+    // Wrapper launched at 09:00 — the 08:30-ended session cannot be "the one
+    // that just closed", even though getLastSession would happily return it.
+    const { status, body } = await fetchJson(
+      `http://127.0.0.1:${port}/session/last?cwd=/test/rescue&notBefore=2026-07-03T09:00:00Z`,
+    )
+    expect(status).toBe(200)
+    expect((body as { sessionId: string }).sessionId).toBe(freshSessionId)
+  })
+
+  it('returns 404 when rescue still finds nothing fresh enough', async () => {
+    const { status } = await fetchJson(
+      `http://127.0.0.1:${port}/session/last?cwd=/test/rescue&notBefore=2026-07-03T12:00:00Z`,
+    )
+    expect(status).toBe(404)
+  })
+
+  it('without notBefore keeps the old behavior: returns the latest indexed session', async () => {
+    const { status, body } = await fetchJson(
+      `http://127.0.0.1:${port}/session/last?cwd=/test/rescue`,
+    )
+    expect(status).toBe(200)
+    expect((body as { sessionId: string }).sessionId).toBe(oldSessionId)
+  })
+
+  it('ignores an unparseable notBefore and returns the latest indexed session', async () => {
+    const { status, body } = await fetchJson(
+      `http://127.0.0.1:${port}/session/last?cwd=/test/rescue&notBefore=not-a-date`,
+    )
+    expect(status).toBe(200)
+    expect((body as { sessionId: string }).sessionId).toBe(oldSessionId)
+  })
+})
+
+describe('coalesceRescue — concurrent rescues share one run', () => {
+  it('two concurrent callers trigger a single underlying run', async () => {
+    let runs = 0
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const rescue = coalesceRescue(async () => { runs++; await gate })
+
+    const p1 = rescue()
+    const p2 = rescue()
+    release()
+    await Promise.all([p1, p2])
+    expect(runs).toBe(1)
+  })
+
+  it('a new call after completion runs again', async () => {
+    let runs = 0
+    const rescue = coalesceRescue(async () => { runs++ })
+    await rescue()
+    await rescue()
+    expect(runs).toBe(2)
+  })
+
+  it('a failed run clears the slot so the next call retries', async () => {
+    let runs = 0
+    const rescue = coalesceRescue(async () => {
+      runs++
+      if (runs === 1) throw new Error('boom')
+    })
+    await expect(rescue()).rejects.toThrow('boom')
+    await rescue()
+    expect(runs).toBe(2)
   })
 })

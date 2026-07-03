@@ -51,6 +51,11 @@ ccrecall-extract() {
   fi
 
   # ── Phase 1: Start session with memory injection ──
+  # launch_ts anchors /session/last's staleness gate (#55): the session that
+  # just closed must have messages after this instant, so an older session's
+  # endedAt < launch_ts marks it stale instead of being extracted again.
+  local launch_ts
+  launch_ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   CCRECALL_SESSION_START_STRATEGY=startup-v1 claude --dangerously-skip-permissions "$@"
   local claude_exit=$?
 
@@ -67,7 +72,7 @@ ccrecall-extract() {
 
   # Fetch last session metadata for telemetry
   local session_meta
-  session_meta=$(curl -sf "http://127.0.0.1:${CCRECALL_PORT}/session/last?cwd=$(printf '%s' "$PWD" | jq -sRr @uri)" 2>/dev/null)
+  session_meta=$(curl -sf "http://127.0.0.1:${CCRECALL_PORT}/session/last?cwd=$(printf '%s' "$PWD" | jq -sRr @uri)&notBefore=${launch_ts}" 2>/dev/null)
   local session_id=""
   if [[ -n "$session_meta" ]]; then
     session_id=$(echo "$session_meta" | jq -r '.sessionId // empty' 2>/dev/null)
