@@ -247,7 +247,13 @@ export function createRequestHandler(
       // A session whose endedAt predates the launch cannot be the one that
       // just closed — returning it would extract the WRONG session. endedAt,
       // not startedAt, so resumed sessions (old start, fresh messages) pass.
-      const notBeforeMs = Date.parse(url.searchParams.get('notBefore') ?? '')
+      // Clamp: the wrapper only ever sends "now". A spoofed far-future value
+      // would mark every session permanently stale, forcing a full reindex on
+      // each call (local DoS). Beyond a small clock-skew allowance, treat it
+      // like an unparseable value (gate disabled). NaN fails the comparison,
+      // so unparseable input stays NaN.
+      const rawNotBeforeMs = Date.parse(url.searchParams.get('notBefore') ?? '')
+      const notBeforeMs = rawNotBeforeMs <= Date.now() + 60_000 ? rawNotBeforeMs : NaN
       const isStale = (s: { endedAt: string | null }): boolean => {
         if (Number.isNaN(notBeforeMs)) return false
         const endedMs = s.endedAt ? Date.parse(s.endedAt) : NaN

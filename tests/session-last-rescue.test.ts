@@ -200,6 +200,17 @@ describe('GET /session/last — notBefore staleness (stale-session race)', () =>
     expect(status).toBe(200)
     expect((body as { sessionId: string }).sessionId).toBe(oldSessionId)
   })
+
+  it('ignores a far-future notBefore (rescue-forcing DoS guard)', async () => {
+    // A spoofed far-future timestamp would otherwise mark EVERY session
+    // permanently stale, forcing a full reindex on each call. The wrapper
+    // only ever sends "now", so anything beyond clock skew is invalid.
+    const { status, body } = await fetchJson(
+      `http://127.0.0.1:${port}/session/last?cwd=/test/rescue&notBefore=9999-01-01T00:00:00Z`,
+    )
+    expect(status).toBe(200)
+    expect((body as { sessionId: string }).sessionId).toBe(oldSessionId)
+  })
 })
 
 describe('coalesceRescue — concurrent rescues share one run', () => {
