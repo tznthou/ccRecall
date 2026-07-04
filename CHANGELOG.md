@@ -11,6 +11,33 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.4.6] — 2026-07-04
+
+### Fixed
+
+- **Post-session extraction skipped — or extracted the wrong session — right
+  after session close** — the wrapper queries `/session/last` within seconds of
+  close, racing the indexer. The race has two faces: with no other session
+  indexed, the endpoint 404s and extraction is skipped (`no-session-id` skips
+  reached 24% of runs in the week before the fix); with an older session
+  present, the endpoint returned *that* one — its memories were extracted
+  again while the fresh session was silently missed (six duplicate extractions
+  found in telemetry). `/session/last` now runs the same rescue-reindex-and-
+  retry that `/session/end` already had, and the wrapper passes
+  `notBefore=<its launch time>` so a session that ended before launch counts
+  as a miss instead of being returned. `endedAt` (not `startedAt`) anchors the
+  staleness check, so resumed sessions — old start, fresh messages — pass.
+  Concurrent rescues from both endpoints coalesce onto one indexer run instead
+  of stacking full scans.
+
+### Security
+
+- **Far-future `notBefore` values are clamped** — a spoofed timestamp like
+  `9999-01-01` would mark every session permanently stale and force a full
+  reindex per request (a local DoS amplifier: coalescing merges concurrent
+  runs, not sequential ones). Values beyond a 60-second clock-skew allowance
+  are ignored; the wrapper only ever sends its launch time.
+
 ## [0.4.5] — 2026-06-27
 
 ### Fixed

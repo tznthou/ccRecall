@@ -8,6 +8,29 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.4.6] — 2026-07-04
+
+### 修復
+
+- **Session 剛結束時，post-session extraction 會跳過、甚至抽錯 session** —
+  wrapper 在 session 關閉後數秒內查詢 `/session/last`，與 indexer 賽跑。這個
+  race 有兩張臉：專案沒有其他已索引 session 時，端點回 404、extraction 直接
+  跳過（修復前一週 `no-session-id` skip 佔比達 24%）；有舊 session 時，端點
+  回的是「舊的那一個」——舊記憶被重複抽取，剛結束的 session 反而被靜默漏掉
+  （telemetry 中找到 6 筆重複抽取）。`/session/last` 現在比照 `/session/end`
+  既有做法，rescue reindex 後再重查一次；wrapper 也會帶上
+  `notBefore=<啟動時刻>`，讓「啟動之前就結束」的 session 視同查無，而不是照
+  樣回傳。過期判定錨在 `endedAt` 而非 `startedAt`，resume 的 session——舊的
+  開始時間、新的訊息——不會被誤殺。兩個端點同時觸發的 rescue 會合流成一次
+  indexer 執行，不再疊加全量掃描。
+
+### 安全
+
+- **箝制過遠未來的 `notBefore`** — 偽造的時間戳（如 `9999-01-01`）會讓所有
+  session 永遠被判過期，每個請求都強制一次全量 reindex（本機 DoS 放大器：
+  合流只擋並發、擋不了連續請求）。超出 60 秒時鐘偏移容忍的值一律忽略；
+  wrapper 只會送出自己的啟動時刻。
+
 ## [0.4.5] — 2026-06-27
 
 ### 修復
