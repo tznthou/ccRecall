@@ -2208,10 +2208,9 @@ export class Database {
    *  (manual scrub of ~/.claude) still surface; the pipeline detects the NULL
    *  summary and falls back to syntactic truncation, matching manual memories.
    *
-   *  `session_memory_counts` feeds `has_sibling_memories`: a session that produced
-   *  more than one memory must not let them share `summary_text` as compressed
-   *  content, or they collapse into byte-identical duplicates (see
-   *  hasSiblingMemories on CompressionCandidate). */
+   *  `session_memory_counts` counts memories per session so `has_sibling_memories`
+   *  can flag sessions with >1 memory (see hasSiblingMemories on
+   *  CompressionCandidate for why that matters). */
   getCompressionCandidates(limit: number): CompressionCandidate[] {
     // Only return rows that match at least one level's transition gates — ORDER
     // BY id ASC + LIMIT would otherwise stall on the first `batchSize` of rows

@@ -182,7 +182,7 @@ describe('planTransition() — L1 content source', () => {
     if (a.kind === 'compress') expect(a.newContent.endsWith('...')).toBe(true)
   })
 
-  it('falls back to truncation when the session has sibling memories (prevents duplicate collapse)', () => {
+  it('falls back to truncation when the session has sibling memories (prevents duplicate collapse) — L1', () => {
     const a = planTransition(candidate({
       ageDays: 10, effectiveConfidence: 0.3, sessionId: 'sess-1', hasSiblingMemories: true,
       summaryText: 'shared session summary',
@@ -233,7 +233,7 @@ describe('planTransition() — L2 content source', () => {
     }
   })
 
-  it('falls back to truncation when the session has sibling memories (prevents duplicate collapse)', () => {
+  it('falls back to truncation when the session has sibling memories (prevents duplicate collapse) — L2', () => {
     const a = planTransition(candidate({
       compressionLevel: 1, ageDays: 40, sessionId: 'sess-1', hasSiblingMemories: true,
       intentText: 'shared intent', summaryText: 'shared summary',
