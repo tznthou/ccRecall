@@ -167,9 +167,24 @@ function validateCheckpointBody(
 
 const startTime = Date.now()
 
+/** Coalesces concurrent rescue calls onto one underlying run. The SessionEnd
+ *  hook (/session/end) and the extraction wrapper (/session/last) both fire
+ *  within the same session close — without this each miss stacks its own full
+ *  reindex. Unlike the watcher's single-flight guard this never DROPS a call:
+ *  joiners share the in-flight run's completion. A failed run clears the slot
+ *  so the next call retries. */
+export function coalesceRescue(run: () => Promise<void>): () => Promise<void> {
+  let inFlight: Promise<void> | null = null
+  return () => {
+    inFlight ??= run().finally(() => { inFlight = null })
+    return inFlight
+  }
+}
+
 export interface RequestHandlerOptions {
-  /** Called when /session/end sees a missing session — typically `() => runIndexer(db)`
-   *  — so a fresh-session hook can harvest after a forced reindex retry. */
+  /** Called when /session/end or /session/last sees a missing/stale session —
+   *  typically `coalesceRescue(() => runIndexer(db))` — so a fresh-session
+   *  caller can retry after a forced reindex. */
   rescueReindex?: () => Promise<void>
   /** Reported in /health; closure-captured so daemons installed from different
    *  package versions don't lie about which one is actually running. Defaults
@@ -228,8 +243,35 @@ export function createRequestHandler(
         return
       }
       const projectId = cwd.replace(/\//g, '-')
-      const last = db.getLastSession(projectId)
-      if (!last) {
+      // Staleness gate (#55): the wrapper passes notBefore=<its launch time>.
+      // A session whose endedAt predates the launch cannot be the one that
+      // just closed — returning it would extract the WRONG session. endedAt,
+      // not startedAt, so resumed sessions (old start, fresh messages) pass.
+      // Clamp: the wrapper only ever sends "now". A spoofed far-future value
+      // would mark every session permanently stale, forcing a full reindex on
+      // each call (local DoS). Beyond a small clock-skew allowance, treat it
+      // like an unparseable value (gate disabled). NaN fails the comparison,
+      // so unparseable input stays NaN.
+      const rawNotBeforeMs = Date.parse(url.searchParams.get('notBefore') ?? '')
+      const notBeforeMs = rawNotBeforeMs <= Date.now() + 60_000 ? rawNotBeforeMs : NaN
+      const isStale = (s: { endedAt: string | null }): boolean => {
+        if (Number.isNaN(notBeforeMs)) return false
+        const endedMs = s.endedAt ? Date.parse(s.endedAt) : NaN
+        return Number.isNaN(endedMs) || endedMs < notBeforeMs
+      }
+      let last = db.getLastSession(projectId)
+      if ((!last || isStale(last)) && opts.rescueReindex) {
+        // Fresh-session race (#55): the extraction wrapper queries within
+        // seconds of session close, before the watcher has indexed the fresh
+        // JSONL. Same rescue as /session/end — reindex once and retry.
+        try {
+          await opts.rescueReindex()
+        } catch (err) {
+          console.warn('[session-last] rescue reindex failed:', scrubErrorMessage(err))
+        }
+        last = db.getLastSession(projectId)
+      }
+      if (!last || isStale(last)) {
         sendJson(res, 404, { error: 'no sessions found for project' })
         return
       }

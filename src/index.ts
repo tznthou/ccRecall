@@ -3,6 +3,7 @@
 import path from 'node:path'
 import os from 'node:os'
 import { createServer } from './api/server.js'
+import { coalesceRescue } from './api/routes.js'
 import { Database } from './core/database.js'
 import { runIndexer } from './core/indexer.js'
 import { MemoryService } from './core/memory-service.js'
@@ -150,9 +151,11 @@ async function startDaemon(): Promise<void> {
 
   // Rescue reindex uses runIndexer directly (not watcher.runNow) so /session/end
   // gets deterministic execution instead of being dropped by watcher's single-
-  // flight guard when a scheduled scan is already inflight.
+  // flight guard when a scheduled scan is already inflight. coalesceRescue
+  // shares (never drops) the run when /session/end and /session/last both miss
+  // during the same session close.
   const server = createServer(db, {
-    rescueReindex: () => runIndexer(db),
+    rescueReindex: coalesceRescue(() => runIndexer(db)),
     version: readPackageVersion(),
     dbPath: DB_PATH,
     integrityMonitor,
