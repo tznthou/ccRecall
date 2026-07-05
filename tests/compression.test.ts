@@ -37,6 +37,7 @@ function candidate(overrides: Partial<CompressionCandidate> = {}): CompressionCa
     summaryText: null,
     intentText: null,
     sessionExists: false,
+    hasSiblingMemories: false,
     ...overrides,
   }
 }
@@ -180,6 +181,19 @@ describe('planTransition() — L1 content source', () => {
     expect(a.kind).toBe('compress')
     if (a.kind === 'compress') expect(a.newContent.endsWith('...')).toBe(true)
   })
+
+  it('falls back to truncation when the session has sibling memories (prevents duplicate collapse) — L1', () => {
+    const a = planTransition(candidate({
+      ageDays: 10, effectiveConfidence: 0.3, sessionId: 'sess-1', hasSiblingMemories: true,
+      summaryText: 'shared session summary',
+      content: "this memory's own distinct content " + 'x'.repeat(150),
+    }))
+    expect(a.kind).toBe('compress')
+    if (a.kind === 'compress') {
+      expect(a.newContent).not.toBe('shared session summary')
+      expect(a.newContent.startsWith("this memory's own distinct content")).toBe(true)
+    }
+  })
 })
 
 describe('planTransition() — L2 content source', () => {
@@ -216,6 +230,19 @@ describe('planTransition() — L2 content source', () => {
     if (a.kind === 'compress') {
       expect(a.newContent.endsWith('...')).toBe(true)
       expect(a.newContent.length).toBeLessThanOrEqual(83)
+    }
+  })
+
+  it('falls back to truncation when the session has sibling memories (prevents duplicate collapse) — L2', () => {
+    const a = planTransition(candidate({
+      compressionLevel: 1, ageDays: 40, sessionId: 'sess-1', hasSiblingMemories: true,
+      intentText: 'shared intent', summaryText: 'shared summary',
+      content: "this memory's own distinct content " + 'y'.repeat(100),
+    }))
+    expect(a.kind).toBe('compress')
+    if (a.kind === 'compress') {
+      expect(a.newContent).not.toBe('shared intent')
+      expect(a.newContent.startsWith("this memory's own distinct content")).toBe(true)
     }
   })
 })
@@ -361,6 +388,35 @@ describe('CompressionPipeline.runOnce() — end-to-end', () => {
       `SELECT content FROM memories WHERE id = ${id}`,
     )[0]
     expect(row.content).toBe('canonical summary')
+  })
+
+  it('two memories sharing a session compress to DISTINCT content, not collapsed duplicates', () => {
+    db.upsertProject('p4', 'P')
+    db.rawExec(`
+      INSERT INTO sessions (id, project_id, file_path, summary_text, intent_text)
+      VALUES ('s4', 'p4', '/tmp/s4.jsonl', 'shared session summary', 'shared session intent')
+    `)
+    db.saveMemory({
+      sessionId: 's4', messageId: null, type: 'discovery',
+      content: 'first distinct discovery ' + 'a'.repeat(200), confidence: 0.2,
+    })
+    db.saveMemory({
+      sessionId: 's4', messageId: null, type: 'pattern',
+      content: 'second distinct pattern ' + 'b'.repeat(200), confidence: 0.2,
+    })
+    db.rawExec(`UPDATE memories SET created_at = datetime('now', '-10 days') WHERE session_id = 's4'`)
+
+    const stats = pipe.runOnce()
+    expect(stats.compressed).toBe(2)
+
+    const rows = db.rawAll<{ id: number; content: string }>(
+      `SELECT id, content FROM memories WHERE session_id = 's4' ORDER BY id`,
+    )
+    expect(rows[0].content).not.toBe(rows[1].content)
+    expect(rows[0].content).not.toBe('shared session summary')
+    expect(rows[1].content).not.toBe('shared session summary')
+    expect(rows[0].content.startsWith('first distinct discovery')).toBe(true)
+    expect(rows[1].content.startsWith('second distinct pattern')).toBe(true)
   })
 
   it('session-backed memory with deleted session row falls back to truncation', () => {

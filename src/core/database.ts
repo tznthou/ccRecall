@@ -143,6 +143,7 @@ interface CompressionCandidateRow {
   summary_text: string | null
   intent_text: string | null
   session_exists: number
+  has_sibling_memories: number
 }
 
 /** Phase 4d: normalised shape consumed by the compression pipeline. */
@@ -160,6 +161,11 @@ export interface CompressionCandidate {
    *  False for manual memories (sessionId is null) or orphaned rows. Used by
    *  the compression pipeline to block irreversible auto-delete of orphans. */
   sessionExists: boolean
+  /** True when another memory shares this row's `sessionId`. `summary_text`/
+   *  `intent_text` describe the whole session, not one memory within it — reusing
+   *  them across siblings would collapse distinct memories into duplicates. The
+   *  pipeline falls back to per-memory truncation whenever this is true. */
+  hasSiblingMemories: boolean
 }
 
 function mapMemoryRow(r: MemoryRow): Memory {
@@ -2200,7 +2206,11 @@ export class Database {
    *
    *  LEFT JOIN sessions so session-backed memories whose session row was deleted
    *  (manual scrub of ~/.claude) still surface; the pipeline detects the NULL
-   *  summary and falls back to syntactic truncation, matching manual memories. */
+   *  summary and falls back to syntactic truncation, matching manual memories.
+   *
+   *  `session_memory_counts` counts memories per session so `has_sibling_memories`
+   *  can flag sessions with >1 memory (see hasSiblingMemories on
+   *  CompressionCandidate for why that matters). */
   getCompressionCandidates(limit: number): CompressionCandidate[] {
     // Only return rows that match at least one level's transition gates — ORDER
     // BY id ASC + LIMIT would otherwise stall on the first `batchSize` of rows
@@ -2212,18 +2222,26 @@ export class Database {
     // deleting an orphan is irreversible data loss since the source JSONL is
     // already gone.
     const rows = this.db.prepare(`
+      WITH session_memory_counts AS (
+        SELECT session_id, COUNT(*) AS memory_count
+        FROM memories
+        WHERE session_id IS NOT NULL
+        GROUP BY session_id
+      )
       SELECT id, session_id, content, compression_level, access_count,
              age_days, effective_confidence, summary_text, intent_text,
-             session_exists
+             session_exists, has_sibling_memories
       FROM (
         SELECT
           m.id, m.session_id, m.content, m.compression_level, m.access_count,
           (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) AS age_days,
           ${Database.EFFECTIVE_CONFIDENCE} AS effective_confidence,
           s.summary_text, s.intent_text,
-          CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS session_exists
+          CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS session_exists,
+          CASE WHEN COALESCE(smc.memory_count, 1) > 1 THEN 1 ELSE 0 END AS has_sibling_memories
         FROM memories m
         LEFT JOIN sessions s ON m.session_id = s.id
+        LEFT JOIN session_memory_counts smc ON smc.session_id = m.session_id
       )
       WHERE
         (compression_level = 0 AND age_days >= 7 AND access_count < 2 AND effective_confidence < 0.5)
@@ -2244,6 +2262,7 @@ export class Database {
       summaryText: r.summary_text,
       intentText: r.intent_text,
       sessionExists: r.session_exists === 1,
+      hasSiblingMemories: r.has_sibling_memories === 1,
     }))
   }
 

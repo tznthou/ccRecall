@@ -10,7 +10,9 @@ import { scrubErrorMessage } from './log-safe.js'
  * based on age, access, and effective confidence gates. Session-backed memories
  * sample `sessions.summary_text`/`intent_text` so L1/L2 content is derived from
  * the original source rather than repeatedly truncating a truncated string.
- * Manual memories and orphaned rows fall back to syntactic truncation.
+ * Manual memories, orphaned rows, and memories sharing a session with sibling
+ * memories (summary_text describes the whole session, not one memory within
+ * it) fall back to syntactic truncation.
  *
  * Auto-delete at L2 applies only to session-backed memories (`session_id IS NOT NULL`)
  * — a user's manual memory is treated as an explicit intent and capped at L2.
@@ -59,9 +61,11 @@ export function truncate(text: string, maxChars: number): string {
 
 function deriveL1Content(c: CompressionCandidate): string {
   // Session-backed: prefer the indexer-written summary as the compressed form.
-  // When the session row is missing (deleted manually, or pre-index race) fall
-  // through to syntactic truncation — matching the manual-memory path.
-  if (c.sessionId) {
+  // When the session row is missing (deleted manually, or pre-index race), or
+  // another memory shares this sessionId, fall through to syntactic truncation
+  // — summary_text is session-wide, so reusing it across sibling memories would
+  // collapse their distinct content into byte-identical duplicates.
+  if (c.sessionId && !c.hasSiblingMemories) {
     const summary = c.summaryText?.trim()
     if (summary) return summary
   }
@@ -69,7 +73,7 @@ function deriveL1Content(c: CompressionCandidate): string {
 }
 
 function deriveL2Content(c: CompressionCandidate): string {
-  if (c.sessionId) {
+  if (c.sessionId && !c.hasSiblingMemories) {
     const intent = c.intentText?.trim()
     if (intent) return intent
     const summary = c.summaryText?.trim()
