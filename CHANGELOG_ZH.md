@@ -8,7 +8,20 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
-## [0.4.6] — 2026-07-04
+## [0.4.7] — 2026-07-05
+
+### 修復
+
+- **壓縮把同 session 的多筆記憶塌縮成一模一樣的重複內容** — 壓縮
+  session-backed 記憶時，pipeline 會把內容改寫成所屬 session 的
+  `summary_text`（L1）或 `intent_text`（L2）。但這份摘要描述的是*整場
+  session*，當一個 session 產出多筆記憶時——post-session extraction 上線後
+  這是常態（有記憶的 session 中 86% 超過一筆）——每筆 sibling 都被改寫成同
+  一段 session 級文字。各自獨立的蒸餾事實塌縮成 byte-identical 副本，且壓
+  縮是就地覆寫，原始內容從資料庫中無法復原（生產環境確認 7 個 session 共
+  23 筆受害）。pipeline 現在只在該記憶是 session *唯一*一筆時才採用 session
+  摘要；有 siblings 時改為各自截斷自己的內容，保持彼此可區分。來源
+  transcript 還在的記憶，可對該 session 重跑 extraction 重建。
 
 ### 修復
 

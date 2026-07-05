@@ -11,7 +11,23 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
-## [0.4.6] — 2026-07-04
+## [0.4.7] — 2026-07-05
+
+### Fixed
+
+- **Compression collapsed sibling memories into identical duplicates** — when
+  compressing a session-backed memory, the pipeline rewrites its content from
+  the owning session's `summary_text` (L1) or `intent_text` (L2). That summary
+  describes the *whole session*, so when one session had produced several
+  memories — the common case since post-session extraction (86% of
+  memory-bearing sessions hold more than one) — every sibling was rewritten to
+  the same session-wide string. Distinct distilled facts collapsed into
+  byte-identical copies, and since compression updates in place, the originals
+  were unrecoverable from the database (23 rows across 7 sessions confirmed in
+  production). The pipeline now only adopts the session summary when the memory
+  is the session's *only* memory; siblings fall back to truncating their own
+  content, which keeps them distinct. Memories whose source transcript still
+  exists can be rebuilt by re-running extraction on that session.
 
 ### Fixed
 
