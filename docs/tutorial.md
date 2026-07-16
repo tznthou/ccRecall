@@ -17,7 +17,7 @@ If you want the deep mechanics, jump to "Going Deeper" at the end.
 This tutorial assumes you have:
 
 - **Claude Code CLI** installed ([official guide](https://docs.anthropic.com/claude-code) if not)
-- **macOS** for auto-start (Linux / Windows for the daemon itself is cross-platform; auto-start is Phase 5)
+- **macOS** for auto-start (Linux / Windows for the daemon itself is cross-platform; auto-start is planned for a future release)
 - **Node.js 20–22** (`node --version` to check)
 - Basic terminal comfort
 

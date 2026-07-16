@@ -105,5 +105,5 @@ launchctl load -w ~/Library/LaunchAgents/com.tznthou.ccrecall.plist
   ```
 - **Linux / Windows**
   `install-daemon` is macOS only. Linux users can run ccRecall under systemd
-  (example unit files in Phase 5), or just `nohup ccmem &` for a quick local
-  setup.
+  (example unit files planned for a future release), or just `nohup ccmem &`
+  for a quick local setup.

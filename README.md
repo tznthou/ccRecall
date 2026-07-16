@@ -305,7 +305,7 @@ Full manual-install, troubleshooting, and uninstall docs:
 [docs/launchd.md](docs/launchd.md).
 
 Linux/Windows equivalents (systemd unit, Windows service) are planned for
-Phase 5. For now, run under `nohup` or your process manager of choice.
+a future release. For now, run under `nohup` or your process manager of choice.
 
 ---
 

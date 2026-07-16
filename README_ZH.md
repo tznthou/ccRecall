@@ -300,7 +300,7 @@ installer 的行為：
 
 完整手動安裝、troubleshooting、uninstall 文件：[docs/launchd.md](docs/launchd.md)。
 
-Linux/Windows 對應版本（systemd unit、Windows service）列在 Phase 5。目前
+Linux/Windows 對應版本（systemd unit、Windows service）列在未來版本。目前
 Linux 可用 `nohup` 或自選 process manager。
 
 ---

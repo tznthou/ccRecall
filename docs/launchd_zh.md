@@ -96,4 +96,4 @@ launchctl load -w ~/Library/LaunchAgents/com.tznthou.ccrecall.plist
   launchctl load -w ~/Library/LaunchAgents/com.tznthou.ccrecall.plist
   ```
 - **Linux / Windows**
-  `install-daemon` 只支援 macOS。Linux 使用者可以用 systemd 跑 ccRecall（unit file 範例會在 Phase 5），或想簡單測試就 `nohup ccmem &`。
+  `install-daemon` 只支援 macOS。Linux 使用者可以用 systemd 跑 ccRecall（unit file 範例列在未來版本），或想簡單測試就 `nohup ccmem &`。

@@ -17,7 +17,7 @@ ccRecall 就是幫 Claude 裝記憶的小幫手。它讀你跟 Claude Code 的�
 這份教學假設你：
 
 - 裝好 **Claude Code CLI**（沒裝看 [官方指南](https://docs.anthropic.com/claude-code)）
-- **macOS**（Linux 和 Windows 的 auto-start 是 Phase 5，但手動跑 daemon 本身跨平台）
+- **macOS**（Linux 和 Windows 的 auto-start 列在未來版本，但手動跑 daemon 本身跨平台）
 - **Node.js 20–22**（`node --version` 確認）
 - 能用 terminal
 
