@@ -30,7 +30,9 @@ unset _ccrecall_src
 
 ccrecall-extract() {
   local project_id
-  project_id=$(echo "$PWD" | sed 's|/|-|g')
+  # printf for the same reason as session_id below: zsh's echo mangles
+  # backslash sequences, and $PWD is arbitrary user input.
+  project_id=$(printf '%s' "$PWD" | sed 's|/|-|g')
 
   # ── Trust pre-flight ──
   # ccrecall-extract always launches claude with --dangerously-skip-permissions, which
@@ -75,7 +77,12 @@ ccrecall-extract() {
   session_meta=$(curl -sf "http://127.0.0.1:${CCRECALL_PORT}/session/last?cwd=$(printf '%s' "$PWD" | jq -sRr @uri)&notBefore=${launch_ts}" 2>/dev/null)
   local session_id=""
   if [[ -n "$session_meta" ]]; then
-    session_id=$(echo "$session_meta" | jq -r '.sessionId // empty' 2>/dev/null)
+    # printf, NOT echo: zsh's echo expands escape sequences, so a title
+    # containing a JSON-escaped \n becomes a literal newline inside the JSON
+    # string — jq then fails to parse and session_id stays empty, silently
+    # skipping extraction for ~1 in 5 sessions (any title with a newline,
+    # e.g. every cmux "/model" opener). Root-caused 2026-07-16.
+    session_id=$(printf '%s' "$session_meta" | jq -r '.sessionId // empty' 2>/dev/null)
   fi
 
   # Load the structured prompt
