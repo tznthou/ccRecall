@@ -46,7 +46,7 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/cc
 | **Trust two-tier** (v0.3.0) | Hooks write to a low-trust `session_journal` (reviewable, never recalled directly); manual `recall_save` writes high-trust `memories`. Promote candidates with `ccmem promote <id>`; rejected entries auto-clear after 7 days |
 | **Cross-project memory** (v0.4.1) | Memories surface across projects via topic intersection — if two projects share a `knowledge_map` topic, high-confidence memories from one appear in the other's startup injection (max 3 rows, confidence ≥ 0.8 gate) |
 | **Watch mode** | chokidar-based JSONL watcher picks up new sessions within 2 s; periodic 10 min full-resync covers missed filesystem events |
-| **Rescue reindex** | `/session/end` retries a reindex on cache miss — no fresh-session race between the hook and the daemon |
+| **Rescue reindex** | `/session/end` and `/session/last` both retry a reindex on miss, and `/session/last` staleness-gates via `notBefore` — no fresh-session race between the hook, the wrapper, and the daemon |
 | **Auto-start (macOS)** | `ccmem install-daemon` registers a LaunchAgent so the service stays up across reboots |
 | **Read-only** | Never modifies `~/.claude/` — only reads JSONL logs |
 
@@ -61,23 +61,63 @@ flowchart TB
     end
 
     subgraph Core["ccRecall Service (port 7749)"]
+        Watcher["Watcher<br/>chokidar, 2 s debounce"]
         Scanner["Scanner<br/>find JSONL files"]
         Parser["Parser<br/>parse conversations"]
         Summarizer["Summarizer<br/>rule-based extraction"]
-        DB["SQLite + FTS5<br/>index & search"]
-        API["HTTP API<br/>12 endpoints"]
+        DB[("SQLite + FTS5<br/>index & search")]
+        API["HTTP API<br/>13 endpoints"]
     end
 
-    subgraph Consumers["Context Injection"]
+    subgraph Consumers["Consumers"]
         Hook["Claude Code Hooks<br/>SessionStart / SessionEnd"]
+        Wrapper["Extraction wrapper<br/>post-session Haiku pass"]
         MCP["MCP Server<br/>recall_query / recall_save"]
     end
 
-    JSONL --> Scanner --> Parser --> Summarizer --> DB
-    DB --> API
-    API --> Hook
-    API --> MCP
+    JSONL --> Watcher --> Scanner --> Parser --> Summarizer --> DB
+    DB <--> API
+    Hook -->|"inject / journal"| API
+    Wrapper -->|"GET /session/last"| API
+    MCP <-->|"shared SQLite via WAL"| DB
 ```
+
+Arrows point in the direction of the call: hooks and the extraction wrapper talk to the daemon over HTTP, while the MCP server is a separate process that opens the same SQLite file directly (WAL mode) — it never goes through the HTTP API.
+
+### Session lifecycle
+
+How the two timing-sensitive ends of a session actually flow:
+
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code
+    participant H as Hooks
+    participant R as ccRecall
+    participant W as Wrapper
+    participant X as Haiku extractor
+
+    rect rgb(235, 244, 255)
+    Note over CC,R: Session start
+    CC->>H: SessionStart
+    H->>R: GET /memory/startup
+    R-->>H: 3-tier memory pick (< 300 tokens)
+    H-->>CC: inject into context
+    end
+
+    Note over CC,R: During the session, the watcher<br/>reindexes JSONL writes (2 s debounce)
+
+    rect rgb(255, 244, 235)
+    Note over CC,X: Session end
+    CC->>H: SessionEnd
+    H->>R: POST /session/end (low-trust journal)
+    W->>R: GET /session/last?notBefore=launch_ts
+    R-->>W: sessionId (staleness-gated, subagent-filtered)
+    W->>X: text-only transcript
+    X->>R: recall_save × 0–5 (via MCP)
+    end
+```
+
+The `notBefore` gate keeps a stale session from being extracted twice; the subagent filter keeps an Agent-tool side-session from shadowing the real one. Both guards exist because the wrapper queries within seconds of session close, racing the watcher.
 
 ---
 
@@ -90,7 +130,7 @@ flowchart TB
 | FTS5 | Full-text search | Built into SQLite, trigram tokenizer with LIKE fallback for short CJK / mixed-script queries |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
 | chokidar | Filesystem watcher | Cross-platform JSONL change detection with 2 s debounce + single-flight |
-| vitest | Testing | 608 tests across 38 files, integration-style |
+| vitest | Testing | 629 tests across 39 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
@@ -337,7 +377,7 @@ ccRecall/
 │   ├── tutorial.md               # End-user walkthrough (install → MCP → usage)
 │   ├── architecture.md           # Daemon design rationale (contributor-oriented)
 │   └── launchd.md                # macOS LaunchAgent install/troubleshoot
-├── tests/                        # 608 tests across 38 files (parser, scanner,
+├── tests/                        # 629 tests across 39 files (parser, scanner,
 │   │                             # summarizer, database, indexer, e2e, MCP,
 │   │                             # memories, hooks, watcher, CLI, migrations,
 │   │                             # FTS5 CJK edge cases, integrity monitor,

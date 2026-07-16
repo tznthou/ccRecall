@@ -46,7 +46,7 @@ ccRecall 是 [ccRewind](https://github.com/tznthou/ccRewind)（對話回放 GUI�
 | **Trust 二層**（v0.3.0） | Hook 寫入 low-trust `session_journal`（可審閱、不被 recall）；manual `recall_save` 寫 high-trust `memories`。用 `ccmem promote <id>` 升級候選；reject 後 7 天 TTL 自動清 |
 | **跨專案記憶**（v0.4.1） | 記憶透過 topic intersection 跨專案浮出——若兩個專案的 `knowledge_map` 有共同 topic，高信心記憶會出現在另一個專案的 startup injection（最多 3 條，confidence ≥ 0.8 gate） |
 | **Watch mode** | 基於 chokidar 的 JSONL watcher 在 2 秒內偵測新 session；每 10 分鐘 full-resync 補救 FS 事件漏接 |
-| **Rescue reindex** | `/session/end` 遇到 cache miss 時會重 index 再試一次——hook 和 daemon 間不會有 fresh-session race |
+| **Rescue reindex** | `/session/end` 和 `/session/last` 都會在 miss 時重 index 再試一次，`/session/last` 另有 `notBefore` staleness gate——hook、wrapper、daemon 三方不會有 fresh-session race |
 | **macOS 自動啟動** | `ccmem install-daemon` 安裝 LaunchAgent，重開機自動復原服務 |
 | **純唯讀** | 絕不修改 `~/.claude/`——只讀取 JSONL 記錄 |
 
@@ -61,23 +61,63 @@ flowchart TB
     end
 
     subgraph Core["ccRecall 服務（port 7749）"]
+        Watcher["Watcher<br/>chokidar，2 秒 debounce"]
         Scanner["Scanner<br/>掃描 JSONL 檔案"]
         Parser["Parser<br/>解析對話"]
         Summarizer["Summarizer<br/>規則式萃取"]
-        DB["SQLite + FTS5<br/>索引與搜尋"]
-        API["HTTP API<br/>12 個端點"]
+        DB[("SQLite + FTS5<br/>索引與搜尋")]
+        API["HTTP API<br/>13 個端點"]
     end
 
-    subgraph Consumers["Context 注入"]
+    subgraph Consumers["使用端"]
         Hook["Claude Code Hooks<br/>SessionStart / SessionEnd"]
+        Wrapper["Extraction wrapper<br/>session 結束後的 Haiku 抽取"]
         MCP["MCP Server<br/>recall_query / recall_save"]
     end
 
-    JSONL --> Scanner --> Parser --> Summarizer --> DB
-    DB --> API
-    API --> Hook
-    API --> MCP
+    JSONL --> Watcher --> Scanner --> Parser --> Summarizer --> DB
+    DB <--> API
+    Hook -->|"注入 / journal"| API
+    Wrapper -->|"GET /session/last"| API
+    MCP <-->|"WAL 模式共用 SQLite"| DB
 ```
+
+箭頭方向代表「誰呼叫誰」：hooks 和 extraction wrapper 走 HTTP 找 daemon；MCP server 則是獨立進程，直接開同一個 SQLite 檔（WAL 模式）——完全不經過 HTTP API。
+
+### Session 生命週期
+
+一個 session 頭尾兩端（都是跟時間賽跑的環節）實際怎麼跑：
+
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code
+    participant H as Hooks
+    participant R as ccRecall
+    participant W as Wrapper
+    participant X as Haiku 抽取器
+
+    rect rgb(235, 244, 255)
+    Note over CC,R: Session 開始
+    CC->>H: SessionStart
+    H->>R: GET /memory/startup
+    R-->>H: 三層記憶挑選（< 300 tokens）
+    H-->>CC: 注入 context
+    end
+
+    Note over CC,R: Session 進行中，watcher 持續<br/>增量索引 JSONL（2 秒 debounce）
+
+    rect rgb(255, 244, 235)
+    Note over CC,X: Session 結束
+    CC->>H: SessionEnd
+    H->>R: POST /session/end（低信任 journal）
+    W->>R: GET /session/last?notBefore=launch_ts
+    R-->>W: sessionId（過 staleness gate、濾掉 subagent）
+    W->>X: 純文字 transcript
+    X->>R: recall_save × 0–5 筆（經 MCP）
+    end
+```
+
+`notBefore` gate 擋掉「抽到上一個舊 session」的重複抽取；subagent 過濾擋掉 Agent tool 側線 session 蓋台。這兩道防線存在的原因是同一個：wrapper 在 session 關閉後幾秒內就查詢，跟 watcher 的索引在賽跑。
 
 ---
 
@@ -90,7 +130,7 @@ flowchart TB
 | FTS5 | 全文搜尋 | SQLite 內建、trigram tokenizer，短 token / 中英混合查詢透過 LIKE fallback 補齊 |
 | 原生 `http` | HTTP 伺服器 | 不用 Express——最小表面積、僅 localhost |
 | chokidar | 檔案系統 watcher | 跨平台 JSONL 變動偵測，2 秒 debounce + single-flight |
-| vitest | 測試 | 608 個測試（38 檔案）、整合式風格 |
+| vitest | 測試 | 629 個測試（39 檔案）、整合式風格 |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport，透過 WAL 共用 SQLite |
 
 ---
@@ -330,7 +370,7 @@ ccRecall/
 │   ├── tutorial_zh.md                # 使用者教學（安裝 → MCP → 日常使用）
 │   ├── architecture_zh.md            # Daemon 設計取捨（給 contributor 看）
 │   └── launchd.md                    # macOS LaunchAgent 安裝/troubleshoot
-├── tests/                            # 608 個測試橫跨 38 檔案（parser、scanner、
+├── tests/                            # 629 個測試橫跨 39 檔案（parser、scanner、
 │   │                                 # summarizer、database、indexer、e2e、MCP、
 │   │                                 # memories、hooks、watcher、CLI、migrations、
 │   │                                 # FTS5 CJK edge cases、integrity monitor、
