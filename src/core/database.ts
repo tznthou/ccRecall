@@ -3,8 +3,20 @@ import BetterSqlite3 from 'better-sqlite3'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, SessionCheckpoint, JournalEntry, JournalEntryInput, JournalEntryPreview, JournalStatus } from './types.js'
+import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
+
+/** 64-bit signed hash for message_uuids (v24 dual-hash schema). First 8 bytes
+ *  of SHA-256 read as a signed BigInt — exactly the SQLite INTEGER range, so
+ *  uuid_hash doubles as the rowid (zero autoindex). Collision odds at ~400k
+ *  rows ≈ 4e-9; a collision merely makes one replayed message skip indexing.
+ *
+ *  ⚠️ Reading these values back REQUIRES `.safeIntegers(true)` on the statement:
+ *  better-sqlite3 otherwise returns a lossy JS number for |v| > 2^53 and any
+ *  Map<bigint, …> reverse lookup silently misses (dedup would silently die). */
+export function hash64(s: string): bigint {
+  return createHash('sha256').update(s).digest().readBigInt64BE(0)
+}
 
 /** 寫入 memories 時使用的參數型別 */
 export interface MemoryInput {
@@ -64,7 +76,6 @@ export interface IndexSessionParams {
   tags?: string | null
   filesTouched?: string | null
   toolsUsed?: string | null
-  harvestText?: string | null
   sessionFiles?: SessionFileInput[]
   messages: MessageInput[]
 }
@@ -72,7 +83,7 @@ export interface IndexSessionParams {
 /** sessions 資料表的完整欄位 SELECT 子句（getSessions / getSessionById 共用） */
 const SESSION_SELECT_COLUMNS = `id, project_id, title, message_count, started_at, ended_at, archived,
        summary_text, intent_text, outcome_status, duration_seconds, active_duration_seconds, summary_version,
-       tags, files_touched, tools_used, total_input_tokens, total_output_tokens, harvest_text`
+       tags, files_touched, tools_used, total_input_tokens, total_output_tokens`
 
 interface SessionRow {
   id: string
@@ -93,7 +104,6 @@ interface SessionRow {
   tools_used: string | null
   total_input_tokens: number | null
   total_output_tokens: number | null
-  harvest_text: string | null
 }
 
 function mapSessionRow(r: SessionRow): SessionMeta {
@@ -116,7 +126,6 @@ function mapSessionRow(r: SessionRow): SessionMeta {
     toolsUsed: r.tools_used,
     totalInputTokens: r.total_input_tokens,
     totalOutputTokens: r.total_output_tokens,
-    harvestText: r.harvest_text,
   }
 }
 
@@ -194,78 +203,6 @@ function mapTopicRow(r: TopicRow): Topic {
     projectId: r.project_id,
     mentionCount: r.mention_count,
     lastTouched: r.last_touched,
-  }
-}
-
-interface CheckpointRow {
-  id: number
-  session_id: string
-  project_id: string
-  snapshot_text: string
-  created_at: string
-}
-
-function mapCheckpointRow(r: CheckpointRow): SessionCheckpoint {
-  return {
-    id: r.id,
-    sessionId: r.session_id,
-    projectId: r.project_id,
-    snapshotText: r.snapshot_text,
-    createdAt: r.created_at,
-  }
-}
-
-interface JournalRow {
-  id: number
-  session_id: string | null
-  message_id: string | null
-  content: string
-  content_hash: string
-  score: number
-  reasons_json: string | null
-  status: string
-  expires_at: string | null
-  promoted_memory_id: number | null
-  project_id: string | null
-  created_at: string
-}
-
-function mapJournalRow(r: JournalRow): JournalEntry {
-  return {
-    id: r.id,
-    sessionId: r.session_id,
-    messageId: r.message_id,
-    content: r.content,
-    contentHash: r.content_hash,
-    score: r.score,
-    reasonsJson: r.reasons_json,
-    status: r.status as JournalStatus,
-    expiresAt: r.expires_at,
-    promotedMemoryId: r.promoted_memory_id,
-    projectId: r.project_id,
-    createdAt: r.created_at,
-  }
-}
-
-interface JournalPreviewRow {
-  id: number
-  session_id: string | null
-  score: number
-  reasons_json: string | null
-  content_preview: string
-  project_id: string | null
-  created_at: string
-}
-
-function mapJournalPreviewRow(r: JournalPreviewRow): JournalEntryPreview {
-  return {
-    id: r.id,
-    sessionId: r.session_id,
-    score: r.score,
-    reasonsJson: r.reasons_json,
-    contentPreview: r.content_preview,
-    projectId: r.project_id,
-    createdAt: r.created_at,
   }
 }
 
@@ -861,6 +798,54 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 24,
+    description: 'knife-field (v0.5.0): drop session_journal/session_checkpoints/sessions.harvest_text; rebuild message_uuids as dual 64-bit hash (73.6MB → ~14MB)',
+    up: (db) => {
+      // Dead-pipeline tables — the journal DLQ recorded 0 promotions in its
+      // entire history (2026-06-10 audit) and /session/checkpoint had no caller.
+      db.exec(`
+        DROP TABLE IF EXISTS session_journal;
+        DROP TABLE IF EXISTS session_checkpoints;
+      `)
+
+      const sessionCols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+      if (sessionCols.some(c => c.name === 'harvest_text')) {
+        db.exec('ALTER TABLE sessions DROP COLUMN harvest_text;')
+      }
+
+      // message_uuids: TEXT uuid PK (36 chars ×3 b-trees) → dual 64-bit hash.
+      // uuid_hash INTEGER PRIMARY KEY is the rowid alias — zero autoindex.
+      // Skip when already dual-hash (idempotency; also covers a repaired DB
+      // where initSchema recreated the table in its final shape).
+      const uuidCols = db.prepare('PRAGMA table_info(message_uuids)').all() as Array<{ name: string }>
+      if (uuidCols.some(c => c.name === 'uuid_hash')) return
+
+      db.exec(`
+        CREATE TABLE message_uuids_new (
+          uuid_hash    INTEGER PRIMARY KEY,
+          session_hash INTEGER NOT NULL
+        );
+      `)
+      // JS-side rehash: hash64 lives here, not in SQLite. ~400k rows over the
+      // sync API completes in seconds. INSERT OR IGNORE keeps first-writer-wins
+      // on the astronomically unlikely 64-bit collision.
+      const insert = db.prepare(
+        'INSERT OR IGNORE INTO message_uuids_new (uuid_hash, session_hash) VALUES (?, ?)',
+      )
+      const rows = db.prepare(
+        'SELECT uuid, session_id FROM message_uuids',
+      ).all() as Array<{ uuid: string; session_id: string }>
+      for (const r of rows) {
+        insert.run(hash64(r.uuid), hash64(r.session_id))
+      }
+      db.exec(`
+        DROP TABLE message_uuids;
+        ALTER TABLE message_uuids_new RENAME TO message_uuids;
+        CREATE INDEX idx_message_uuids_session ON message_uuids(session_hash);
+      `)
+    },
+  },
 ]
 
 export class Database {
@@ -1093,14 +1078,24 @@ export class Database {
         `)
       }
     } else {
-      // v20+ baseline — message_uuids carries the UUID dedup set.
+      // v20+ baseline — message_uuids carries the UUID dedup set. DDL is the
+      // v24 dual-hash shape: on a v20–v23 DB the table already exists so this
+      // is a no-op (v24 migration handles the rebuild); it only materialises
+      // when repairing a DB whose table went missing, and then the v24
+      // migration's shape check skips the rebuild.
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS message_uuids (
-          uuid TEXT PRIMARY KEY,
-          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE
+          uuid_hash    INTEGER PRIMARY KEY,
+          session_hash INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_message_uuids_session ON message_uuids(session_id);
       `)
+      // Index only when the table is dual-hash: a v20–v23 table awaiting the
+      // v24 rebuild has no session_hash column, and indexing it here would
+      // throw. The rebuild recreates the index itself.
+      const uuidCols = this.db.prepare('PRAGMA table_info(message_uuids)').all() as Array<{ name: string }>
+      if (uuidCols.some(c => c.name === 'session_hash')) {
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_message_uuids_session ON message_uuids(session_hash);')
+      }
     }
   }
 
@@ -1201,11 +1196,15 @@ export class Database {
   }
 
   getSessions(projectId: string): SessionMeta[] {
+    // instr(id,'/') mirrors getLastSession's registry-timing guard (v0.4.8):
+    // a subagent row can momentarily lack its subagent_sessions registration,
+    // and composite "<parent>/agent-…" ids are never main sessions.
     const rows = this.db.prepare(
       `SELECT ${SESSION_SELECT_COLUMNS}
        FROM sessions
        WHERE project_id = ?
          AND id ${Database.EXCLUDE_SUBAGENTS}
+         AND instr(id, '/') = 0
        ORDER BY started_at DESC`,
     ).all(projectId) as SessionRow[]
 
@@ -1336,11 +1335,12 @@ export class Database {
     this.db.prepare('DELETE FROM subagent_sessions WHERE parent_session_id = ?').run(parentSessionId)
   }
 
-  /** 刪除單一 subagent session（session_files / message_uuids 會經 FK CASCADE 清除） */
+  /** 刪除單一 subagent session。v24: message_uuids 無 FK CASCADE，手動清除。 */
   deleteSubagentSession(subagentId: string): void {
     const doDelete = this.db.transaction(() => {
       this.db.prepare('DELETE FROM session_files WHERE session_id = ?').run(subagentId)
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(subagentId)
+      this.db.prepare('DELETE FROM message_uuids WHERE session_hash = ?').run(hash64(subagentId))
       this.db.prepare('DELETE FROM subagent_sessions WHERE id = ?').run(subagentId)
     })
     doDelete()
@@ -1370,16 +1370,27 @@ export class Database {
 
   // ── UUID dedup helper ──
 
-  /** 查詢 DB 中已存在的 uuid（用於跨 session 去重 resumed session replay） */
+  /** 查詢 DB 中已存在的 uuid（用於跨 session 去重 resumed session replay）。
+   *  v24: message_uuids 只存 64-bit hash，查詢以 hash 比對、以 Map 反查還原
+   *  原 uuid — 簽名與回傳不變，indexer 端零改動。 */
   getExistingUuids(uuids: string[], excludeSessionId: string): Set<string> {
     const result = new Set<string>()
+    const excludeHash = hash64(excludeSessionId)
     for (let i = 0; i < uuids.length; i += 500) {
       const chunk = uuids.slice(i, i + 500)
-      const placeholders = chunk.map(() => '?').join(',')
+      const byHash = new Map<bigint, string>()
+      for (const u of chunk) byHash.set(hash64(u), u)
+      const hashes = [...byHash.keys()]
+      const placeholders = hashes.map(() => '?').join(',')
+      // safeIntegers is load-bearing: without it uuid_hash values beyond 2^53
+      // come back as lossy numbers and the Map lookup misses every row.
       const rows = this.db.prepare(
-        `SELECT uuid FROM message_uuids WHERE session_id != ? AND uuid IN (${placeholders})`,
-      ).all(excludeSessionId, ...chunk) as Array<{ uuid: string }>
-      for (const r of rows) result.add(r.uuid)
+        `SELECT uuid_hash FROM message_uuids WHERE session_hash != ? AND uuid_hash IN (${placeholders})`,
+      ).safeIntegers(true).all(excludeHash, ...hashes) as Array<{ uuid_hash: bigint }>
+      for (const r of rows) {
+        const uuid = byHash.get(r.uuid_hash)
+        if (uuid !== undefined) result.add(uuid)
+      }
     }
     return result
   }
@@ -1398,6 +1409,10 @@ export class Database {
       }
       this.db.prepare('DELETE FROM session_files WHERE session_id = ?').run(params.sessionId)
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(params.sessionId)
+      // v24: message_uuids no longer has an FK to sessions (hash columns can't
+      // reference TEXT ids) — clear this session's registrations manually so a
+      // reindex re-registers from scratch instead of stacking stale hashes.
+      this.db.prepare('DELETE FROM message_uuids WHERE session_hash = ?').run(hash64(params.sessionId))
       this.upsertProject(params.projectId, params.projectDisplayName)
       // 計算 token 彙總
       let totalInput = 0
@@ -1409,8 +1424,8 @@ export class Database {
       const insertResult = this.db.prepare(`
         INSERT INTO sessions (id, project_id, title, message_count, file_path, file_size, file_mtime, started_at, ended_at,
           summary_text, intent_text, outcome_status, outcome_signals, duration_seconds, active_duration_seconds, summary_version,
-          tags, files_touched, tools_used, total_input_tokens, total_output_tokens, harvest_text)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          tags, files_touched, tools_used, total_input_tokens, total_output_tokens)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         params.sessionId, params.projectId, params.title, params.messageCount,
         params.filePath, params.fileSize, params.fileMtime,
@@ -1421,7 +1436,6 @@ export class Database {
         params.tags ?? null,
         params.filesTouched ?? null, params.toolsUsed ?? null,
         totalInput || null, totalOutput || null,
-        params.harvestText ?? null,
       )
       // 新增 sessions_fts 條目（用 INSERT 回傳的 rowid 避免多餘查詢）
       this.db.prepare(
@@ -1437,14 +1451,16 @@ export class Database {
           insertFile.run(params.sessionId, f.filePath, f.operation, f.count, f.firstSeenSeq, f.lastSeenSeq)
         }
       }
-      // message_uuids: 寫入 uuid 登記表，供跨 session replay dedup 查詢。
-      // 舊 session row 已由上面的 DELETE FROM sessions 透過 FK CASCADE 自動清除。
+      // message_uuids: 寫入 uuid 登記表（雙 hash），供跨 session replay dedup 查詢。
+      // 舊登記已在本 transaction 開頭手動 DELETE。INSERT OR IGNORE 保持「先寫者
+      // 擁有 uuid」語義（uuid_hash 為 PK；他 session 已登記或本 session 重複皆略過）。
       const insertUuid = this.db.prepare(
-        'INSERT OR IGNORE INTO message_uuids (uuid, session_id) VALUES (?, ?)',
+        'INSERT OR IGNORE INTO message_uuids (uuid_hash, session_hash) VALUES (?, ?)',
       )
+      const sessionHash = hash64(params.sessionId)
       for (const m of params.messages) {
         if (m.uuid != null) {
-          insertUuid.run(m.uuid, params.sessionId)
+          insertUuid.run(hash64(m.uuid), sessionHash)
         }
       }
     })
@@ -1798,122 +1814,6 @@ export class Database {
       key,
     )
     return Number(info.lastInsertRowid)
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // session_journal DAO (issue #21 P1)
-  // 低信任 harvest 候選的寫入入口; manual recall_save 仍走 saveMemory()。
-  //
-  // Trust boundary: queryMemories / getMemoriesByTopics 故意只查 memories table,
-  // 不 union session_journal — unpromoted journal entries 是 low-trust,不該污染
-  // recall 結果。promote 路徑 (C4) 把 journal entry 搬到 memories 後才會被 recall
-  // 看到。若未來修改 query 邏輯需動到 journal,務必保持這條 invariant。
-  // ─────────────────────────────────────────────────────────────
-
-  /** 寫入 journal 條目。content_hash 內部以 SHA-256 計算; 同 hash 第二次 INSERT
-   *  會被 UNIQUE INDEX 擋下並回傳 0 (idempotency)。
-   *
-   *  注意: better-sqlite3 的 INSERT OR IGNORE 在 IGNORE'd 時, lastInsertRowid
-   *  不會歸零 (保留前次成功 insert 的 rowid)。所以用 info.changes 判 dedup。 */
-  saveJournalEntry(input: JournalEntryInput): number {
-    const hash = createHash('sha256').update(input.content).digest('hex')
-    const info = this.db.prepare(`
-      INSERT OR IGNORE INTO session_journal
-        (session_id, message_id, content, content_hash, score, reasons_json, project_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      input.sessionId ?? null,
-      input.messageId ?? null,
-      input.content,
-      hash,
-      input.score,
-      input.reasonsJson ?? null,
-      input.projectId ?? null,
-    )
-    return info.changes === 0 ? 0 : Number(info.lastInsertRowid)
-  }
-
-  /** 給 /health endpoint 用; promotion path manual-only,user 看 pending 數決定是否 invoke。 */
-  getJournalPendingCount(): number {
-    const row = this.db.prepare(
-      "SELECT COUNT(*) AS c FROM session_journal WHERE status = 'pending'",
-    ).get() as { c: number }
-    return row.c
-  }
-
-  getJournalEntry(id: number): JournalEntry | null {
-    const row = this.db.prepare(`
-      SELECT id, session_id, message_id, content, content_hash, score,
-             reasons_json, status, expires_at, promoted_memory_id,
-             project_id, created_at
-      FROM session_journal WHERE id = ?
-    `).get(id) as JournalRow | undefined
-    return row ? mapJournalRow(row) : null
-  }
-
-  /** 升級 journal entry 為 promoted; caller 已透過 saveMemory 寫入 memories table
-   *  並拿到 memoryId,本方法只更新 journal 的 status + 回填 promoted_memory_id。
-   *  回 false 表示 entry 不存在或已不在 'pending' 狀態 (idempotent)。 */
-  promoteJournalEntry(id: number, memoryId: number): boolean {
-    const info = this.db.prepare(`
-      UPDATE session_journal
-      SET status = 'promoted', promoted_memory_id = ?
-      WHERE id = ? AND status = 'pending'
-    `).run(memoryId, id)
-    return info.changes > 0
-  }
-
-  /** List pending journal entries (newest first) with content preview for
-   *  surfacing on the manual promotion path. content 截 200 chars 避免 response
-   *  blob 過大; caller 想看完整內容可走 promote 看 memories 或直接 sqlite3。 */
-  getPendingJournalEntries(limit: number): JournalEntryPreview[] {
-    const cappedLimit = Math.min(Math.max(limit, 1), 100)
-    const rows = this.db.prepare(`
-      SELECT id, session_id, score, reasons_json,
-             substr(content, 1, 200) AS content_preview,
-             project_id, created_at
-      FROM session_journal
-      WHERE status = 'pending'
-      ORDER BY created_at DESC, id DESC
-      LIMIT ?
-    `).all(cappedLimit) as JournalPreviewRow[]
-    return rows.map(mapJournalPreviewRow)
-  }
-
-  /** 標記 entry 為 rejected, expires_at 設為 now+7d (decay sweep 才真的刪除)。
-   *  caller 傳 expiresAt ISO string; 回 false 表示 entry 不存在或非 pending。 */
-  rejectJournalEntry(id: number, expiresAt: string): boolean {
-    const info = this.db.prepare(`
-      UPDATE session_journal
-      SET status = 'rejected', expires_at = ?
-      WHERE id = ? AND status = 'pending'
-    `).run(expiresAt, id)
-    return info.changes > 0
-  }
-
-  /** Decay sweep (P1 step 7):
-   *   - rejected entries past expires_at → DELETE
-   *   - pending entries older than 30 days → DELETE
-   *  promoted entries 留著作 audit trail (有 promoted_memory_id 指 memories.id)。
-   *  manual memories 在 memories table,本方法完全不碰。 */
-  sweepJournal(now: Date = new Date()): { rejectedDeleted: number; pendingDeleted: number } {
-    const nowIso = now.toISOString()
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
-
-    const rejectedInfo = this.db.prepare(`
-      DELETE FROM session_journal
-      WHERE status = 'rejected' AND expires_at IS NOT NULL AND expires_at < ?
-    `).run(nowIso)
-
-    const pendingInfo = this.db.prepare(`
-      DELETE FROM session_journal
-      WHERE status = 'pending' AND created_at < ?
-    `).run(thirtyDaysAgo)
-
-    return {
-      rejectedDeleted: rejectedInfo.changes,
-      pendingDeleted: pendingInfo.changes,
-    }
   }
 
   queryMemories(query: string, limit: number, projectId?: string | null): Memory[] {
@@ -2370,28 +2270,6 @@ export class Database {
     run()
   }
 
-  private static readonly TOPIC_ORDER_BY: Record<'mention' | 'recent' | 'stale', string> = {
-    mention: 'mention_count DESC, last_touched DESC',
-    recent: 'last_touched DESC',
-    stale: 'last_touched ASC',
-  }
-
-  getKnowledgeMap(
-    projectId: string,
-    opts: { limit?: number; sortBy?: 'mention' | 'recent' | 'stale' } = {},
-  ): Topic[] {
-    const { limit = 50, sortBy = 'mention' } = opts
-    const cappedLimit = Math.min(limit, 500)
-    const rows = this.db.prepare(`
-      SELECT topic_key, project_id, mention_count, last_touched
-      FROM knowledge_map
-      WHERE project_id = ?
-      ORDER BY ${Database.TOPIC_ORDER_BY[sortBy]}
-      LIMIT ?
-    `).all(projectId, cappedLimit) as TopicRow[]
-    return rows.map(mapTopicRow)
-  }
-
   getMemoriesByTopics(projectId: string, topicKeys: string[], limit: number): Memory[] {
     if (topicKeys.length === 0) return []
     const cappedLimit = Math.min(limit, 100)
@@ -2433,69 +2311,4 @@ export class Database {
     return row ? mapTopicRow(row) : null
   }
 
-  /** 共現 topics（與目標共享 session 或 memory），按共現次數排序。
-      project_id 透過 JOIN sessions 決定，避免 memory_topics 過時的 project_id 汙染。 */
-  getRelatedTopics(topicKey: string, projectId: string, limit: number): string[] {
-    const cappedLimit = Math.min(limit, 50)
-    const rows = this.db.prepare(`
-      SELECT k, COUNT(*) AS c FROM (
-        SELECT st2.topic_key AS k
-        FROM session_topics st1
-        JOIN session_topics st2 ON st1.session_id = st2.session_id AND st2.topic_key != st1.topic_key
-        JOIN sessions s ON s.id = st1.session_id
-        WHERE st1.topic_key = ? AND s.project_id = ? AND s.id ${Database.EXCLUDE_SUBAGENTS}
-        UNION ALL
-        SELECT mt2.topic_key AS k
-        FROM memory_topics mt1
-        JOIN memory_topics mt2 ON mt1.memory_id = mt2.memory_id AND mt2.topic_key != mt1.topic_key
-        JOIN memories m ON m.id = mt1.memory_id
-        JOIN sessions s ON s.id = m.session_id
-        WHERE mt1.topic_key = ? AND s.project_id = ? AND s.id ${Database.EXCLUDE_SUBAGENTS}
-      )
-      GROUP BY k ORDER BY c DESC, k ASC LIMIT ?
-    `).all(topicKey, projectId, topicKey, projectId, cappedLimit) as Array<{ k: string; c: number }>
-    return rows.map(r => r.k)
-  }
-
-  getKnowledgeMapCounts(projectId: string): {
-    totalTopics: number; totalMemories: number; totalSessions: number
-  } {
-    const topics = this.db.prepare('SELECT COUNT(*) AS c FROM knowledge_map WHERE project_id = ?').get(projectId) as { c: number }
-    const mems = this.db.prepare(`
-      SELECT COUNT(*) AS c FROM memories m
-      JOIN sessions s ON s.id = m.session_id
-      WHERE s.project_id = ? AND s.id ${Database.EXCLUDE_SUBAGENTS}
-    `).get(projectId) as { c: number }
-    const sess = this.db.prepare(`
-      SELECT COUNT(*) AS c FROM sessions WHERE project_id = ? AND id ${Database.EXCLUDE_SUBAGENTS}
-    `).get(projectId) as { c: number }
-    return { totalTopics: topics.c, totalMemories: mems.c, totalSessions: sess.c }
-  }
-
-  // ── Session Checkpoints (Phase 3d) ──
-
-  saveCheckpoint(sessionId: string, projectId: string, snapshotText: string): number {
-    const info = this.db.prepare(`
-      INSERT INTO session_checkpoints (session_id, project_id, snapshot_text)
-      VALUES (?, ?, ?)
-    `).run(sessionId, projectId, snapshotText)
-    return Number(info.lastInsertRowid)
-  }
-
-  getCheckpointById(id: number): SessionCheckpoint | null {
-    const row = this.db.prepare(`
-      SELECT id, session_id, project_id, snapshot_text, created_at
-      FROM session_checkpoints WHERE id = ?
-    `).get(id) as CheckpointRow | undefined
-    return row ? mapCheckpointRow(row) : null
-  }
-
-  getCheckpointsBySessionId(sessionId: string): SessionCheckpoint[] {
-    const rows = this.db.prepare(`
-      SELECT id, session_id, project_id, snapshot_text, created_at
-      FROM session_checkpoints WHERE session_id = ?
-      ORDER BY created_at DESC, id DESC
-    `).all(sessionId) as CheckpointRow[]
-    return rows.map(mapCheckpointRow)
-  }
 }

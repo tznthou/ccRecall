@@ -11,6 +11,67 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.5.0] — 2026-07-16
+
+The knife-field release. A 2026-06-10 audit delivered the verdict this release
+executes: the journal pipeline recorded **zero promotions in its entire
+history** (177 pending entries = a dead-letter queue), 8 of 13 HTTP endpoints
+had no callers, and 65% of the database fed a bookkeeping table. Everything
+dead is now gone, in one breaking cut. What remains is the pipeline that
+actually runs: post-session extraction → keyed memories → startup injection /
+MCP recall.
+
+### Removed (breaking)
+
+- **The journal pipeline, whole** — `session_journal` table, the
+  `/journal/promote`, `/journal/pending`, `/journal/reject` endpoints, the
+  `ccmem promote` / `ccmem reject` CLI, the decay sweep, and the trust
+  two-tier write path (v0.3.0). Auto-harvest into a review queue never earned
+  a single promotion; post-session extraction (v0.4.1) writes reviewed,
+  deduplicated memories directly and made the queue obsolete.
+- **The rule scorer and outcome harvester** — `outcome-scorer.ts`,
+  `outcome-extractor.ts`, the summarizer harvest branch, and
+  `sessions.harvest_text`. These existed to feed the journal.
+- **`session_checkpoints`** table and `POST /session/checkpoint` (no caller).
+- **`GET /metacognition/check`** — the knowledge map lives on; MCP
+  `recall_context` remains its query surface.
+- **`GET /lint/warnings`** and `lint.ts` (no caller).
+- **`POST /memory/save`** — MCP `recall_save` writes via the database
+  directly; the HTTP mirror had no remaining caller.
+- **`GET /memory/context`** — was a stub returning empty fields since day one.
+
+### Changed (breaking)
+
+- **`POST /session/end`** no longer harvests. It now does exactly one thing:
+  confirm the just-ended session is indexed (running the rescue reindex on a
+  miss — the #55 fix chain is untouched). Response no longer carries
+  `journalSaved` / `dryRun`. The v0.4.x SessionEnd hook is fully compatible.
+- **`GET /health`** no longer reports `journalPendingCount`.
+- **`message_uuids` rebuilt as dual 64-bit hashes** (migration v24). The
+  replay-dedup registry stored 400k UUIDs as 36-char TEXT across three
+  b-trees — 73.6MB, 65% of the whole database. Each uuid/session id is now
+  the first 8 bytes of its SHA-256 as a signed integer; `uuid_hash` doubles
+  as the rowid, so the primary key costs nothing. Same table: 17.3MB.
+  Collision odds at 400k rows ≈ 4×10⁻⁹, and the worst case is one replayed
+  message being skipped — an acceptable trade for a 56MB saving.
+
+### Upgrade guide
+
+Migration v24 runs automatically on first start (single transaction; a
+failure rolls back to v23 untouched). Verified against a production snapshot:
+~1s for 400k rows, zero loss. Two manual steps:
+
+1. **Before upgrading**, snapshot your DB (one-liner insurance):
+   `cp ~/.ccrecall/ccrecall.db ~/.ccrecall/ccrecall.db.bak-v0.4.8`
+2. **After upgrading**, reclaim the freed space manually:
+   `sqlite3 ~/.ccrecall/ccrecall.db 'VACUUM'`
+   (114MB → 42MB measured). ccRecall never auto-VACUUMs — on a large DB it
+   can freeze the daemon for minutes (the v20 lesson). Skipping this is
+   harmless: SQLite reuses the freed pages; the file just stays big.
+
+To downgrade, reinstall `@tznthou/ccrecall@0.4.8` and restore the backup —
+the v24 schema is not readable by older code.
+
 ## [0.4.8] — 2026-07-16
 
 ### Fixed

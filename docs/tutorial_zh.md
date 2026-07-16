@@ -83,7 +83,7 @@ claude mcp add ccrecall --scope user -- ccmem-mcp
 4. **Hooks（Claude Code 生命週期鉤子）**
    下一節會教你設 hook。設好之後 Claude Code 會在兩個時機自動叫 ccRecall：
    - **SessionStart**：開新 session 前，把相關記憶注入 context（Claude 不用自己決定要不要查）
-   - **SessionEnd**：session 結束時，把剛剛這段寫進 **journal**——v0.3.0 之後是 low-trust 待審佇列，**不會**直接被 `recall_query` 召回，要先 promote（見下方情境四）
+   - **SessionEnd**：hook 確認剛結束的 session 已被索引（daemon 還沒看到 JSONL 時觸發 rescue reindex）。記憶的**寫入**另有管道：可選的 post-session extraction wrapper 用 Haiku 把 session 蒸餾成 keyed 記憶，manual `recall_save` 隨時可用
 
 一句話：**裝完 + 配好 hook，之後就不用管，它自己累積。**
 
@@ -110,25 +110,19 @@ ccmem install-hooks
 
 ### 驗證 hook 真的有觸發
 
-v0.3.0 之後 hook 是寫到 `session_journal`，不是 `memories`，所以要數那張表：
+SessionEnd hook 的工作是索引確認，所以直接看 daemon log 有沒有收到
+`/session/end`：
 
 ```bash
-# 記下目前 journal 數
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM session_journal"
-
-# 或直接看 /health
-curl http://127.0.0.1:7749/health | jq .journalPendingCount
-
-# 開新 Claude Code session，聊幾句，關掉
-
-# 再數一次，應該變多
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM session_journal"
-
-# 或者 tail daemon log 看 /session/end 被打到
+# 先 tail daemon log，再開新 Claude Code session，聊幾句，關掉
 tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
+
+# 幾秒內 session 就該被索引到
+curl "http://127.0.0.1:7749/session/last?cwd=$PWD" | jq
 ```
 
-光靠 hook 觸發 `memories` 表的數字不會動——要 `ccmem promote`（見情境四）或 manual `recall_save` 才會。
+光靠 hook 觸發 `memories` 表的數字不會動——記憶由 post-session extraction
+wrapper 或 manual `recall_save` 寫入。
 
 ---
 
@@ -188,14 +182,6 @@ Claude：（呼叫 recall_save 存一筆 type=decision 的記憶）
 Claude：存了。下次問 npm publish 相關會主動想起。
 ```
 
-你也可以直接在 terminal 叫 daemon：
-
-```bash
-curl -X POST http://127.0.0.1:7749/memory/save \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"決定用 Trusted Publishing","type":"decision","confidence":0.9}'
-```
-
 ### 情境三：元認知「最近在忙什麼」
 
 某天開 session 想知道這個 project 最近討論的主軸：
@@ -211,32 +197,7 @@ Claude：三大 cluster：
 
 這是 ccRecall 的元認知層——不只記個別 memory，還會聚合成「你跟 AI 在這個 project 討論過什麼 topic」。
 
-### 情境四：把 journal 候選 promote 到 memories（v0.3.0 新增）
-
-SessionEnd hook 把每個結束的 session 寫進 `session_journal`——這是 low-trust 待審佇列，`recall_query` 不會去讀。要讓某筆候選變成可查詢，promote 它：
-
-```bash
-# 看待審清單
-curl http://127.0.0.1:7749/journal/pending | jq
-
-# 挑到喜歡的就 promote
-ccmem promote 123
-# {"id":456,"type":"discovery","confidence":0.7}
-
-# 看到雜訊就 reject
-ccmem reject 124
-# soft-delete，7 天 TTL 後由 decay sweep 清掉
-```
-
-想換 type 或調 confidence？
-
-```bash
-ccmem promote 123 --type decision --confidence 0.9
-```
-
-為什麼要手動？v0.3.0 之前的設計把 rule scorer 卡在 harvest 持久化 gate 上——corpus audit 顯示對真實 outcome 的命中率是 0/39（scorer 一直低估）。修法不是再加 regex patterns，是讓 harvester 廣捕，讓你決定值不值得留。完整 rationale 見 [issue #21](https://github.com/tznthou/ccRecall/issues/21)。
-
-### 情境五：跨專案知識轉移（v0.4.1 起）
+### 情境四：跨專案知識轉移（v0.4.1 起）
 
 你在 Project A 研究了 SQLite WAL mode 的心得。現在在 Project B 開 session，它也用 SQLite：
 

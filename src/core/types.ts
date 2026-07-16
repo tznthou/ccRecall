@@ -113,7 +113,6 @@ export interface SessionMeta {
   toolsUsed: string | null
   totalInputTokens: number | null
   totalOutputTokens: number | null
-  harvestText: string | null
 }
 
 export type SearchSortBy = 'rank' | 'date'
@@ -201,7 +200,6 @@ export interface SessionSummary {
   summaryVersion: number
   durationSeconds: number | null
   activeDurationSeconds: number | null
-  harvestText: string | null
 }
 
 // ── ccRecall 新增：記憶層型別 ──
@@ -218,49 +216,6 @@ export interface Memory {
   type: MemoryType
   confidence: number
   key: string | null
-  createdAt: string
-}
-
-// ── ccRecall 新增：session_journal（issue #21 P1：low-trust harvest 候選） ──
-
-/** journal 條目狀態：pending=harvester 寫入起點；promoted=已 manual promote 到 memories；rejected=待 decay sweep 清除 */
-export type JournalStatus = 'pending' | 'promoted' | 'rejected'
-
-/** session_journal 條目（DB row） */
-export interface JournalEntry {
-  id: number
-  sessionId: string | null
-  messageId: string | null
-  content: string
-  contentHash: string
-  score: number
-  reasonsJson: string | null
-  status: JournalStatus
-  expiresAt: string | null
-  promotedMemoryId: number | null
-  projectId: string | null
-  createdAt: string
-}
-
-/** 寫入 session_journal 的參數型別 */
-export interface JournalEntryInput {
-  sessionId?: string | null
-  messageId?: string | null
-  content: string
-  score: number
-  reasonsJson?: string | null
-  projectId?: string | null
-}
-
-/** Pending journal listing 用 — 截 200 字 preview, 不含 contentHash / status / expiresAt
- *  / promotedMemoryId（status 已固定 'pending', 其餘欄位對 list view 無用）。 */
-export interface JournalEntryPreview {
-  id: number
-  sessionId: string | null
-  score: number
-  reasonsJson: string | null
-  contentPreview: string
-  projectId: string | null
   createdAt: string
 }
 
@@ -284,20 +239,6 @@ export interface Topic {
   lastTouched: string
 }
 
-/** knowledge_map 查詢用（含衍生 depth） */
-export interface TopicWithDepth extends Topic {
-  depth: KnowledgeDepth
-}
-
-/** session 中途快照 */
-export interface SessionCheckpoint {
-  id: number
-  sessionId: string
-  projectId: string
-  snapshotText: string
-  createdAt: string
-}
-
 // ── ccRecall 新增：API 回應型別 ──
 
 /** /memory/query 回應 */
@@ -311,43 +252,6 @@ export interface MemoryQueryResult {
   totalTokenEstimate: number
 }
 
-/** /memory/context 回應 */
-export interface SessionContextResult {
-  summary: string | null
-  decisions: string[]
-  filesTouched: string[]
-}
-
-/** /metacognition/check summary 模式回應 */
-export interface MetacognitionSummary {
-  projectId: string
-  topTopics: TopicWithDepth[]
-  recentTopics: TopicWithDepth[]
-  staleTopics: TopicWithDepth[]
-  counts: {
-    totalTopics: number
-    totalMemories: number
-    totalSessions: number
-  }
-}
-
-/** /metacognition/check detail 模式回應 */
-export interface TopicDetail {
-  topicKey: string
-  projectId: string
-  mentionCount: number
-  lastTouched: string
-  depth: KnowledgeDepth
-  memories: Memory[]
-  relatedTopics: string[]
-}
-
-/** /session/checkpoint 回應 */
-export interface CheckpointResult {
-  ok: boolean
-  checkpointId: number
-}
-
 /** /health 回應 */
 export interface HealthResult {
   status: 'ok' | 'error'
@@ -356,9 +260,6 @@ export interface HealthResult {
   sessionCount: number
   memoryCount: number
   topicCount: number
-  /** session_journal pending count — surfaces auto-harvested low-trust candidates
-   *  so user knows when to invoke `ccmem promote`. (issue #21 P1) */
-  journalPendingCount: number
   uptime: number
   /** ISO timestamp of last PRAGMA integrity_check tick, or null if the monitor
    *  has not completed its first run yet (or is not attached — tests use

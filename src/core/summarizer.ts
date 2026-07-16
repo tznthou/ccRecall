@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { ParsedLine, SessionSummary, OutcomeSignals, OutcomeStatus, FileOperation, SessionFileInput } from './types.js'
-import { extractOutcome } from './outcome-extractor.js'
-import { scoreKnowledgeBearing } from './outcome-scorer.js'
 
 /** 摘要引擎版本（每次規則改動時遞增，讓 backfill 可追蹤） */
 export const SUMMARY_VERSION = 2
@@ -10,11 +8,6 @@ const MAX_INTENT_LEN = 120
 const MAX_SUMMARY_LEN = 300
 const MAX_ACTIVITY_LEN = 80
 const MAX_FILES = 30
-// Truncation cap for harvested assistant text before persisting to sessions.harvest_text
-// (and downstream memories.content via buildMemoryFromSession). Aligns with the
-// "<300 tokens per memory" injection budget — 2000 chars covers mixed CJK/EN at
-// ~500-1000 tokens, leaving headroom for budget guards on the read side.
-const MAX_HARVEST_LEN = 2000
 
 // ── Noise Filter ──
 
@@ -395,7 +388,6 @@ export function summarizeSession(
     summaryVersion: SUMMARY_VERSION,
     durationSeconds: null,
     activeDurationSeconds: null,
-    harvestText: null,
   }
 
   if (messages.length === 0) {
@@ -431,20 +423,6 @@ export function summarizeSession(
 
   // ── Outcome ──
   const { status: outcomeStatus, signals: outcomeSignals } = inferOutcome(messages)
-
-  // ── Harvest candidate (issue #18 outcome cluster + #21 P1 journal split) ──
-  // v0.3.0: 移除 score >= 2 persistence gate (P1 設計: harvest broadly, remember
-  // narrowly)。但保留 hard floor: noise / process-report 仍 short-circuit (前者
-  // 是純 ack token、後者是 session 收尾報告; 都不該進 journal)。
-  const extraction = extractOutcome(messages)
-  let harvestText: string | null = null
-  if (extraction.candidateText) {
-    const result = scoreKnowledgeBearing(extraction.candidateText)
-    const isHardFloor = result.reasons.includes('noise') || result.reasons.includes('process-report')
-    if (!isHardFloor) {
-      harvestText = truncate(extraction.candidateText, MAX_HARVEST_LEN)
-    }
-  }
 
   // ── Tags（多信號交叉） ──
   const tagSet = new Set<string>()
@@ -492,7 +470,6 @@ export function summarizeSession(
       summaryVersion: SUMMARY_VERSION,
       durationSeconds,
       activeDurationSeconds,
-      harvestText,
     },
     sessionFiles,
   }

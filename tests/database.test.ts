@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import path from 'node:path'
 import os from 'node:os'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { Database } from '../src/core/database'
+import { Database, hash64 } from '../src/core/database'
 import type { MessageInput } from '../src/core/database'
 
 let tmpDir: string
@@ -41,7 +41,7 @@ afterEach(async () => {
 })
 
 describe('schema', () => {
-  it('createSchema → tables + indexes at v22 target state', () => {
+  it('createSchema → tables + indexes at v24 target state', () => {
     const tables = db.rawAll<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).map(r => r.name)
@@ -52,192 +52,37 @@ describe('schema', () => {
     expect(tables).toContain('memories')
     expect(tables).toContain('memories_fts')
     expect(tables).toContain('sessions_fts')
-    expect(tables).toContain('session_journal')
     // v20 dropped
     expect(tables).not.toContain('messages')
     expect(tables).not.toContain('messages_fts')
     expect(tables).not.toContain('message_content')
     expect(tables).not.toContain('message_archive')
+    // v24 dropped (knife-field)
+    expect(tables).not.toContain('session_journal')
+    expect(tables).not.toContain('session_checkpoints')
+
+    // v24: sessions has no harvest_text column
+    const sessionCols = db.rawAll<{ name: string }>('PRAGMA table_info(sessions)').map(c => c.name)
+    expect(sessionCols).not.toContain('harvest_text')
+
+    // v24: message_uuids is dual-hash
+    const uuidCols = db.rawAll<{ name: string }>('PRAGMA table_info(message_uuids)').map(c => c.name)
+    expect(uuidCols.sort()).toEqual(['session_hash', 'uuid_hash'])
 
     const idxNames = db.rawAll<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'",
     ).map(r => r.name)
     expect(idxNames).toContain('idx_message_uuids_session')
     expect(idxNames).toContain('idx_sessions_project')
-    expect(idxNames).toContain('idx_journal_status')
-    expect(idxNames).toContain('idx_journal_session_hash')
+    expect(idxNames).not.toContain('idx_journal_status')
+    expect(idxNames).not.toContain('idx_journal_session_hash')
     expect(idxNames).not.toContain('idx_messages_session')
   })
 })
 
-describe('session_journal DAO (issue #21 P1)', () => {
-  it('saveJournalEntry inserts row, getJournalPendingCount counts pending', () => {
-    expect(db.getJournalPendingCount()).toBe(0)
-
-    const id = db.saveJournalEntry({
-      sessionId: null,
-      messageId: null,
-      content: 'first outcome candidate',
-      score: 1,
-      reasonsJson: '["decision-language"]',
-      projectId: null,
-    })
-
-    expect(id).toBeGreaterThan(0)
-    expect(db.getJournalPendingCount()).toBe(1)
-  })
-
-  it('saveJournalEntry deduplicates same content within same session (UNIQUE INDEX idempotency)', () => {
-    // UNIQUE 是 (session_id, content_hash); 同 session retry 仍 dedup
-    const first = db.saveJournalEntry({
-      sessionId: 'sess-A',
-      content: 'duplicate content',
-      score: 0,
-    })
-    expect(first).toBeGreaterThan(0)
-
-    const second = db.saveJournalEntry({
-      sessionId: 'sess-A',
-      content: 'duplicate content',
-      score: 0,
-    })
-    expect(second).toBe(0) // INSERT OR IGNORE → lastInsertRowid 0 表示被擋下
-
-    expect(db.getJournalPendingCount()).toBe(1)
-  })
-
-  it('saveJournalEntry accepts same content from DIFFERENT sessions (cross-session leakage fix, Codex review)', () => {
-    // P1 fix-up: 兩個不同 session 產生同樣 outcome cluster 各自留一筆,
-    // 不再被 global content_hash 靜默吃掉 (Codex finding #1)。
-    const a = db.saveJournalEntry({
-      sessionId: 'sess-X',
-      content: 'Root cause: same wording, different session',
-      score: 2,
-    })
-    const b = db.saveJournalEntry({
-      sessionId: 'sess-Y',
-      content: 'Root cause: same wording, different session',
-      score: 2,
-    })
-    expect(a).toBeGreaterThan(0)
-    expect(b).toBeGreaterThan(0)
-    expect(b).not.toBe(a)
-    expect(db.getJournalPendingCount()).toBe(2)
-  })
-
-  it('saveJournalEntry stores score 0 entries (no threshold gate)', () => {
-    // P1 核心: 移除 KNOWLEDGE_THRESHOLD ≥ 2 gate, score 0/1 也進 journal
-    const id = db.saveJournalEntry({ content: 'low-score outcome', score: 0 })
-    expect(id).toBeGreaterThan(0)
-    expect(db.getJournalPendingCount()).toBe(1)
-  })
-
-  it('sweepJournal deletes rejected entries past expires_at', () => {
-    const id = db.saveJournalEntry({ content: 'rejected-soon', score: 0 })
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    db.rejectJournalEntry(id, yesterday)
-
-    const result = db.sweepJournal()
-    expect(result.rejectedDeleted).toBe(1)
-    expect(db.getJournalEntry(id)).toBeNull()
-  })
-
-  it('sweepJournal keeps rejected entries with future expires_at', () => {
-    const id = db.saveJournalEntry({ content: 'rejected-later', score: 0 })
-    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-    db.rejectJournalEntry(id, future)
-
-    const result = db.sweepJournal()
-    expect(result.rejectedDeleted).toBe(0)
-    expect(db.getJournalEntry(id)?.status).toBe('rejected')
-  })
-
-  it('sweepJournal deletes pending entries older than 30 days', () => {
-    const id = db.saveJournalEntry({ content: 'old-pending', score: 0 })
-    // Backdate created_at by 31 days
-    db.rawExec(
-      `UPDATE session_journal SET created_at = datetime('now', '-31 days') WHERE id = ${id}`,
-    )
-
-    const result = db.sweepJournal()
-    expect(result.pendingDeleted).toBe(1)
-    expect(db.getJournalEntry(id)).toBeNull()
-  })
-
-  it('sweepJournal does NOT delete pending entries within 30 days', () => {
-    const id = db.saveJournalEntry({ content: 'fresh-pending', score: 0 })
-    const result = db.sweepJournal()
-    expect(result.pendingDeleted).toBe(0)
-    expect(db.getJournalEntry(id)?.status).toBe('pending')
-  })
-
-  it('sweepJournal does NOT touch promoted entries (audit trail)', () => {
-    const id = db.saveJournalEntry({ content: 'promoted-keep', score: 2 })
-    const memId = db.saveMemory({
-      sessionId: null, messageId: null, content: 'promoted-keep', type: 'discovery',
-    })
-    db.promoteJournalEntry(id, memId)
-
-    // Even backdating to ancient
-    db.rawExec(
-      `UPDATE session_journal SET created_at = datetime('now', '-90 days') WHERE id = ${id}`,
-    )
-    const result = db.sweepJournal()
-    expect(result.rejectedDeleted).toBe(0)
-    expect(result.pendingDeleted).toBe(0)
-    expect(db.getJournalEntry(id)?.status).toBe('promoted')
-  })
-
-  it('sweepJournal does NOT touch memories table (manual exemption)', () => {
-    const memId = db.saveMemory({
-      sessionId: null, messageId: null, content: 'manual save', type: 'decision',
-    })
-    db.rawExec(
-      `UPDATE memories SET created_at = datetime('now', '-90 days') WHERE id = ${memId}`,
-    )
-
-    db.sweepJournal()
-    expect(db.getMemoryCount()).toBe(1)
-  })
-})
-
-describe('recall trust boundary (issue #21 P1)', () => {
-  // P1 invariant: unpromoted journal entries 是 low-trust,不該出現在 recall_query
-  // / recall_context 結果。queryMemories 只查 memories table; journal 沒有對應的
-  // FTS5 virtual table,自然不會被 FTS match。本 test 鎖住設計意圖,未來若改寫
-  // query 邏輯讓 journal 漏進來,test fail 等於告警。
-  it('queryMemories does NOT return unpromoted journal entries', () => {
-    db.saveJournalEntry({
-      content: 'unpromoted candidate text with token: needle-zxq-12345',
-      score: 0,
-    })
-    expect(db.getJournalPendingCount()).toBe(1)
-    expect(db.getMemoryCount()).toBe(0)
-
-    const results = db.queryMemories('needle-zxq-12345', 10)
-    expect(results).toHaveLength(0)
-  })
-
-  it('queryMemories returns memories but NOT journal even when both have matching content', () => {
-    // 同樣 content 同時寫進 journal + memories,query 只該回 memories 那筆。
-    const matchToken = 'distinctive-token-abc-789'
-    db.saveJournalEntry({
-      content: `journal version: ${matchToken}`,
-      score: 0,
-    })
-    const memId = db.saveMemory({
-      sessionId: null,
-      messageId: null,
-      content: `memory version: ${matchToken}`,
-      type: 'discovery',
-    })
-
-    const results = db.queryMemories(matchToken, 10)
-    expect(results).toHaveLength(1)
-    expect(results[0].id).toBe(memId)
-    expect(results[0].content).toContain('memory version')
-  })
-})
+// session_journal DAO + recall trust boundary tests removed in v0.5.0 —
+// the journal pipeline (issue #21 P1) is gone; the session_journal table
+// itself is dropped by migration v24 (Phase B).
 
 describe('migration system', () => {
   it('schema_version table exists with baseline', () => {
@@ -304,11 +149,15 @@ describe('indexSession', () => {
     expect(sessions[0].title).toBe('Test session')
     expect(sessions[0].messageCount).toBe(2)
 
-    // v20: UUID 登記到 message_uuids 供跨 session replay 去重
-    const uuids = db.rawAll<{ uuid: string }>(
-      "SELECT uuid FROM message_uuids WHERE session_id = 'sess-001' ORDER BY uuid",
-    ).map(r => r.uuid)
-    expect(uuids).toEqual(['a1', 'u1'])
+    // v24: UUID 以雙 hash 登記到 message_uuids 供跨 session replay 去重。
+    // hash 比對放 SQL 端（rawAll 無 safeIntegers，讀回 JS 會失真）。
+    for (const uuid of ['a1', 'u1']) {
+      expect(db.rawAll<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM message_uuids
+         WHERE uuid_hash = ${hash64(uuid)} AND session_hash = ${hash64('sess-001')}`,
+      )[0].c, uuid).toBe(1)
+    }
+    expect(db.rawAll<{ c: number }>('SELECT COUNT(*) AS c FROM message_uuids')[0].c).toBe(2)
   })
 
   it('re-index replaces session row and cascades message_uuids', () => {
@@ -332,10 +181,14 @@ describe('indexSession', () => {
     expect(sessions).toHaveLength(1)
     expect(sessions[0].title).toBe('Updated')
 
-    const uuids = db.rawAll<{ uuid: string }>(
-      "SELECT uuid FROM message_uuids WHERE session_id = 'sess-001'",
-    ).map(r => r.uuid)
-    expect(uuids).toEqual(['new-uuid'])
+    const sessHash = hash64('sess-001')
+    expect(db.rawAll<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM message_uuids WHERE session_hash = ${sessHash}`,
+    )[0].c).toBe(1)
+    expect(db.rawAll<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM message_uuids
+       WHERE session_hash = ${sessHash} AND uuid_hash = ${hash64('new-uuid')}`,
+    )[0].c).toBe(1)
   })
 })
 
@@ -402,7 +255,7 @@ describe('archiveStaleSessionsExcept', () => {
 
     // archive 只標 archived flag，不清 message_uuids（dedup 仍需）
     const archivedUuids = db.rawAll<{ c: number }>(
-      "SELECT COUNT(*) AS c FROM message_uuids WHERE session_id = 'archive-me'",
+      `SELECT COUNT(*) AS c FROM message_uuids WHERE session_hash = ${hash64('archive-me')}`,
     )[0].c
     expect(archivedUuids).toBe(1)
   })

@@ -14,7 +14,6 @@ import { readPackageVersion } from './core/version.js'
 import { installDaemon, uninstallDaemon } from './cli/daemon.js'
 import { installHooks, uninstallHooks } from './cli/hooks-installer.js'
 import { runCleanupCli } from './cli/cleanup.js'
-import { runPromote, runReject, parsePromoteFlags } from './cli/journal.js'
 
 const subcommand = process.argv[2]
 
@@ -53,17 +52,6 @@ if (subcommand === 'install-daemon' || subcommand === 'uninstall-daemon') {
     console.error(`[ccmem cleanup] ${err.message}`)
     process.exit(1)
   })
-} else if (subcommand === 'promote') {
-  const { idStr, opts } = parsePromoteFlags(process.argv.slice(3))
-  runPromote(idStr, opts).then(code => process.exit(code)).catch((err: Error) => {
-    console.error(`[ccmem promote] ${err.message}`)
-    process.exit(1)
-  })
-} else if (subcommand === 'reject') {
-  runReject(process.argv[3]).then(code => process.exit(code)).catch((err: Error) => {
-    console.error(`[ccmem reject] ${err.message}`)
-    process.exit(1)
-  })
 } else if (subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
   printHelp()
   process.exit(0)
@@ -92,8 +80,6 @@ Usage:
   ccmem cleanup --orphans          List orphan memories (read-only dry run)
   ccmem cleanup --orphans --yes    Delete orphan memories after stdin confirmation
   ccmem cleanup --orphans --reconcile   Run indexer first (writes; stop daemon first)
-  ccmem promote <id> [--type T] [--confidence C]   Promote a journal entry to memories
-  ccmem reject <id>                Mark a journal entry as rejected (decay sweep cleans up)
   ccmem --version                  Print the installed package version
 
 Environment:

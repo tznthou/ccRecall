@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import path from 'node:path'
 import os from 'node:os'
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
-import { Database } from '../src/core/database'
+import { Database, hash64 } from '../src/core/database'
 import { runIndexer, deduplicateTokensByRequestId, type ProgressCallback } from '../src/core/indexer'
 import type { IndexerStatus, ParsedLine } from '../src/core/types'
 
@@ -124,9 +124,10 @@ describe('runIndexer', () => {
     expect(last.phase).toBe('done')
     expect(last.progress).toBe(100)
 
-    // 驗證 UUID dedup 表有登記（供 resumed session replay 去重用）
+    // 驗證 UUID dedup 表有登記（供 resumed session replay 去重用）。
+    // v24 雙 hash：以 hash64 對照，比對放 SQL 端（rawAll 無 safeIntegers）。
     const uuidCount = db.rawAll<{ c: number }>(
-      "SELECT COUNT(*) AS c FROM message_uuids WHERE session_id = 'sess-001'",
+      `SELECT COUNT(*) AS c FROM message_uuids WHERE session_hash = ${hash64('sess-001')}`,
     )[0].c
     expect(uuidCount).toBe(2)
   })

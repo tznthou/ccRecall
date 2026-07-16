@@ -83,7 +83,7 @@ After the three setup steps you might reasonably wonder: does it just keep runni
 4. **Hooks**
    The next section walks you through wiring these up. Once configured, Claude Code calls ccRecall at two moments automatically:
    - **SessionStart**: relevant memories are injected into Claude's context *before* your first prompt — you never have to ask it to "look something up"
-   - **SessionEnd**: the session you just finished is harvested into the **journal** — a low-trust review queue (since v0.3.0). It does *not* show up in `recall_query` until you promote it (see Scenario 4 below).
+   - **SessionEnd**: the hook confirms the just-finished session is indexed (triggering a rescue reindex if the daemon hasn't seen the JSONL yet). Memory *writing* happens separately: the optional post-session extraction wrapper distills the session via Haiku into keyed memories, and manual `recall_save` works any time.
 
 The takeaway: **install + hooks = set and forget**. ccRecall accumulates on its own.
 
@@ -110,25 +110,19 @@ Remove later: `ccmem uninstall-hooks` (only deletes ccRecall's own entries; your
 
 ### Verifying the hook fires
 
-Since v0.3.0 the hook writes to `session_journal`, not `memories` — so count that table:
+The SessionEnd hook's job is index confirmation, so watch the daemon log for
+`/session/end` landing:
 
 ```bash
-# Note the current journal count
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM session_journal"
-
-# Or just check via /health
-curl http://127.0.0.1:7749/health | jq .journalPendingCount
-
-# Open a fresh Claude Code session, chat briefly, close it
-
-# Recount — should be higher
-sqlite3 ~/.ccrecall/ccrecall.db "SELECT COUNT(*) FROM session_journal"
-
-# Or tail the daemon log and watch /session/end land
+# Tail the daemon log, then open a fresh Claude Code session, chat briefly, close it
 tail -f ~/Library/Logs/ccrecall/ccrecall.out.log
+
+# The session should be indexed within seconds
+curl "http://127.0.0.1:7749/session/last?cwd=$PWD" | jq
 ```
 
-The `memories` table count won't move from a hook fire alone — that takes a `ccmem promote` (see Scenario 4) or a manual `recall_save`.
+The `memories` table count won't move from a hook fire alone — memories are
+written by the post-session extraction wrapper or a manual `recall_save`.
 
 ---
 
@@ -190,14 +184,6 @@ Claude: (invokes recall_save with type=decision)
 Claude: Saved. I'll recall this next time npm publishing comes up.
 ```
 
-You can also hit the daemon directly from the terminal:
-
-```bash
-curl -X POST http://127.0.0.1:7749/memory/save \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"Chose Trusted Publishing","type":"decision","confidence":0.9}'
-```
-
 ### Scenario 3: Metacognition — "What Have We Been Working On?"
 
 Some days you want to know what this project's conversations have actually been about lately:
@@ -213,32 +199,7 @@ Claude: Three main clusters:
 
 That's ccRecall's metacognition layer — not just individual memories, but topic clusters showing what you and the AI have actually been exploring together.
 
-### Scenario 4: Promoting a Journal Candidate (since v0.3.0)
-
-The SessionEnd hook records every closed session into `session_journal` — a low-trust queue that `recall_query` does not read. To make a candidate searchable, promote it:
-
-```bash
-# See what's pending review
-curl http://127.0.0.1:7749/journal/pending | jq
-
-# Picked a good one? Promote it
-ccmem promote 123
-# {"id":456,"type":"discovery","confidence":0.7}
-
-# Discard noise
-ccmem reject 124
-# Soft-deleted; cleared in 7 days by the decay sweep
-```
-
-Want a different memory type or higher confidence?
-
-```bash
-ccmem promote 123 --type decision --confidence 0.9
-```
-
-Why manual? The pre-0.3.0 design gated harvest on a rule scorer — corpus audit found a 0/39 hit rate on real outcomes (the scorer kept under-weighting them). The fix isn't more regex patterns; it's letting the harvester record broadly and letting you decide what's worth keeping. See [issue #21](https://github.com/tznthou/ccRecall/issues/21) for the full reasoning.
-
-### Scenario 5: Cross-Project Knowledge Transfer (since v0.4.1)
+### Scenario 4: Cross-Project Knowledge Transfer (since v0.4.1)
 
 You learned something about SQLite WAL mode while working on Project A. Now you open a new session in Project B, which also uses SQLite:
 

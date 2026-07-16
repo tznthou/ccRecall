@@ -8,6 +8,61 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.5.0] — 2026-07-16
+
+砍刀場版本。2026-06-10 的全面體檢給出裁決，這一版負責執行：journal 管線
+**史上零 promotion**（177 筆 pending = 死信佇列）、13 個 HTTP endpoint 有 8
+個零 caller、整顆資料庫 65% 在養簿記表。死掉的東西這次一刀清完，breaking
+一次付清。留下來的是真正在跑的管線：post-session extraction → keyed
+memories → 啟動注入 / MCP recall。
+
+### 移除（breaking）
+
+- **Journal 管線整組** —— `session_journal` 表、`/journal/promote`、
+  `/journal/pending`、`/journal/reject` 三個 endpoint、`ccmem promote` /
+  `ccmem reject` CLI、decay sweep、以及 v0.3.0 的 trust 二層寫入路徑。
+  自動 harvest 進審核佇列的設計從頭到尾沒換來一次 promotion；v0.4.1 的
+  post-session extraction 直接寫入去重後的記憶，佇列早已失去存在理由。
+- **規則 scorer 與 outcome harvester** —— `outcome-scorer.ts`、
+  `outcome-extractor.ts`、summarizer 的 harvest 分支、
+  `sessions.harvest_text`。它們都是為了餵 journal 而存在的。
+- **`session_checkpoints`** 表與 `POST /session/checkpoint`（零 caller）。
+- **`GET /metacognition/check`** —— knowledge map 本體還在，查詢面保留
+  MCP `recall_context`。
+- **`GET /lint/warnings`** 與 `lint.ts`（零 caller）。
+- **`POST /memory/save`** —— MCP `recall_save` 直連資料庫寫入，HTTP 鏡像
+  已無人使用。
+- **`GET /memory/context`** —— 從第一天起就是回空欄位的 stub。
+
+### 變更（breaking）
+
+- **`POST /session/end`** 不再 harvest。現在只做一件事：確認剛結束的
+  session 已被索引（miss 時觸發 rescue reindex——#55 修法鏈原封不動）。
+  回應不再帶 `journalSaved` / `dryRun`。v0.4.x 的 SessionEnd hook 完全相容。
+- **`GET /health`** 不再回報 `journalPendingCount`。
+- **`message_uuids` 重建為雙 64-bit hash**（migration v24）。replay 去重
+  登記表原本把 40 萬筆 UUID 以 36 字元 TEXT 存了三份 b-tree——73.6MB，
+  佔全庫 65%。現在每個 uuid / session id 取 SHA-256 前 8 bytes 當
+  signed integer；`uuid_hash` 直接作為 rowid，primary key 零成本。同一
+  張表：17.3MB。40 萬筆的碰撞機率約 4×10⁻⁹，最壞後果是一則 replay 訊息
+  被跳過——拿這個換 56MB，划算。
+
+### 升級指南
+
+Migration v24 首次啟動自動執行（單一 transaction；失敗自動 rollback 回
+v23 原狀）。已用生產快照實測：40 萬筆約 1 秒，零遺失。兩個手動步驟：
+
+1. **升級前**先快照資料庫（一行保險）：
+   `cp ~/.ccrecall/ccrecall.db ~/.ccrecall/ccrecall.db.bak-v0.4.8`
+2. **升級後**手動回收空間：
+   `sqlite3 ~/.ccrecall/ccrecall.db 'VACUUM'`
+   （實測 114MB → 42MB）。ccRecall 從不自動 VACUUM——大庫上會讓 daemon
+   凍住數分鐘（v20 的教訓）。不跑也無害：SQLite 會重用釋出的 page，只是
+   檔案不縮。
+
+要降版的話，重裝 `@tznthou/ccrecall@0.4.8` 並還原備份——v24 schema 舊版
+程式讀不懂。
+
 ## [0.4.8] — 2026-07-16
 
 ### 修復

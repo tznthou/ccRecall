@@ -9,6 +9,17 @@ import { sessionParams } from './fixtures/helpers.js'
 let tmpDir: string
 let db: Database
 
+/** knowledge_map reader for assertions — the production listing API was removed
+ *  in v0.5.0 (/metacognition/check was its only caller), so tests observe the
+ *  table rebuildKnowledgeMap writes to directly. */
+function knowledgeMapRows(projectId: string): Array<{ topicKey: string; mentionCount: number; lastTouched: string }> {
+  return db.rawAll<{ topic_key: string; mention_count: number; last_touched: string }>(
+    `SELECT topic_key, mention_count, last_touched FROM knowledge_map
+     WHERE project_id = '${projectId}'
+     ORDER BY mention_count DESC, last_touched DESC`,
+  ).map(r => ({ topicKey: r.topic_key, mentionCount: r.mention_count, lastTouched: r.last_touched }))
+}
+
 beforeEach(async () => {
   tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-km-'))
   db = new Database(path.join(tmpDir, 'test.db'))
@@ -20,7 +31,7 @@ afterEach(async () => {
 })
 
 describe('Phase 3a schema', () => {
-  it('creates knowledge_map, session_topics, memory_topics, session_checkpoints tables', () => {
+  it('creates knowledge_map, session_topics, memory_topics tables (session_checkpoints dropped in v24)', () => {
     const objs = db.rawAll<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     )
@@ -28,7 +39,7 @@ describe('Phase 3a schema', () => {
     expect(names).toContain('knowledge_map')
     expect(names).toContain('session_topics')
     expect(names).toContain('memory_topics')
-    expect(names).toContain('session_checkpoints')
+    expect(names).not.toContain('session_checkpoints')
   })
 
   it('knowledge_map has 4 columns only (minimal schema)', () => {
@@ -43,11 +54,6 @@ describe('Phase 3a schema', () => {
     expect(names).not.toContain('weight')
   })
 
-  it('session_checkpoints has no topics_json column (simplified)', () => {
-    const cols = db.rawAll<{ name: string }>("PRAGMA table_info(session_checkpoints)")
-    const names = cols.map(c => c.name)
-    expect(names).not.toContain('topics_json')
-  })
 })
 
 describe('saveSessionTopics', () => {
@@ -131,7 +137,7 @@ describe('rebuildKnowledgeMap', () => {
     db.saveMemoryTopics(memId, 'proj-a', ['typescript'])
 
     db.rebuildKnowledgeMap('proj-a')
-    const topics = db.getKnowledgeMap('proj-a')
+    const topics = knowledgeMapRows('proj-a')
     const ts = topics.find(t => t.topicKey === 'typescript')
     const sql = topics.find(t => t.topicKey === 'sqlite')
     expect(ts?.mentionCount).toBe(3) // 2 sessions + 1 memory
@@ -143,7 +149,7 @@ describe('rebuildKnowledgeMap', () => {
     db.rebuildKnowledgeMap('proj-a')
     db.rebuildKnowledgeMap('proj-a')
     db.rebuildKnowledgeMap('proj-a')
-    const topics = db.getKnowledgeMap('proj-a')
+    const topics = knowledgeMapRows('proj-a')
     expect(topics.find(t => t.topicKey === 'typescript')?.mentionCount).toBe(1)
   })
 
@@ -151,7 +157,7 @@ describe('rebuildKnowledgeMap', () => {
     db.saveSessionTopics('sess-1', 'proj-a', ['typescript'])
     db.saveSessionTopics('sess-2', 'proj-a', ['typescript'])
     db.rebuildKnowledgeMap('proj-a')
-    const topics = db.getKnowledgeMap('proj-a')
+    const topics = knowledgeMapRows('proj-a')
     const ts = topics.find(t => t.topicKey === 'typescript')
     expect(ts?.lastTouched).toBeTruthy()
     // sess-2 ended 2026-04-17T01:00:00Z is most recent
@@ -166,8 +172,8 @@ describe('rebuildKnowledgeMap', () => {
 
     db.rebuildKnowledgeMap('proj-a')
 
-    const aTopics = db.getKnowledgeMap('proj-a')
-    const bTopics = db.getKnowledgeMap('proj-b')
+    const aTopics = knowledgeMapRows('proj-a')
+    const bTopics = knowledgeMapRows('proj-b')
     expect(aTopics.map(t => t.topicKey)).toEqual(['typescript'])
     expect(bTopics).toEqual([]) // proj-b not rebuilt yet
   })
@@ -185,7 +191,7 @@ describe('subagent exclusion', () => {
     db.saveSessionTopics('sub-1', 'proj-a', ['typescript', 'golang'])
     db.rebuildKnowledgeMap('proj-a')
 
-    const topics = db.getKnowledgeMap('proj-a')
+    const topics = knowledgeMapRows('proj-a')
     expect(topics.find(t => t.topicKey === 'typescript')?.mentionCount).toBe(1) // only main-1
     expect(topics.find(t => t.topicKey === 'golang')).toBeUndefined()
   })
