@@ -213,6 +213,64 @@ describe('GET /session/last — notBefore staleness (stale-session race)', () =>
   })
 })
 
+describe('getLastSession — subagent shadow + archived filtering', () => {
+  let tmpDir: string
+  let db: Database
+
+  // Minimal direct insert — these are unit tests against the SQL, no HTTP.
+  function insertSession(sessionId: string, startedAt: string, endedAt: string) {
+    db.indexSession({
+      sessionId,
+      projectId: '-test-shadow',
+      projectDisplayName: '/test/shadow',
+      title: 'fixture',
+      messageCount: 1,
+      filePath: `/fake/${sessionId}.jsonl`,
+      fileSize: 100,
+      fileMtime: endedAt,
+      startedAt,
+      endedAt,
+      messages: [],
+    })
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-last-shadow-'))
+    db = new Database(path.join(tmpDir, 'test.db'))
+  })
+
+  afterEach(async () => {
+    db.close()
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('never returns a subagent-shaped id, even when its registry row is missing', () => {
+    // Observed live 2026-07-13: a subagent row existed in `sessions` while its
+    // `subagent_sessions` registry row was momentarily absent, so the NOT IN
+    // exclusion failed and /session/last returned "<parent>/agent-…" — which
+    // the wrapper's UUID check rejects, silently skipping extraction. The id
+    // shape alone (composite path) marks it as not a main session; filtering
+    // on it must not depend on registry timing.
+    insertSession(oldSessionId, '2026-07-13T03:49:00Z', '2026-07-13T04:54:00Z')
+    insertSession(`${oldSessionId}/agent-a970426ecaa2dd5d0`, '2026-07-13T04:25:00Z', '2026-07-13T04:30:00Z')
+
+    const last = db.getLastSession('-test-shadow')
+    expect(last).not.toBeNull()
+    expect(last!.id).toBe(oldSessionId)
+  })
+
+  it('skips archived sessions (their JSONL is gone — they cannot be the one that just closed)', () => {
+    insertSession(oldSessionId, '2026-07-13T08:00:00Z', '2026-07-13T08:30:00Z')
+    insertSession(freshSessionId, '2026-07-13T10:00:00Z', '2026-07-13T10:30:00Z')
+    // Archive the newer one: JSONL vanished from disk.
+    db.archiveStaleSessionsExcept(new Set([oldSessionId]))
+
+    const last = db.getLastSession('-test-shadow')
+    expect(last).not.toBeNull()
+    expect(last!.id).toBe(oldSessionId)
+  })
+})
+
 describe('coalesceRescue — concurrent rescues share one run', () => {
   it('two concurrent callers trigger a single underlying run', async () => {
     let runs = 0
