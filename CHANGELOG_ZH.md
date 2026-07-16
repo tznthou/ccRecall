@@ -50,6 +50,8 @@ ccRecall 的重要版本變更記錄在這裡。
   摘要；有 siblings 時改為各自截斷自己的內容，保持彼此可區分。來源
   transcript 還在的記憶，可對該 session 重跑 extraction 重建。
 
+## [0.4.6] — 2026-07-04
+
 ### 修復
 
 - **Session 剛結束時，post-session extraction 會跳過、甚至抽錯 session** —

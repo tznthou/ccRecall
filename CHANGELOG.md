@@ -63,6 +63,8 @@ more like an iteration counter than a strict SemVer major).
   content, which keeps them distinct. Memories whose source transcript still
   exists can be rebuilt by re-running extraction on that session.
 
+## [0.4.6] — 2026-07-04
+
 ### Fixed
 
 - **Post-session extraction skipped — or extracted the wrong session — right

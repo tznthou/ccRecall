@@ -11,13 +11,9 @@ A local memory service for Claude Code — indexes your conversation history, re
 
 ---
 
-> 📐 **v0.3.0 — Trust split (breaking change for harvest write path)**
+> 📐 **v0.4.x — Post-session extraction is the primary memory write path**
 >
-> The SessionEnd hook now writes to a low-trust `session_journal` table instead of `memories`. Journal entries are scored, surfaced via `/health` (`journalPendingCount`), and **do not appear in `recall_query` / `recall_context` results** until you run `ccmem promote <id>`. Manual `recall_save` is unchanged — it still writes directly to high-trust `memories`.
->
-> The rule scorer is no longer on the persistence gate; it informs trust grade and promotion priority instead. Background reasoning at [issue #21](https://github.com/tznthou/ccRecall/issues/21).
->
-> Pre-0.3.0 memories stay queryable as-is. The v22 schema migration runs automatically on first daemon startup; existing rows are not touched. New harvest goes to journal from now on.
+> Since v0.4.1, ccRecall automatically extracts memories after each session via Haiku (~$0.001/session). v0.4.2–v0.4.8 hardened the extraction pipeline: race-condition gates (`notBefore`, rescue reindex), compression integrity, subagent filtering, and security (secret redaction, far-future timestamp clamping). Manual `recall_save` remains available for in-session saves.
 
 ---
 
@@ -432,9 +428,8 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 | Version | Theme | Status |
 |---------|-------|--------|
 | **v0.3.x** | Manual save, automatic recall — memories come from explicit `recall_save` calls; SessionStart hook and MCP tools inject them into future sessions | Released |
-| **v0.4.0** | Startup-v1 default + tool description hardening | Released |
-| **v0.4.1** | Key-based upsert dedup, post-session memory extraction via Haiku, cross-project memory visibility via topic intersection | Released |
-| **v0.5+** | Scorer/journal/harvester deprecation, L1 keyword injection, memory lifecycle history | Planned |
+| **v0.4.x** | Post-session extraction via Haiku, cross-project memory via topic intersection, extraction pipeline hardening (race gates, compression integrity, subagent filtering, security) | Released |
+| **v0.5+** | Journal/scorer/harvester deprecation, L1 keyword injection, memory lifecycle history | Planned |
 
 Tracked in [GitHub Issues](https://github.com/tznthou/ccRecall/issues).
 

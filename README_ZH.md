@@ -11,13 +11,9 @@ Claude Code 的本地記憶服務——索引你的對話歷史，按需召回�
 
 ---
 
-> 📐 **v0.3.0 — Trust 二層拆分（harvest 寫入路徑 breaking change）**
+> 📐 **v0.4.x — Post-session extraction 成為主要記憶寫入路徑**
 >
-> SessionEnd hook 改寫到新建的 low-trust `session_journal` 表，不再寫 `memories`。Journal 條目會評分、透過 `/health` 的 `journalPendingCount` 露出，**`recall_query` / `recall_context` 不會直接召回 journal 條目**，需要先 `ccmem promote <id>` 升級。Manual `recall_save` 不變——仍直寫 high-trust `memories`。
->
-> Rule scorer 不再卡在 persistence gate；改成提供 trust grade 與 promote 優先序。完整 rationale 見 [issue #21](https://github.com/tznthou/ccRecall/issues/21)。
->
-> 0.3.0 之前的 memories 仍可正常查詢。v22 schema migration 在 daemon 第一次啟動時自動跑，既有 row 不會被動。新 harvest 從現在起寫 journal。
+> v0.4.1 起，ccRecall 在每場 session 結束後透過 Haiku 自動萃取記憶（約 $0.001/session）。v0.4.2–v0.4.8 強化了萃取管線：race-condition gate（`notBefore`、rescue reindex）、壓縮完整性、subagent 過濾、安全性（secret 脫敏、far-future timestamp 箝制）。Manual `recall_save` 仍可用於 session 中即時存記憶。
 
 ---
 
@@ -425,9 +421,8 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 | 版本 | 主題 | 狀態 |
 |------|------|------|
 | **v0.3.x** | 手動存、自動召回——記憶來自明確的 `recall_save` 呼叫；SessionStart hook 和 MCP 工具在未來 session 注入 | 已釋出 |
-| **v0.4.0** | Startup-v1 預設 + tool description 強化 | 已釋出 |
-| **v0.4.1** | Key-based upsert dedup、post-session memory extraction via Haiku、跨專案 topic intersection 記憶可見性 | 已釋出 |
-| **v0.5+** | Scorer/journal/harvester 降級、L1 keyword injection、memory lifecycle history | 規劃中 |
+| **v0.4.x** | Post-session extraction via Haiku、跨專案 topic intersection 記憶、萃取管線強化（race gate、壓縮完整性、subagent 過濾、安全性） | 已釋出 |
+| **v0.5+** | Journal/scorer/harvester 降級、L1 keyword injection、memory lifecycle history | 規劃中 |
 
 追蹤於 [GitHub Issues](https://github.com/tznthou/ccRecall/issues)。
 
