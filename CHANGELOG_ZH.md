@@ -8,6 +8,33 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.4.8] — 2026-07-16
+
+### 修復
+
+- **Post-session extraction 靜默漏抽約每五場一場 session（`no-session-id`）** —
+  extraction wrapper 用 `echo` 把 `/session/last` 的 JSON 回應接給 `jq`，而
+  zsh 的 `echo` 預設會展開跳脫序列：session title 含 JSON 跳脫 `\n` 時（多行
+  開場 prompt——全庫 21.5% 的 session 都是），JSON 在進 `jq` 前就被弄壞。
+  parse error 被 `2>/dev/null` 吞掉、`session_id` 留空，extraction 就這樣跳過。
+  佈防一週的 probe 收網結案：39 次 daemon 回應全是 HTTP 200 且 payload 正確，
+  損壞完全發生在 client 端——先前的「daemon 404」推論也一併撤銷。wrapper 改用
+  `printf '%s'` 逐 byte 原樣傳遞。注意 wrapper 位於 `scripts/`（由 shell rc
+  source，不在 npm package 內）：pull 之後重開 shell 才會生效。(#63)
+- **`/session/last` 可能回傳 subagent 而非剛結束的主 session** — subagent 的
+  `sessions` row 可能短暫存在而 `subagent_sessions` 登記缺席（2026-07-13 生產
+  環境實地拍到），此時 `NOT IN` 排除失效，端點回傳 `<parent>/agent-…`。wrapper
+  的 UUID 檢查會擋掉這種形狀，結果是同樣的靜默跳過。`getLastSession` 現在直接
+  以 id 形狀過濾——複合 id 絕不會是主 session——正確性不再依賴登記時序。JSONL
+  已從磁碟消失的 archived rows 也一併排除。(#63)
+
+### 文件
+
+- 架構圖修正：MCP server 是直接以 WAL 模式開 SQLite，從來不在 HTTP API 後面。
+  箭頭改為呼叫方向，watcher 與 extraction wrapper 進入圖中。新增 session
+  生命週期時序圖，涵蓋頭尾兩個與時間賽跑的環節（啟動注入、session 後抽取），
+  含 `notBefore` gate 與 subagent 過濾。(#63)
+
 ## [0.4.7] — 2026-07-05
 
 ### 修復

@@ -11,6 +11,40 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.4.8] — 2026-07-16
+
+### Fixed
+
+- **Post-session extraction silently skipped ~1 in 5 sessions (`no-session-id`)** —
+  the extraction wrapper piped `/session/last`'s JSON response through `echo`,
+  and zsh's `echo` expands escape sequences by default: any session title
+  containing a JSON-escaped `\n` (a multi-line first prompt — 21.5% of all
+  indexed sessions) turned into invalid JSON before reaching `jq`. The parse
+  error was swallowed by `2>/dev/null`, `session_id` stayed empty, and
+  extraction was skipped. A one-week probe closed the case: all 39 daemon
+  responses were HTTP 200 with correct payloads, so the mangling was entirely
+  client-side — this also retires the earlier "daemon 404" theory. The wrapper
+  now pipes through `printf '%s'`, which is byte-exact. Note the wrapper lives
+  in `scripts/` (sourced from your shell rc, not part of the npm package):
+  pull and restart your shell to pick it up. (#63)
+- **`/session/last` could return a subagent instead of the just-closed
+  session** — a subagent's `sessions` row can briefly exist while its
+  `subagent_sessions` registry row is absent (observed live 2026-07-13), so
+  the `NOT IN` exclusion failed and the endpoint returned `<parent>/agent-…`.
+  The wrapper's UUID check rejects that shape, producing the same silent
+  skip. `getLastSession` now filters on id shape directly — composite ids are
+  never main sessions — so correctness no longer depends on registry timing.
+  Archived rows (JSONL gone from disk) are excluded too. (#63)
+
+### Documentation
+
+- Architecture diagram corrected: the MCP server opens SQLite directly via
+  WAL — it never sat behind the HTTP API. Arrows now follow call direction,
+  and the watcher + extraction wrapper join the picture. A session-lifecycle
+  sequence diagram is new, covering both timing-sensitive ends (startup
+  injection, post-session extraction) including the `notBefore` gate and the
+  subagent filter. (#63)
+
 ## [0.4.7] — 2026-07-05
 
 ### Fixed
