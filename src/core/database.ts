@@ -1213,11 +1213,20 @@ export class Database {
   }
 
   getLastSession(projectId: string): SessionMeta | null {
+    // instr(id,'/') guards the registry-timing window (observed 2026-07-13):
+    // a subagent row can exist in sessions while its subagent_sessions row is
+    // momentarily absent, so EXCLUDE_SUBAGENTS alone lets "<parent>/agent-…"
+    // shadow the real last session. Composite ids are never main sessions —
+    // main ids come from top-level JSONL filenames, which cannot contain '/'.
+    // archived rows are excluded too: their JSONL is gone from disk, so they
+    // cannot be "the session that just closed" this endpoint exists to find.
     const row = this.db.prepare(
       `SELECT ${SESSION_SELECT_COLUMNS}
        FROM sessions
        WHERE project_id = ?
          AND id ${Database.EXCLUDE_SUBAGENTS}
+         AND instr(id, '/') = 0
+         AND archived = 0
        ORDER BY started_at DESC
        LIMIT 1`,
     ).get(projectId) as SessionRow | undefined
