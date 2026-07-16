@@ -11,9 +11,9 @@ A local memory service for Claude Code — indexes your conversation history, re
 
 ---
 
-> 📐 **v0.4.x — Post-session extraction is the primary memory write path**
+> 📐 **v0.5.0 — The knife-field release: one pipeline, nothing dead**
 >
-> Since v0.4.1, ccRecall automatically extracts memories after each session via Haiku (~$0.001/session). v0.4.2–v0.4.8 hardened the extraction pipeline: race-condition gates (`notBefore`, rescue reindex), compression integrity, subagent filtering, and security (secret redaction, far-future timestamp clamping). Manual `recall_save` remains available for in-session saves.
+> Post-session extraction via Haiku (~$0.001/session) has been the primary memory write path since v0.4.1, hardened across v0.4.2–v0.4.8. v0.5.0 removes everything that pipeline made obsolete — the journal review queue (zero promotions in its entire history), the rule scorer, checkpoints, and 8 caller-less HTTP endpoints — and rebuilds the replay-dedup registry as compact 64-bit hashes (database: 114MB → 42MB measured). Manual `recall_save` remains available for in-session saves.
 
 ---
 
@@ -37,9 +37,8 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/cc
 | **FTS5 full-text search** | Sub-100ms keyword search across all conversation history, fast enough for hook injection |
 | **CJK / mixed-script search** | Trigram tokenizer indexes Chinese / Japanese / Korean text; per-token AND LIKE fallback handles short queries like `UI 記憶` that trigram alone can't match |
 | **Incremental indexing** | Only re-indexes sessions that changed (mtime diffing), handles resumed sessions via UUID dedup |
-| **Metacognition** | `knowledge_map` aggregates topic mentions from sessions + memories. Depth derived from mention count (shallow / medium / deep). Exposed via `/metacognition/check` and MCP `recall_context` |
+| **Metacognition** | `knowledge_map` aggregates topic mentions from sessions + memories. Depth derived from mention count (shallow / medium / deep). Exposed via MCP `recall_context` |
 | **Forgetting curve** | Memories compress over time: raw → summary → one-liner → deleted. Confidence decays on unused memories. Background maintenance tick runs every 5 min |
-| **Trust two-tier** (v0.3.0) | Hooks write to a low-trust `session_journal` (reviewable, never recalled directly); manual `recall_save` writes high-trust `memories`. Promote candidates with `ccmem promote <id>`; rejected entries auto-clear after 7 days |
 | **Cross-project memory** (v0.4.1) | Memories surface across projects via topic intersection — if two projects share a `knowledge_map` topic, high-confidence memories from one appear in the other's startup injection (max 3 rows, confidence ≥ 0.8 gate) |
 | **Watch mode** | chokidar-based JSONL watcher picks up new sessions within 2 s; periodic 10 min full-resync covers missed filesystem events |
 | **Rescue reindex** | `/session/end` and `/session/last` both retry a reindex on miss, and `/session/last` staleness-gates via `notBefore` — no fresh-session race between the hook, the wrapper, and the daemon |
@@ -62,7 +61,7 @@ flowchart TB
         Parser["Parser<br/>parse conversations"]
         Summarizer["Summarizer<br/>rule-based extraction"]
         DB[("SQLite + FTS5<br/>index & search")]
-        API["HTTP API<br/>13 endpoints"]
+        API["HTTP API<br/>5 endpoints"]
     end
 
     subgraph Consumers["Consumers"]
@@ -73,7 +72,7 @@ flowchart TB
 
     JSONL --> Watcher --> Scanner --> Parser --> Summarizer --> DB
     DB <--> API
-    Hook -->|"inject / journal"| API
+    Hook -->|"inject / end-confirm"| API
     Wrapper -->|"GET /session/last"| API
     MCP <-->|"shared SQLite via WAL"| DB
 ```
@@ -105,7 +104,7 @@ sequenceDiagram
     rect rgb(255, 244, 235)
     Note over CC,X: Session end
     CC->>H: SessionEnd
-    H->>R: POST /session/end (low-trust journal)
+    H->>R: POST /session/end (index confirm + rescue)
     W->>R: GET /session/last?notBefore=launch_ts
     R-->>W: sessionId (staleness-gated, subagent-filtered)
     W->>X: text-only transcript
@@ -168,20 +167,17 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 
 ## API Endpoints
 
-| Endpoint | Method | Description | Status |
+Five endpoints, each with a live caller — v0.5.0 removed the other eight
+(`/journal/*`, `/memory/save`, `/memory/context`, `/metacognition/check`,
+`/session/checkpoint`, `/lint/warnings`); they now return 404.
+
+| Endpoint | Method | Description | Caller |
 |----------|--------|-------------|--------|
-| `/health` | GET | Service health + DB stats + integrity check status + `journalPendingCount` (since v0.3.0) | Live |
-| `/memory/query?q=...&limit=...&project=...` | GET | FTS5 search across memories with optional project filter (journal entries excluded by design) | Live |
-| `/memory/save` | POST | Save a memory entry (origin-checked) | Live |
-| `/session/end` | POST | Harvest a finished session into `session_journal` (idempotent; was `memories` pre-0.3.0) | Live |
-| `/journal/pending` | GET | List journal entries awaiting promotion review | Live (v0.3.0) |
-| `/journal/promote` | POST | Atomically promote a journal entry into `memories` | Live (v0.3.0) |
-| `/journal/reject` | POST | Soft-delete a journal entry (cleared after 7-day TTL by decay sweep) | Live (v0.3.0) |
-| `/memory/context?session_id=...` | GET | Session context lookup | Stub |
-| `/metacognition/check?projectId=...[&topic=...]` | GET | Knowledge map: summary (top/recent/stale topics + counts) or topic detail (memories + related topics) | Live |
-| `/session/checkpoint` | POST | Mid-session snapshot into dedicated `session_checkpoints` table (not harvested as memory) | Live |
-| `/lint/warnings` | GET | Lint report: orphan (session deleted) + stale (low-confidence, long-idle) memory warnings | Live |
-| `/session/last?cwd=...` | GET | Most recent session metadata for a project path (used by post-session extraction wrapper) | Live (v0.4.1) |
+| `/health` | GET | Service health + DB stats + integrity check status | CLI, extraction wrapper |
+| `/memory/startup?project=...` | GET | SessionStart-tier retrieval: cold + recent-confidence + FTS fallback, token-budgeted | SessionStart hook |
+| `/memory/query?q=...&limit=...&project=...` | GET | FTS5 search across memories with optional project filter | SessionStart hook (keyword tier) |
+| `/session/end` | POST | Confirm the just-ended session is indexed (rescue reindex on miss) | SessionEnd hook |
+| `/session/last?cwd=...` | GET | Most recent session metadata for a project path (staleness-gated via `notBefore`) | Extraction wrapper |
 
 ## MCP Tools
 
@@ -233,21 +229,10 @@ Daemon and hook lifecycle (macOS):
 | `ccmem uninstall-daemon` | Stop and remove the LaunchAgent |
 | `ccmem install-hooks` | Merge SessionStart / SessionEnd entries into `~/.claude/settings.json` |
 | `ccmem uninstall-hooks` | Remove ccRecall's hook entries (other hooks untouched) |
+| `ccmem cleanup --orphans` | List (and with `--yes`, delete) memories whose session rows are gone |
 
-Journal review (since v0.3.0):
-
-| Command | Purpose |
-|---------|---------|
-| `ccmem promote <id>` | Promote a journal entry into `memories`. Optional `--type` (default `discovery`) and `--confidence` (default `0.7`) |
-| `ccmem reject <id>` | Soft-delete a journal entry; cleaned up after the 7-day TTL by the decay sweep |
-
-Surface pending candidates:
-
-```bash
-curl http://127.0.0.1:7749/journal/pending
-# or just check the count
-curl http://127.0.0.1:7749/health | jq .journalPendingCount
-```
+`ccmem promote` / `ccmem reject` were removed in v0.5.0 along with the
+journal pipeline they reviewed.
 
 ---
 
@@ -267,8 +252,6 @@ ccRecall lives alongside Claude Code's built-in auto memory (`~/.claude/projects
 **Default for querying:** MEMORY.md is already in context — check the index first. Fall back to `recall_query` / `recall_context` only when the user references past work and auto memory has no matching entry.
 
 ccRecall's value is the long tail that auto memory can't cover (nobody hand-curates 500 sessions of notes). If Claude defaults to both, auto memory wins because it's already loaded and curated. ccRecall earns its keep when the curated index misses.
-
-**Within ccRecall there's now a second trust split** (since v0.3.0). The SessionEnd hook writes to a low-trust `session_journal` table that `recall_query` does **not** read. Promote a candidate to high-trust `memories` with `ccmem promote <id>` to make it queryable. Manual `recall_save` skips the journal entirely — it writes straight to memories. The point is to let the harvester record broadly while keeping recall results clean.
 
 ---
 
@@ -351,8 +334,7 @@ ccRecall/
 │   │   ├── indexer.ts            # Indexing pipeline orchestrator
 │   │   ├── memory-service.ts     # Memory lifecycle (touch / delete / update)
 │   │   ├── compression.ts        # L0→L1→L2→delete state machine
-│   │   ├── lint.ts               # Orphan / stale memory detection
-│   │   ├── maintenance-coordinator.ts  # Background compression tick + journal decay sweep
+│   │   ├── maintenance-coordinator.ts  # Background compression tick
 │   │   ├── watcher.ts            # chokidar JSONL watcher (Phase 4e)
 │   │   └── log-safe.ts           # scrubErrorMessage — log-injection defence
 │   ├── api/
@@ -362,8 +344,7 @@ ccRecall/
 │   │   ├── server.ts             # MCP stdio server entry (shebang bin)
 │   │   └── tools.ts              # recall_query + recall_context + recall_save
 │   ├── cli/
-│   │   ├── daemon.ts             # install-daemon / uninstall-daemon (macOS)
-│   │   └── journal.ts            # ccmem promote / reject (since v0.3.0)
+│   │   └── daemon.ts             # install-daemon / uninstall-daemon (macOS)
 │   └── index.ts                  # HTTP entry point + subcommand dispatch
 ├── hooks/
 │   ├── session-start.mjs         # Inject memories on SessionStart (stdout)
@@ -373,11 +354,10 @@ ccRecall/
 │   ├── tutorial.md               # End-user walkthrough (install → MCP → usage)
 │   ├── architecture.md           # Daemon design rationale (contributor-oriented)
 │   └── launchd.md                # macOS LaunchAgent install/troubleshoot
-├── tests/                        # 629 tests across 39 files (parser, scanner,
+├── tests/                        # 524 tests across 34 files (parser, scanner,
 │   │                             # summarizer, database, indexer, e2e, MCP,
 │   │                             # memories, hooks, watcher, CLI, migrations,
-│   │                             # FTS5 CJK edge cases, integrity monitor,
-│   │                             # session_journal DAO, promote+reject, sweep, ...)
+│   │                             # FTS5 CJK edge cases, integrity monitor, ...)
 │   └── fixtures/                 # Sample JSONL + shared test helpers
 ├── .mcp.json.example             # MCP client config template
 └── NOTICE / SECURITY.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
@@ -429,7 +409,8 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 |---------|-------|--------|
 | **v0.3.x** | Manual save, automatic recall — memories come from explicit `recall_save` calls; SessionStart hook and MCP tools inject them into future sessions | Released |
 | **v0.4.x** | Post-session extraction via Haiku, cross-project memory via topic intersection, extraction pipeline hardening (race gates, compression integrity, subagent filtering, security) | Released |
-| **v0.5+** | Journal/scorer/harvester deprecation, L1 keyword injection, memory lifecycle history | Planned |
+| **v0.5.0** | The knife field: journal/scorer/harvester pipelines removed (zero promotions ever), endpoints 13 → 5, `message_uuids` dual-hash rebuild (DB 114MB → 42MB) | Released |
+| **v0.5+** | CJK-aware topic extraction (`\p{Script=Han}` tokenizer + Chinese stopwords), L1 keyword injection, README → manifesto | Planned |
 
 Tracked in [GitHub Issues](https://github.com/tznthou/ccRecall/issues).
 

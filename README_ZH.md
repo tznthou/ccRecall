@@ -11,9 +11,9 @@ Claude Code 的本地記憶服務——索引你的對話歷史，按需召回�
 
 ---
 
-> 📐 **v0.4.x — Post-session extraction 成為主要記憶寫入路徑**
+> 📐 **v0.5.0 — 砍刀場版本：一條管線，零死代碼**
 >
-> v0.4.1 起，ccRecall 在每場 session 結束後透過 Haiku 自動萃取記憶（約 $0.001/session）。v0.4.2–v0.4.8 強化了萃取管線：race-condition gate（`notBefore`、rescue reindex）、壓縮完整性、subagent 過濾、安全性（secret 脫敏、far-future timestamp 箝制）。Manual `recall_save` 仍可用於 session 中即時存記憶。
+> Post-session extraction via Haiku（約 $0.001/session）自 v0.4.1 起就是主要記憶寫入路徑，v0.4.2–v0.4.8 逐版強化。v0.5.0 把這條管線淘汰掉的東西一次清完——journal 審閱佇列（史上零 promotion）、規則 scorer、checkpoints、8 個零 caller 的 HTTP endpoint——並把 replay 去重登記表重建為精巧的 64-bit hash（資料庫實測 114MB → 42MB）。Manual `recall_save` 仍可用於 session 中即時存記憶。
 
 ---
 
@@ -37,9 +37,8 @@ ccRecall 是 [ccRewind](https://github.com/tznthou/ccRewind)（對話回放 GUI�
 | **FTS5 全文搜尋** | 所有對話歷史的關鍵詞搜尋 <100ms，快到可以在 hook 中注入 |
 | **CJK / 中英混合搜尋** | Trigram tokenizer 索引中日韓文字；短 token 查詢（如 `UI 記憶`）以 per-token AND LIKE fallback 補齊，避開 trigram 對 <3 字 token 的盲區 |
 | **增量索引** | 只重新索引有變動的 session（mtime 比對），透過 UUID 去重處理接續 session |
-| **元認知** | `knowledge_map` 聚合 session + memory 的主題提及。由 mention count 衍生深度（shallow / medium / deep）。透過 `/metacognition/check` 與 MCP `recall_context` 暴露 |
+| **元認知** | `knowledge_map` 聚合 session + memory 的主題提及。由 mention count 衍生深度（shallow / medium / deep）。透過 MCP `recall_context` 暴露 |
 | **遺忘曲線** | 記憶隨時間壓縮：原始→摘要→一行結論→刪除。未使用的記憶信心衰減。背景維護 tick 每 5 分鐘跑一次 |
-| **Trust 二層**（v0.3.0） | Hook 寫入 low-trust `session_journal`（可審閱、不被 recall）；manual `recall_save` 寫 high-trust `memories`。用 `ccmem promote <id>` 升級候選；reject 後 7 天 TTL 自動清 |
 | **跨專案記憶**（v0.4.1） | 記憶透過 topic intersection 跨專案浮出——若兩個專案的 `knowledge_map` 有共同 topic，高信心記憶會出現在另一個專案的 startup injection（最多 3 條，confidence ≥ 0.8 gate） |
 | **Watch mode** | 基於 chokidar 的 JSONL watcher 在 2 秒內偵測新 session；每 10 分鐘 full-resync 補救 FS 事件漏接 |
 | **Rescue reindex** | `/session/end` 和 `/session/last` 都會在 miss 時重 index 再試一次，`/session/last` 另有 `notBefore` staleness gate——hook、wrapper、daemon 三方不會有 fresh-session race |
@@ -62,7 +61,7 @@ flowchart TB
         Parser["Parser<br/>解析對話"]
         Summarizer["Summarizer<br/>規則式萃取"]
         DB[("SQLite + FTS5<br/>索引與搜尋")]
-        API["HTTP API<br/>13 個端點"]
+        API["HTTP API<br/>5 個端點"]
     end
 
     subgraph Consumers["使用端"]
@@ -73,7 +72,7 @@ flowchart TB
 
     JSONL --> Watcher --> Scanner --> Parser --> Summarizer --> DB
     DB <--> API
-    Hook -->|"注入 / journal"| API
+    Hook -->|"注入 / 收尾確認"| API
     Wrapper -->|"GET /session/last"| API
     MCP <-->|"WAL 模式共用 SQLite"| DB
 ```
@@ -105,7 +104,7 @@ sequenceDiagram
     rect rgb(255, 244, 235)
     Note over CC,X: Session 結束
     CC->>H: SessionEnd
-    H->>R: POST /session/end（低信任 journal）
+    H->>R: POST /session/end（確認已索引 + rescue）
     W->>R: GET /session/last?notBefore=launch_ts
     R-->>W: sessionId（過 staleness gate、濾掉 subagent）
     W->>X: 純文字 transcript
@@ -168,20 +167,17 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 
 ## API 端點
 
-| 端點 | 方法 | 說明 | 狀態 |
-|------|------|------|------|
-| `/health` | GET | 服務健康 + DB 統計 + integrity 檢查狀態 + `journalPendingCount`（v0.3.0 新增） | 已上線 |
-| `/memory/query?q=...&limit=...&project=...` | GET | FTS5 跨 session 搜尋，可選 project 過濾（journal 條目 by design 不含） | 已上線 |
-| `/memory/save` | POST | 儲存記憶條目（Origin 驗證） | 已上線 |
-| `/session/end` | POST | 把結束的 session 寫入 `session_journal`（idempotent；0.3.0 前是寫 `memories`） | 已上線 |
-| `/journal/pending` | GET | 列出待 promote 審閱的 journal 條目 | 已上線（v0.3.0） |
-| `/journal/promote` | POST | atomic 把 journal 條目升級到 `memories` | 已上線（v0.3.0） |
-| `/journal/reject` | POST | soft-delete journal 條目（7 天 TTL，由 decay sweep 清理） | 已上線（v0.3.0） |
-| `/memory/context?session_id=...` | GET | Session context 查詢 | Stub |
-| `/metacognition/check?projectId=...[&topic=...]` | GET | 知識地圖：summary（top/recent/stale topics + counts）或 topic detail（memories + related topics） | 已上線 |
-| `/session/checkpoint` | POST | 會話中途快照寫入獨立 `session_checkpoints` 表（不會被 harvest 成 memory） | 已上線 |
-| `/lint/warnings` | GET | Lint 報告：orphan（session 已刪）+ stale（低信心、長期未用）記憶警告 | 已上線 |
-| `/session/last?cwd=...` | GET | 回傳專案路徑的最新 session metadata（post-session extraction wrapper 使用） | 已上線（v0.4.1） |
+五個端點，每個都有活的 caller——v0.5.0 移除了其餘八個
+（`/journal/*`、`/memory/save`、`/memory/context`、`/metacognition/check`、
+`/session/checkpoint`、`/lint/warnings`），現在一律回 404。
+
+| 端點 | 方法 | 說明 | Caller |
+|------|------|------|--------|
+| `/health` | GET | 服務健康 + DB 統計 + integrity 檢查狀態 | CLI、extraction wrapper |
+| `/memory/startup?project=...` | GET | SessionStart 級檢索：cold + recent-confidence + FTS fallback，帶 token 預算 | SessionStart hook |
+| `/memory/query?q=...&limit=...&project=...` | GET | FTS5 跨記憶搜尋，可選 project 過濾 | SessionStart hook（keyword 層） |
+| `/session/end` | POST | 確認剛結束的 session 已被索引（miss 時 rescue reindex） | SessionEnd hook |
+| `/session/last?cwd=...` | GET | 回傳專案路徑的最新 session metadata（`notBefore` staleness gate） | Extraction wrapper |
 
 ## MCP 工具
 
@@ -231,21 +227,9 @@ Daemon 與 hook 生命週期（macOS）：
 | `ccmem uninstall-daemon` | 停掉並移除 LaunchAgent |
 | `ccmem install-hooks` | 把 SessionStart / SessionEnd 條目合併進 `~/.claude/settings.json` |
 | `ccmem uninstall-hooks` | 移除 ccRecall 自己的 hook 條目（其他 hook 不動） |
+| `ccmem cleanup --orphans` | 列出（加 `--yes` 則刪除）session 已消失的 orphan 記憶 |
 
-Journal 審閱（v0.3.0 新增）：
-
-| 指令 | 用途 |
-|------|------|
-| `ccmem promote <id>` | 把 journal 條目升級到 `memories`。可選 `--type`（預設 `discovery`）、`--confidence`（預設 `0.7`） |
-| `ccmem reject <id>` | soft-delete journal 條目；7 天 TTL 後由 decay sweep 清掉 |
-
-查待 promote 候選：
-
-```bash
-curl http://127.0.0.1:7749/journal/pending
-# 或只看計數
-curl http://127.0.0.1:7749/health | jq .journalPendingCount
-```
+`ccmem promote` / `ccmem reject` 已於 v0.5.0 隨 journal 管線一併移除。
 
 ---
 
@@ -265,8 +249,6 @@ ccRecall 和 Claude Code 內建的 auto memory（`~/.claude/projects/*/memory/`�
 **查詢預設：MEMORY.md 已經在 context 裡，先看 index 有沒有。** auto memory 沒答案，才 fallback 到 `recall_query` / `recall_context`。
 
 ccRecall 的價值在長尾——幾百個 session 不可能全手工整理。如果 Claude 兩邊都試，auto memory 永遠會贏（本來就在 context 裡而且已經被策展）。ccRecall 存在的意義是：策展索引漏掉時，長尾那堆還在資料庫裡可以撈出來。
-
-**ccRecall 內部從 v0.3.0 起多了一層 trust 拆分。** SessionEnd hook 寫到 low-trust `session_journal` 表——`recall_query` 不會去讀那裡。要讓某筆候選進到查詢結果，跑 `ccmem promote <id>` 升級到 high-trust `memories`。Manual `recall_save` 完全不經 journal——直接寫 memories。設計目的：讓 harvester 廣捕，但 recall 結果保持乾淨。
 
 ---
 
@@ -344,8 +326,7 @@ ccRecall/
 │   │   ├── indexer.ts                # 索引 pipeline 調度
 │   │   ├── memory-service.ts         # 記憶生命週期(touch / delete / update)
 │   │   ├── compression.ts            # L0→L1→L2→delete 狀態機
-│   │   ├── lint.ts                   # Orphan / stale 記憶偵測
-│   │   ├── maintenance-coordinator.ts # 背景壓縮 tick + journal decay sweep
+│   │   ├── maintenance-coordinator.ts # 背景壓縮 tick
 │   │   ├── watcher.ts                # chokidar JSONL watcher(Phase 4e)
 │   │   └── log-safe.ts               # scrubErrorMessage — log-injection 防護
 │   ├── api/
@@ -355,8 +336,7 @@ ccRecall/
 │   │   ├── server.ts                 # MCP stdio server 入口(含 shebang)
 │   │   └── tools.ts                  # recall_query + recall_context + recall_save
 │   ├── cli/
-│   │   ├── daemon.ts                 # install-daemon / uninstall-daemon(macOS)
-│   │   └── journal.ts                # ccmem promote / reject(v0.3.0 新增)
+│   │   └── daemon.ts                 # install-daemon / uninstall-daemon(macOS)
 │   └── index.ts                      # HTTP 入口 + 子指令分派
 ├── hooks/
 │   ├── session-start.mjs             # SessionStart 注入記憶(stdout)
@@ -366,11 +346,10 @@ ccRecall/
 │   ├── tutorial_zh.md                # 使用者教學（安裝 → MCP → 日常使用）
 │   ├── architecture_zh.md            # Daemon 設計取捨（給 contributor 看）
 │   └── launchd.md                    # macOS LaunchAgent 安裝/troubleshoot
-├── tests/                            # 629 個測試橫跨 39 檔案（parser、scanner、
+├── tests/                            # 524 個測試橫跨 34 檔案（parser、scanner、
 │   │                                 # summarizer、database、indexer、e2e、MCP、
 │   │                                 # memories、hooks、watcher、CLI、migrations、
-│   │                                 # FTS5 CJK edge cases、integrity monitor、
-│   │                                 # session_journal DAO、promote+reject、sweep 等）
+│   │                                 # FTS5 CJK edge cases、integrity monitor 等）
 │   └── fixtures/                     # 測試用 JSONL + 共用 helpers
 ├── .mcp.json.example                 # MCP client 設定範本
 └── NOTICE / SECURITY.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
@@ -422,7 +401,8 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 |------|------|------|
 | **v0.3.x** | 手動存、自動召回——記憶來自明確的 `recall_save` 呼叫；SessionStart hook 和 MCP 工具在未來 session 注入 | 已釋出 |
 | **v0.4.x** | Post-session extraction via Haiku、跨專案 topic intersection 記憶、萃取管線強化（race gate、壓縮完整性、subagent 過濾、安全性） | 已釋出 |
-| **v0.5+** | Journal/scorer/harvester 降級、L1 keyword injection、memory lifecycle history | 規劃中 |
+| **v0.5.0** | 砍刀場：journal/scorer/harvester 管線移除（史上零 promotion）、端點 13 → 5、`message_uuids` 雙 hash 重建（DB 114MB → 42MB） | 已釋出 |
+| **v0.5+** | CJK topic 抽取（`\p{Script=Han}` tokenizer + 中文 stopwords）、L1 keyword injection、README → manifesto | 規劃中 |
 
 追蹤於 [GitHub Issues](https://github.com/tznthou/ccRecall/issues)。
 
