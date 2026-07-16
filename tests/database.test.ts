@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import path from 'node:path'
 import os from 'node:os'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { Database } from '../src/core/database'
+import { Database, hash64 } from '../src/core/database'
 import type { MessageInput } from '../src/core/database'
 
 let tmpDir: string
@@ -41,7 +41,7 @@ afterEach(async () => {
 })
 
 describe('schema', () => {
-  it('createSchema → tables + indexes at v22 target state', () => {
+  it('createSchema → tables + indexes at v24 target state', () => {
     const tables = db.rawAll<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).map(r => r.name)
@@ -52,20 +52,30 @@ describe('schema', () => {
     expect(tables).toContain('memories')
     expect(tables).toContain('memories_fts')
     expect(tables).toContain('sessions_fts')
-    expect(tables).toContain('session_journal')
     // v20 dropped
     expect(tables).not.toContain('messages')
     expect(tables).not.toContain('messages_fts')
     expect(tables).not.toContain('message_content')
     expect(tables).not.toContain('message_archive')
+    // v24 dropped (knife-field)
+    expect(tables).not.toContain('session_journal')
+    expect(tables).not.toContain('session_checkpoints')
+
+    // v24: sessions has no harvest_text column
+    const sessionCols = db.rawAll<{ name: string }>('PRAGMA table_info(sessions)').map(c => c.name)
+    expect(sessionCols).not.toContain('harvest_text')
+
+    // v24: message_uuids is dual-hash
+    const uuidCols = db.rawAll<{ name: string }>('PRAGMA table_info(message_uuids)').map(c => c.name)
+    expect(uuidCols.sort()).toEqual(['session_hash', 'uuid_hash'])
 
     const idxNames = db.rawAll<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'",
     ).map(r => r.name)
     expect(idxNames).toContain('idx_message_uuids_session')
     expect(idxNames).toContain('idx_sessions_project')
-    expect(idxNames).toContain('idx_journal_status')
-    expect(idxNames).toContain('idx_journal_session_hash')
+    expect(idxNames).not.toContain('idx_journal_status')
+    expect(idxNames).not.toContain('idx_journal_session_hash')
     expect(idxNames).not.toContain('idx_messages_session')
   })
 })
@@ -139,11 +149,15 @@ describe('indexSession', () => {
     expect(sessions[0].title).toBe('Test session')
     expect(sessions[0].messageCount).toBe(2)
 
-    // v20: UUID 登記到 message_uuids 供跨 session replay 去重
-    const uuids = db.rawAll<{ uuid: string }>(
-      "SELECT uuid FROM message_uuids WHERE session_id = 'sess-001' ORDER BY uuid",
-    ).map(r => r.uuid)
-    expect(uuids).toEqual(['a1', 'u1'])
+    // v24: UUID 以雙 hash 登記到 message_uuids 供跨 session replay 去重。
+    // hash 比對放 SQL 端（rawAll 無 safeIntegers，讀回 JS 會失真）。
+    for (const uuid of ['a1', 'u1']) {
+      expect(db.rawAll<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM message_uuids
+         WHERE uuid_hash = ${hash64(uuid)} AND session_hash = ${hash64('sess-001')}`,
+      )[0].c, uuid).toBe(1)
+    }
+    expect(db.rawAll<{ c: number }>('SELECT COUNT(*) AS c FROM message_uuids')[0].c).toBe(2)
   })
 
   it('re-index replaces session row and cascades message_uuids', () => {
@@ -167,10 +181,14 @@ describe('indexSession', () => {
     expect(sessions).toHaveLength(1)
     expect(sessions[0].title).toBe('Updated')
 
-    const uuids = db.rawAll<{ uuid: string }>(
-      "SELECT uuid FROM message_uuids WHERE session_id = 'sess-001'",
-    ).map(r => r.uuid)
-    expect(uuids).toEqual(['new-uuid'])
+    const sessHash = hash64('sess-001')
+    expect(db.rawAll<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM message_uuids WHERE session_hash = ${sessHash}`,
+    )[0].c).toBe(1)
+    expect(db.rawAll<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM message_uuids
+       WHERE session_hash = ${sessHash} AND uuid_hash = ${hash64('new-uuid')}`,
+    )[0].c).toBe(1)
   })
 })
 
@@ -237,7 +255,7 @@ describe('archiveStaleSessionsExcept', () => {
 
     // archive 只標 archived flag，不清 message_uuids（dedup 仍需）
     const archivedUuids = db.rawAll<{ c: number }>(
-      "SELECT COUNT(*) AS c FROM message_uuids WHERE session_id = 'archive-me'",
+      `SELECT COUNT(*) AS c FROM message_uuids WHERE session_hash = ${hash64('archive-me')}`,
     )[0].c
     expect(archivedUuids).toBe(1)
   })

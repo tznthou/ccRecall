@@ -5,20 +5,9 @@ import os from 'node:os'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import BetterSqlite3 from 'better-sqlite3'
-import { Database } from '../src/core/database'
-import type { MessageInput } from '../src/core/database'
+import { Database, hash64 } from '../src/core/database'
 
 let tmpDir: string
-
-/** Build a MessageInput with only uuid/sequence varying. */
-function mkMsg(uuid: string, sequence: number, role: 'user' | 'assistant' = 'user'): MessageInput {
-  return {
-    uuid, role, type: role, contentText: null, contentJson: null,
-    hasToolUse: false, hasToolResult: false, toolNames: [], timestamp: null,
-    sequence, rawJson: null, inputTokens: null, outputTokens: null,
-    cacheReadTokens: null, cacheCreationTokens: null, model: null,
-  }
-}
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-mig20-'))
@@ -156,29 +145,6 @@ describe('v20 migration — fresh DB state', () => {
     }
   })
 
-  it('FK CASCADE: deleting a session clears its message_uuids rows', () => {
-    const db = new Database(path.join(tmpDir, 'cascade.db'))
-    try {
-      db.upsertProject('p1', '/p1')
-      db.indexSession({
-        sessionId: 'sess-casc', projectId: 'p1', projectDisplayName: '/p1',
-        title: null, messageCount: 2, filePath: '/tmp/c.jsonl', fileSize: 0,
-        fileMtime: '2024-01-01T00:00:00.000Z', startedAt: null, endedAt: null,
-        messages: [mkMsg('c-u1', 0, 'user'), mkMsg('c-a1', 1, 'assistant')],
-      })
-      expect(db.rawAll<{ c: number }>(
-        "SELECT COUNT(*) AS c FROM message_uuids WHERE session_id = 'sess-casc'",
-      )[0].c).toBe(2)
-
-      db.rawExec("DELETE FROM sessions WHERE id = 'sess-casc'")
-
-      expect(db.rawAll<{ c: number }>(
-        "SELECT COUNT(*) AS c FROM message_uuids WHERE session_id = 'sess-casc'",
-      )[0].c).toBe(0)
-    } finally {
-      db.close()
-    }
-  })
 })
 
 describe('v20 migration — upgrade from simulated v19', () => {
@@ -204,13 +170,19 @@ describe('v20 migration — upgrade from simulated v19', () => {
       expect(dbB.getSchemaVersion()).toBeGreaterThanOrEqual(20)
       expect(existsSync(dbPath + '.pre-v20.bak')).toBe(true)
 
-      const uuids = dbB.rawAll<{ uuid: string; session_id: string }>(
-        'SELECT uuid, session_id FROM message_uuids ORDER BY uuid',
-      )
-      expect(uuids).toEqual([
-        { uuid: 'a1', session_id: 's1' },
-        { uuid: 'u1', session_id: 's1' },
-      ])
+      // Reopen runs v20 (TEXT backfill) then v24 (dual-hash rebuild) in one
+      // chain, so assert the final hashed shape. COUNT compares hashes on the
+      // SQL side — rawAll has no safeIntegers, a returned hash would be lossy.
+      for (const [uuid, sid] of [['a1', 's1'], ['u1', 's1']] as const) {
+        const hit = dbB.rawAll<{ c: number }>(
+          `SELECT COUNT(*) AS c FROM message_uuids
+           WHERE uuid_hash = ${hash64(uuid)} AND session_hash = ${hash64(sid)}`,
+        )[0].c
+        expect(hit, `${uuid}@${sid}`).toBe(1)
+      }
+      expect(dbB.rawAll<{ c: number }>(
+        'SELECT COUNT(*) AS c FROM message_uuids',
+      )[0].c).toBe(2)
 
       const tables = dbB.rawAll<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type='table'",
@@ -243,11 +215,15 @@ describe('v20 migration — upgrade from simulated v19', () => {
 
     const dbB = new Database(dbPath)
     try {
-      const row = dbB.rawAll<{ session_id: string }>(
-        "SELECT session_id FROM message_uuids WHERE uuid = 'shared-uuid'",
+      // Post-v24 shape: compare hashes SQL-side (see happy-path note).
+      const rows = dbB.rawAll<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM message_uuids WHERE uuid_hash = ${hash64('shared-uuid')}`,
       )
-      expect(row).toHaveLength(1)
-      expect(row[0].session_id).toBe('older')
+      expect(rows[0].c).toBe(1)
+      expect(dbB.rawAll<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM message_uuids
+         WHERE uuid_hash = ${hash64('shared-uuid')} AND session_hash = ${hash64('older')}`,
+      )[0].c).toBe(1)
     } finally {
       dbB.close()
     }

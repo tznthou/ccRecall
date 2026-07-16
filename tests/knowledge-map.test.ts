@@ -31,7 +31,7 @@ afterEach(async () => {
 })
 
 describe('Phase 3a schema', () => {
-  it('creates knowledge_map, session_topics, memory_topics, session_checkpoints tables', () => {
+  it('creates knowledge_map, session_topics, memory_topics tables (session_checkpoints dropped in v24)', () => {
     const objs = db.rawAll<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     )
@@ -39,7 +39,7 @@ describe('Phase 3a schema', () => {
     expect(names).toContain('knowledge_map')
     expect(names).toContain('session_topics')
     expect(names).toContain('memory_topics')
-    expect(names).toContain('session_checkpoints')
+    expect(names).not.toContain('session_checkpoints')
   })
 
   it('knowledge_map has 4 columns only (minimal schema)', () => {
@@ -54,11 +54,6 @@ describe('Phase 3a schema', () => {
     expect(names).not.toContain('weight')
   })
 
-  it('session_checkpoints has no topics_json column (simplified)', () => {
-    const cols = db.rawAll<{ name: string }>("PRAGMA table_info(session_checkpoints)")
-    const names = cols.map(c => c.name)
-    expect(names).not.toContain('topics_json')
-  })
 })
 
 describe('saveSessionTopics', () => {

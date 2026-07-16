@@ -1,9 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 import BetterSqlite3 from 'better-sqlite3'
+import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
+
+/** 64-bit signed hash for message_uuids (v24 dual-hash schema). First 8 bytes
+ *  of SHA-256 read as a signed BigInt — exactly the SQLite INTEGER range, so
+ *  uuid_hash doubles as the rowid (zero autoindex). Collision odds at ~400k
+ *  rows ≈ 4e-9; a collision merely makes one replayed message skip indexing.
+ *
+ *  ⚠️ Reading these values back REQUIRES `.safeIntegers(true)` on the statement:
+ *  better-sqlite3 otherwise returns a lossy JS number for |v| > 2^53 and any
+ *  Map<bigint, …> reverse lookup silently misses (dedup would silently die). */
+export function hash64(s: string): bigint {
+  return createHash('sha256').update(s).digest().readBigInt64BE(0)
+}
 
 /** 寫入 memories 時使用的參數型別 */
 export interface MemoryInput {
@@ -785,6 +798,54 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 24,
+    description: 'knife-field (v0.5.0): drop session_journal/session_checkpoints/sessions.harvest_text; rebuild message_uuids as dual 64-bit hash (73.6MB → ~14MB)',
+    up: (db) => {
+      // Dead-pipeline tables — the journal DLQ recorded 0 promotions in its
+      // entire history (2026-06-10 audit) and /session/checkpoint had no caller.
+      db.exec(`
+        DROP TABLE IF EXISTS session_journal;
+        DROP TABLE IF EXISTS session_checkpoints;
+      `)
+
+      const sessionCols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+      if (sessionCols.some(c => c.name === 'harvest_text')) {
+        db.exec('ALTER TABLE sessions DROP COLUMN harvest_text;')
+      }
+
+      // message_uuids: TEXT uuid PK (36 chars ×3 b-trees) → dual 64-bit hash.
+      // uuid_hash INTEGER PRIMARY KEY is the rowid alias — zero autoindex.
+      // Skip when already dual-hash (idempotency; also covers a repaired DB
+      // where initSchema recreated the table in its final shape).
+      const uuidCols = db.prepare('PRAGMA table_info(message_uuids)').all() as Array<{ name: string }>
+      if (uuidCols.some(c => c.name === 'uuid_hash')) return
+
+      db.exec(`
+        CREATE TABLE message_uuids_new (
+          uuid_hash    INTEGER PRIMARY KEY,
+          session_hash INTEGER NOT NULL
+        );
+      `)
+      // JS-side rehash: hash64 lives here, not in SQLite. ~400k rows over the
+      // sync API completes in seconds. INSERT OR IGNORE keeps first-writer-wins
+      // on the astronomically unlikely 64-bit collision.
+      const insert = db.prepare(
+        'INSERT OR IGNORE INTO message_uuids_new (uuid_hash, session_hash) VALUES (?, ?)',
+      )
+      const rows = db.prepare(
+        'SELECT uuid, session_id FROM message_uuids',
+      ).all() as Array<{ uuid: string; session_id: string }>
+      for (const r of rows) {
+        insert.run(hash64(r.uuid), hash64(r.session_id))
+      }
+      db.exec(`
+        DROP TABLE message_uuids;
+        ALTER TABLE message_uuids_new RENAME TO message_uuids;
+        CREATE INDEX idx_message_uuids_session ON message_uuids(session_hash);
+      `)
+    },
+  },
 ]
 
 export class Database {
@@ -1017,14 +1078,24 @@ export class Database {
         `)
       }
     } else {
-      // v20+ baseline — message_uuids carries the UUID dedup set.
+      // v20+ baseline — message_uuids carries the UUID dedup set. DDL is the
+      // v24 dual-hash shape: on a v20–v23 DB the table already exists so this
+      // is a no-op (v24 migration handles the rebuild); it only materialises
+      // when repairing a DB whose table went missing, and then the v24
+      // migration's shape check skips the rebuild.
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS message_uuids (
-          uuid TEXT PRIMARY KEY,
-          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE
+          uuid_hash    INTEGER PRIMARY KEY,
+          session_hash INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_message_uuids_session ON message_uuids(session_id);
       `)
+      // Index only when the table is dual-hash: a v20–v23 table awaiting the
+      // v24 rebuild has no session_hash column, and indexing it here would
+      // throw. The rebuild recreates the index itself.
+      const uuidCols = this.db.prepare('PRAGMA table_info(message_uuids)').all() as Array<{ name: string }>
+      if (uuidCols.some(c => c.name === 'session_hash')) {
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_message_uuids_session ON message_uuids(session_hash);')
+      }
     }
   }
 
@@ -1125,11 +1196,15 @@ export class Database {
   }
 
   getSessions(projectId: string): SessionMeta[] {
+    // instr(id,'/') mirrors getLastSession's registry-timing guard (v0.4.8):
+    // a subagent row can momentarily lack its subagent_sessions registration,
+    // and composite "<parent>/agent-…" ids are never main sessions.
     const rows = this.db.prepare(
       `SELECT ${SESSION_SELECT_COLUMNS}
        FROM sessions
        WHERE project_id = ?
          AND id ${Database.EXCLUDE_SUBAGENTS}
+         AND instr(id, '/') = 0
        ORDER BY started_at DESC`,
     ).all(projectId) as SessionRow[]
 
@@ -1260,11 +1335,12 @@ export class Database {
     this.db.prepare('DELETE FROM subagent_sessions WHERE parent_session_id = ?').run(parentSessionId)
   }
 
-  /** 刪除單一 subagent session（session_files / message_uuids 會經 FK CASCADE 清除） */
+  /** 刪除單一 subagent session。v24: message_uuids 無 FK CASCADE，手動清除。 */
   deleteSubagentSession(subagentId: string): void {
     const doDelete = this.db.transaction(() => {
       this.db.prepare('DELETE FROM session_files WHERE session_id = ?').run(subagentId)
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(subagentId)
+      this.db.prepare('DELETE FROM message_uuids WHERE session_hash = ?').run(hash64(subagentId))
       this.db.prepare('DELETE FROM subagent_sessions WHERE id = ?').run(subagentId)
     })
     doDelete()
@@ -1294,16 +1370,27 @@ export class Database {
 
   // ── UUID dedup helper ──
 
-  /** 查詢 DB 中已存在的 uuid（用於跨 session 去重 resumed session replay） */
+  /** 查詢 DB 中已存在的 uuid（用於跨 session 去重 resumed session replay）。
+   *  v24: message_uuids 只存 64-bit hash，查詢以 hash 比對、以 Map 反查還原
+   *  原 uuid — 簽名與回傳不變，indexer 端零改動。 */
   getExistingUuids(uuids: string[], excludeSessionId: string): Set<string> {
     const result = new Set<string>()
+    const excludeHash = hash64(excludeSessionId)
     for (let i = 0; i < uuids.length; i += 500) {
       const chunk = uuids.slice(i, i + 500)
-      const placeholders = chunk.map(() => '?').join(',')
+      const byHash = new Map<bigint, string>()
+      for (const u of chunk) byHash.set(hash64(u), u)
+      const hashes = [...byHash.keys()]
+      const placeholders = hashes.map(() => '?').join(',')
+      // safeIntegers is load-bearing: without it uuid_hash values beyond 2^53
+      // come back as lossy numbers and the Map lookup misses every row.
       const rows = this.db.prepare(
-        `SELECT uuid FROM message_uuids WHERE session_id != ? AND uuid IN (${placeholders})`,
-      ).all(excludeSessionId, ...chunk) as Array<{ uuid: string }>
-      for (const r of rows) result.add(r.uuid)
+        `SELECT uuid_hash FROM message_uuids WHERE session_hash != ? AND uuid_hash IN (${placeholders})`,
+      ).safeIntegers(true).all(excludeHash, ...hashes) as Array<{ uuid_hash: bigint }>
+      for (const r of rows) {
+        const uuid = byHash.get(r.uuid_hash)
+        if (uuid !== undefined) result.add(uuid)
+      }
     }
     return result
   }
@@ -1322,6 +1409,10 @@ export class Database {
       }
       this.db.prepare('DELETE FROM session_files WHERE session_id = ?').run(params.sessionId)
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(params.sessionId)
+      // v24: message_uuids no longer has an FK to sessions (hash columns can't
+      // reference TEXT ids) — clear this session's registrations manually so a
+      // reindex re-registers from scratch instead of stacking stale hashes.
+      this.db.prepare('DELETE FROM message_uuids WHERE session_hash = ?').run(hash64(params.sessionId))
       this.upsertProject(params.projectId, params.projectDisplayName)
       // 計算 token 彙總
       let totalInput = 0
@@ -1360,14 +1451,16 @@ export class Database {
           insertFile.run(params.sessionId, f.filePath, f.operation, f.count, f.firstSeenSeq, f.lastSeenSeq)
         }
       }
-      // message_uuids: 寫入 uuid 登記表，供跨 session replay dedup 查詢。
-      // 舊 session row 已由上面的 DELETE FROM sessions 透過 FK CASCADE 自動清除。
+      // message_uuids: 寫入 uuid 登記表（雙 hash），供跨 session replay dedup 查詢。
+      // 舊登記已在本 transaction 開頭手動 DELETE。INSERT OR IGNORE 保持「先寫者
+      // 擁有 uuid」語義（uuid_hash 為 PK；他 session 已登記或本 session 重複皆略過）。
       const insertUuid = this.db.prepare(
-        'INSERT OR IGNORE INTO message_uuids (uuid, session_id) VALUES (?, ?)',
+        'INSERT OR IGNORE INTO message_uuids (uuid_hash, session_hash) VALUES (?, ?)',
       )
+      const sessionHash = hash64(params.sessionId)
       for (const m of params.messages) {
         if (m.uuid != null) {
-          insertUuid.run(m.uuid, params.sessionId)
+          insertUuid.run(hash64(m.uuid), sessionHash)
         }
       }
     })
