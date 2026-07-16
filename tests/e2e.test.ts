@@ -93,16 +93,17 @@ describe('E2E: index → search → HTTP', () => {
     expect(b.sessionCount).toBeGreaterThan(0)
   })
 
-  it('POST /memory/save → GET /memory/query round-trip', async () => {
-    const save = await postJson(`http://127.0.0.1:${port}/memory/save`, {
+  it('saveMemory → GET /memory/query round-trip', async () => {
+    // v0.5.0: /memory/save HTTP endpoint removed (MCP recall_save writes via
+    // DB directly) — seed through the same saveMemory path the MCP tool uses.
+    const id = db.saveMemory({
+      sessionId: null,
+      messageId: null,
       content: 'prefer pnpm over npm for monorepos',
       type: 'preference',
       confidence: 0.9,
     })
-    expect(save.status).toBe(200)
-    const saveBody = save.body as { ok: boolean; id: number }
-    expect(saveBody.ok).toBe(true)
-    expect(saveBody.id).toBeGreaterThan(0)
+    expect(id).toBeGreaterThan(0)
 
     const { status, body } = await fetch(`http://127.0.0.1:${port}/memory/query?q=pnpm&limit=5`)
     expect(status).toBe(200)
@@ -122,12 +123,14 @@ describe('E2E: index → search → HTTP', () => {
 
   it('GET /memory/query maxTokens truncates long content + touches only emitted', async () => {
     // Two memories: short pnpm (should emit), long block (truncated to 150 chars)
-    await postJson(`http://127.0.0.1:${port}/memory/save`, {
+    db.saveMemory({
+      sessionId: null, messageId: null,
       content: 'short fact about pnpm',
       type: 'discovery',
       projectId: '-test-project',
     })
-    await postJson(`http://127.0.0.1:${port}/memory/save`, {
+    db.saveMemory({
+      sessionId: null, messageId: null,
       content: 'pnpm pnpm pnpm '.repeat(50), // ~750 chars, truncates to 150
       type: 'discovery',
       projectId: '-test-project',
@@ -154,7 +157,8 @@ describe('E2E: index → search → HTTP', () => {
   })
 
   it('GET /memory/query writes telemetry row per call (with 80-char query truncation)', async () => {
-    await postJson(`http://127.0.0.1:${port}/memory/save`, {
+    db.saveMemory({
+      sessionId: null, messageId: null,
       content: 'evidence-first debugging principles',
       type: 'pattern',
       projectId: '-test-project',
@@ -186,7 +190,8 @@ describe('E2E: index → search → HTTP', () => {
   })
 
   it('GET /memory/query telemetry write does not block endpoint (timing under 100ms wall)', async () => {
-    await postJson(`http://127.0.0.1:${port}/memory/save`, {
+    db.saveMemory({
+      sessionId: null, messageId: null,
       content: 'telemetry timing sentinel',
       type: 'discovery',
       projectId: '-test-project',
@@ -203,13 +208,14 @@ describe('E2E: index → search → HTTP', () => {
 
   it('GET /memory/startup surfaces project memory NOT containing project name (closes echo chamber)', async () => {
     // Memory whose content does NOT contain "ccRecall" or any project-name keyword
-    const save = await postJson(`http://127.0.0.1:${port}/memory/save`, {
+    const saveId = db.saveMemory({
+      sessionId: null, messageId: null,
       content: '漸進披露探索法：處理大量檔案前先用最便宜工具拿訊息',
       type: 'pattern',
       projectId: '-test-project',
       confidence: 0.9,
     })
-    expect(save.status).toBe(200)
+    expect(saveId).toBeGreaterThan(0)
 
     const { status, body } = await fetch(
       `http://127.0.0.1:${port}/memory/startup?project=-test-project&limit=5&maxTokens=300`,
@@ -234,28 +240,10 @@ describe('E2E: index → search → HTTP', () => {
     expect((body as { error: string }).error).toMatch(/project is required/)
   })
 
-  it('POST /memory/save rejects cross-origin request', async () => {
-    const { status, body } = await postJson(
-      `http://127.0.0.1:${port}/memory/save`,
-      { content: 'x', type: 'decision' },
-      { Origin: 'https://evil.example.com' },
-    )
-    expect(status).toBe(403)
-    expect((body as { error: string }).error).toMatch(/cross-origin/)
-  })
-
-  it('POST /memory/save rejects invalid type', async () => {
-    const { status, body } = await postJson(`http://127.0.0.1:${port}/memory/save`, {
-      content: 'x', type: 'invalid-type',
-    })
-    expect(status).toBe(400)
-    expect((body as { error: string }).error).toMatch(/type must be one of/)
-  })
-
-  it('POST /memory/save rejects body over size limit (413)', async () => {
+  it('POST body over size limit returns 413 (parseJsonBody cap via /session/end)', async () => {
     const huge = 'x'.repeat(2 * 1024 * 1024) // 2 MB > 1 MB cap
-    const { status, body } = await postJson(`http://127.0.0.1:${port}/memory/save`, {
-      content: huge, type: 'decision',
+    const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId: huge,
     })
     expect(status).toBe(413)
     expect((body as { error: string }).error).toBe('body too large')
@@ -270,17 +258,15 @@ describe('E2E: index → search → HTTP', () => {
   })
 
   it('GET /health reports memoryCount after save', async () => {
-    await postJson(`http://127.0.0.1:${port}/memory/save`, { content: 'a', type: 'decision' })
-    await postJson(`http://127.0.0.1:${port}/memory/save`, { content: 'b', type: 'pattern' })
+    db.saveMemory({ sessionId: null, messageId: null, content: 'a', type: 'decision' })
+    db.saveMemory({ sessionId: null, messageId: null, content: 'b', type: 'pattern' })
     const { body } = await fetch(`http://127.0.0.1:${port}/health`)
     expect((body as { memoryCount: number }).memoryCount).toBe(2)
   })
 
-  it('P1 (#21): GET /health reports journalPendingCount for promote-prompt surfacing', async () => {
-    db.saveJournalEntry({ content: 'pending-1', score: 0 })
-    db.saveJournalEntry({ content: 'pending-2', score: 1 })
+  it('v0.5.0: GET /health no longer reports journalPendingCount', async () => {
     const { body } = await fetch(`http://127.0.0.1:${port}/health`)
-    expect((body as { journalPendingCount: number }).journalPendingCount).toBe(2)
+    expect(body as object).not.toHaveProperty('journalPendingCount')
   })
 
   it('Phase 3c: indexer populates knowledge_map from session topics', () => {
@@ -293,9 +279,7 @@ describe('E2E: index → search → HTTP', () => {
     expect(loginTopic).toBeTruthy()
   })
 
-  it('P1 (#21): POST /session/end writes session_journal, NOT memory_topics', async () => {
-    // v0.2.x 邏輯: session/end harvest 寫 memories + 繼承 session topics 到 memory_topics
-    // v0.3.0 (P1): hook auto-harvest 改寫 session_journal; memory_topics 留給 promote 路徑 (C4)
+  it('v0.5.0: POST /session/end has no write side effects (memories / memory_topics untouched)', async () => {
     const sessions = db.rawAll<{ id: string }>('SELECT id FROM sessions LIMIT 1')
     const sessionId = sessions[0].id
 
@@ -305,53 +289,27 @@ describe('E2E: index → search → HTTP', () => {
     )
     expect(status).toBe(200)
 
-    // 核心 assertion: memory_topics 沒有任何 row (P1 不繼承)
     const memTopicsAfter = db.rawAll<{ topic_key: string }>(
       'SELECT topic_key FROM memory_topics',
     )
     expect(memTopicsAfter).toHaveLength(0)
-
-    // memories table 也不該被 hook 寫到 (manual recall_save 才會寫)
     expect(db.getMemoryCount()).toBe(0)
   })
 
-  it('Phase 4d: GET /lint/warnings returns orphan + stale report', async () => {
-    // Seed one orphan and verify the endpoint surfaces it.
-    db.upsertProject('lint-p', 'lint-p')
-    db.rawExec(`
-      INSERT INTO sessions (id, project_id, file_path) VALUES ('lint-s', 'lint-p', '/tmp/l.jsonl')
-    `)
-    const mid = db.saveMemory({
-      sessionId: 'lint-s', messageId: null, type: 'decision', content: 'dangling',
-    })
-    db.rawExec(`DELETE FROM sessions WHERE id = 'lint-s'`)
-
-    const { status, body } = await fetch(`http://127.0.0.1:${port}/lint/warnings`)
-    expect(status).toBe(200)
-    const b = body as {
-      warnings: Array<{ memoryId: number; kind: string; details: string }>
-      counts: { orphan: number; stale: number; total: number }
+  it('v0.5.0: removed endpoints return 404', async () => {
+    for (const deadPath of [
+      '/memory/context?session_id=x',
+      '/journal/pending',
+      '/metacognition/check?projectId=x',
+      '/lint/warnings',
+    ]) {
+      const { status } = await fetch(`http://127.0.0.1:${port}${deadPath}`)
+      expect(status, deadPath).toBe(404)
     }
-    expect(b.counts.orphan).toBe(1)
-    expect(b.warnings.some(w => w.memoryId === mid && w.kind === 'orphan')).toBe(true)
-  })
-
-  it('Phase 4d: GET /lint/warnings rejects cross-origin origin', async () => {
-    const res = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
-      http.get({
-        hostname: '127.0.0.1', port, path: '/lint/warnings',
-        headers: { Origin: 'https://evil.example.com' },
-      }, (r) => {
-        const chunks: Buffer[] = []
-        r.on('data', (c: Buffer) => chunks.push(c))
-        r.on('end', () => resolve({
-          status: r.statusCode!,
-          body: JSON.parse(Buffer.concat(chunks).toString()),
-        }))
-        r.on('error', reject)
-      }).on('error', reject)
-    })
-    expect(res.status).toBe(403)
+    for (const deadPost of ['/memory/save', '/journal/promote', '/journal/reject', '/session/checkpoint']) {
+      const { status } = await postJson(`http://127.0.0.1:${port}${deadPost}`, {})
+      expect(status, deadPost).toBe(404)
+    }
   })
 
   it('GET /session/last?cwd=... returns most recent session', async () => {

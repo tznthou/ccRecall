@@ -11,9 +11,9 @@ export function createServer(db: Database, opts: RequestHandlerOptions = {}): ht
     try {
       await handleRequest(req, res)
     } catch (err) {
-      // scrub before logging: SQLite errors can embed user-harvested content
-      // (e.g. journal entry.content via constraint violations) that may carry
-      // ANSI / CR control bytes. Pattern matches every other error log site.
+      // scrub before logging: SQLite errors can embed user content (e.g.
+      // memory content via constraint violations) that may carry ANSI / CR
+      // control bytes. Pattern matches every other error log site.
       console.error('Unhandled error:', scrubErrorMessage(err))
       sendJson(res, 500, { error: 'Internal server error' })
     }

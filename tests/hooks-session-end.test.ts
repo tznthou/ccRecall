@@ -22,7 +22,7 @@ function startMockServer(): Promise<{ server: http.Server; port: number; receive
         received.push({ path: req.url, method: req.method, body })
         res.statusCode = 200
         res.setHeader('Content-Type', 'application/json')
-        res.end(JSON.stringify({ ok: true, journalSaved: [1] }))
+        res.end(JSON.stringify({ ok: true, sessionId: 'mock' }))
       })
     })
     server.listen(0, '127.0.0.1', () => {
