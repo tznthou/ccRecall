@@ -89,6 +89,8 @@ For each memory, call `recall_save` with:
   your output. Do NOT produce conversational text, summaries, status reports,
   next-step suggestions, or questions. Any text you produce is discarded.
 - If you find 0 memories worth saving, output nothing and stop.
-- If you find memories worth saving, call recall_save for each one. No other
-  output.
+- If you find memories worth saving, emit ALL recall_save calls together in
+  ONE single response (parallel tool calls) — never one save per turn. The
+  run has a hard turn budget (--max-turns 5); saving serially exhausts it
+  and silently drops whatever you had not saved yet. No other output.
 - Do not save more than 5 memories per session.
