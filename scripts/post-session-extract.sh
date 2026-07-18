@@ -200,22 +200,36 @@ ${prompt}"
   # carry the result, and those travel over MCP, never through stdout. Small
   # models sometimes ignore that and print a stray summary that can even drift
   # to an unrelated language (a Korean report was observed 2026-06-27), which
-  # alarms whoever sees the terminal. So Haiku's stdout is discarded outright
-  # (1>/dev/null): it holds no extraction signal, and were it logged instead, a
+  # alarms whoever sees the terminal — and were stdout logged wholesale, a
   # model that echoed transcript content could spill session secrets
   # (GitHub/AWS/Bearer tokens, .env fragments, home paths) past the sk-ant-only
-  # scrubber. Only stderr — claude's own diagnostics — is captured, scrubbed,
-  # and logged. $? still reflects claude's exit (the assignment is the last
-  # command before it), and no temp file means no leak on interrupt.
+  # scrubber. But discarding stdout outright (the pre-#56 behavior) also hid
+  # claude's own "Reached max turns (N)" notice, which goes to stdout — making
+  # a total-loss run (turn budget exhausted before any save) indistinguishable
+  # in telemetry from an unclean finish. Middle ground: stdout lands in a
+  # short-lived 0600 file under ~/.ccrecall (the same private trust domain that
+  # already holds this log), is reduced to that one marker string — which
+  # carries no session content — and the full capture is deleted immediately.
+  # An interrupt can strand at most one capture file in the user's own private
+  # dir, and the next run removes it before writing. Only stderr — claude's own
+  # diagnostics — is captured, scrubbed, and logged. $? still reflects claude's
+  # exit (the assignment is the last command before it).
+  local stdout_tmp="${CCRECALL_EXTRACT_LOG%/*}/extract-stdout.tmp"
+  mkdir -p "${CCRECALL_EXTRACT_LOG%/*}"
+  rm -f "$stdout_tmp"
   local extract_stderr extract_exit
-  extract_stderr=$(command claude -p \
+  extract_stderr=$(umask 077; command claude -p \
     --no-session-persistence \
     --model haiku \
     "${budget_args[@]}" \
     --max-turns 5 \
     --dangerously-skip-permissions \
-    "$full_prompt" 2>&1 1>/dev/null)
+    "$full_prompt" 2>&1 1>"$stdout_tmp")
   extract_exit=$?
+  # Reduce stdout to the diagnostic marker, then delete the full capture.
+  local stdout_marker
+  stdout_marker=$(grep -m1 -oE 'Reached max turns \([0-9]+\)' "$stdout_tmp" 2>/dev/null)
+  rm -f "$stdout_tmp"
   # Scrub common credential formats before stderr reaches the telemetry log.
   # claude echoes its own key (sk-ant-) in auth errors, and any MCP server
   # loaded for extraction (this runs with --dangerously-skip-permissions) can
@@ -232,19 +246,22 @@ ${prompt}"
   if [[ $extract_exit -eq 0 ]]; then
     printf '✅ ccRecall: extraction complete (%ds).\n' "$extract_duration"
   else
-    printf '⚠️  ccRecall: extraction exited with code %d (%ds).\n' "$extract_exit" "$extract_duration"
+    printf '⚠️  ccRecall: extraction exited with code %d (%ds)%s.\n' \
+      "$extract_exit" "$extract_duration" "${stdout_marker:+ — $stdout_marker}"
   fi
 
-  # Telemetry log (-c = one compact JSON object per line = valid JSONL)
-  mkdir -p "$(dirname "$CCRECALL_EXTRACT_LOG")"
+  # Telemetry log (-c = one compact JSON object per line = valid JSONL).
+  # stdoutMarker: "Reached max turns (N)" when the turn budget was hit, else ""
+  # — lets exit-1 rows be split into total-loss vs unclean-finish post-hoc (#56).
   jq -n -c \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sid "$session_id" \
     --arg pid "$project_id" \
     --arg stderr "$extract_stderr" \
+    --arg marker "$stdout_marker" \
     --argjson exit "$extract_exit" \
     --argjson dur "$extract_duration" \
-    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr}' \
+    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker}' \
     >> "$CCRECALL_EXTRACT_LOG"
 
   return $claude_exit
