@@ -204,32 +204,54 @@ ${prompt}"
   # model that echoed transcript content could spill session secrets
   # (GitHub/AWS/Bearer tokens, .env fragments, home paths) past the sk-ant-only
   # scrubber. But discarding stdout outright (the pre-#56 behavior) also hid
-  # claude's own "Reached max turns (N)" notice, which goes to stdout — making
-  # a total-loss run (turn budget exhausted before any save) indistinguishable
-  # in telemetry from an unclean finish. Middle ground: stdout lands in a
-  # short-lived 0600 file under ~/.ccrecall (the same private trust domain that
-  # already holds this log), is reduced to that one marker string — which
-  # carries no session content — and the full capture is deleted immediately.
-  # An interrupt can strand at most one capture file in the user's own private
-  # dir, and the next run removes it before writing. Only stderr — claude's own
-  # diagnostics — is captured, scrubbed, and logged. $? still reflects claude's
-  # exit (the assignment is the last command before it).
-  local stdout_tmp="${CCRECALL_EXTRACT_LOG%/*}/extract-stdout.tmp"
-  mkdir -p "${CCRECALL_EXTRACT_LOG%/*}"
-  rm -f "$stdout_tmp"
+  # claude's own "Error: Reached max turns (N)" notice, which goes to stdout —
+  # making a total-loss run (turn budget exhausted before any save)
+  # indistinguishable in telemetry from an unclean finish. Middle ground: stdout
+  # lands in a short-lived 0600 file under ~/.ccrecall (the same private trust
+  # domain that already holds this log), is reduced to that one marker line —
+  # which carries no session content — and the full capture is deleted
+  # immediately. mktemp gives each invocation a unique path (concurrent
+  # sessions ending together never share or delete each other's capture) and
+  # creates it 0600 atomically. The subshell INT/TERM traps delete the capture
+  # before dying, so a Ctrl-C never strands raw model stdout; residue from
+  # SIGKILL/crash is bounded by the age sweep below (a capture older than 60
+  # minutes cannot be live — extraction runs take minutes — so sweeping is
+  # concurrency-safe where a blanket rm of a fixed name was not). No byte cap
+  # on the capture: model output is already bounded by Haiku's output-token
+  # ceiling. Only stderr — claude's own diagnostics — is captured, scrubbed,
+  # and logged. $? still reflects claude's exit (the assignment is the last
+  # command before it).
+  local log_dir
+  log_dir=$(dirname "$CCRECALL_EXTRACT_LOG")
+  mkdir -p "$log_dir"
+  find "$log_dir" -maxdepth 1 -name 'extract-stdout.*' -mmin +60 -delete 2>/dev/null
+  # Trailing Xs are mandatory: BSD/macOS mktemp only substitutes Xs at the END
+  # of the template — an inner XXXXXX (e.g. a .tmp suffix after it) is taken
+  # literally, silently collapsing every invocation onto one fixed path.
+  local stdout_tmp
+  stdout_tmp=$(mktemp "${log_dir}/extract-stdout.XXXXXX" 2>/dev/null)
+  # mktemp failure (full disk, unwritable dir): degrade to the pre-marker
+  # discard behavior rather than losing the extraction run.
+  [[ -n "$stdout_tmp" ]] || stdout_tmp=/dev/null
   local extract_stderr extract_exit
-  extract_stderr=$(umask 077; command claude -p \
-    --no-session-persistence \
-    --model haiku \
-    "${budget_args[@]}" \
-    --max-turns 5 \
-    --dangerously-skip-permissions \
-    "$full_prompt" 2>&1 1>"$stdout_tmp")
+  extract_stderr=$(
+    trap 'rm -f -- "$stdout_tmp" 2>/dev/null; exit 130' INT
+    trap 'rm -f -- "$stdout_tmp" 2>/dev/null; exit 143' TERM
+    command claude -p \
+      --no-session-persistence \
+      --model haiku \
+      "${budget_args[@]}" \
+      --max-turns 5 \
+      --dangerously-skip-permissions \
+      "$full_prompt" 2>&1 1>"$stdout_tmp")
   extract_exit=$?
   # Reduce stdout to the diagnostic marker, then delete the full capture.
+  # Anchored to claude's full notice line: an unanchored match could be faked
+  # by the model echoing transcript content that merely discusses this exact
+  # phrase (guaranteed to occur in this repo's own sessions).
   local stdout_marker
-  stdout_marker=$(grep -m1 -oE 'Reached max turns \([0-9]+\)' "$stdout_tmp" 2>/dev/null)
-  rm -f "$stdout_tmp"
+  stdout_marker=$(grep -m1 -oE '^Error: Reached max turns \([0-9]+\)$' "$stdout_tmp" 2>/dev/null)
+  rm -f -- "$stdout_tmp" 2>/dev/null
   # Scrub common credential formats before stderr reaches the telemetry log.
   # claude echoes its own key (sk-ant-) in auth errors, and any MCP server
   # loaded for extraction (this runs with --dangerously-skip-permissions) can
@@ -251,8 +273,8 @@ ${prompt}"
   fi
 
   # Telemetry log (-c = one compact JSON object per line = valid JSONL).
-  # stdoutMarker: "Reached max turns (N)" when the turn budget was hit, else ""
-  # — lets exit-1 rows be split into total-loss vs unclean-finish post-hoc (#56).
+  # stdoutMarker: "Error: Reached max turns (N)" when the turn budget was hit,
+  # else "" — splits exit-1 rows into total-loss vs unclean-finish post-hoc (#56).
   jq -n -c \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sid "$session_id" \
