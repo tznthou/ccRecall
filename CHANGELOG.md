@@ -11,6 +11,30 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.5.3] — 2026-07-23
+
+### Changed
+
+- **Topic extraction now preserves CJK characters** — `normalizeTopicKey` uses
+  `\p{Script=Han}` (Unicode property escape) instead of stripping all non-ASCII.
+  Chinese terms like 砍刀場, 版本, 驗證 now appear as topic keys in the knowledge
+  map. Content extraction splits on Chinese punctuation and common grammatical
+  particles (的/了/是/在) for lightweight phrase segmentation without external
+  dependencies. CJK stopwords (~32 entries) filter noise; pure-Han runs over 6
+  characters are skipped (FTS5 trigram covers those). Production validation:
+  772 CJK topics from 0, 1.09× total count increase.
+
+### Fixed
+
+- **`rebuildKnowledgeMap` dropped session-less memories** — the memory_topics
+  branch used INNER JOIN on sessions, silently excluding all `recall_save`
+  memories (14% of total). Changed to LEFT JOIN with
+  `COALESCE(s.project_id, m.project_id)` fallback.
+- **`getMemoriesByTopics` had the same INNER JOIN gap** — topic-based retrieval
+  now matches the rebuild path, so session-less memories are both counted and
+  retrievable. (PTA cross-source finding: Simplify + Security independently
+  flagged this.)
+
 ## [0.5.2] — 2026-07-23
 
 ### Changed

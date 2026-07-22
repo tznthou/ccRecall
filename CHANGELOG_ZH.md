@@ -8,6 +8,27 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.5.3] — 2026-07-23
+
+### 變更
+
+- **Topic extraction 現在保留 CJK 字元** —— `normalizeTopicKey` 改用
+  `\p{Script=Han}`（Unicode property escape）而非全部剝除非 ASCII 字元。
+  中文詞彙如砍刀場、版本、驗證現在會出現在 knowledge map 的 topic key 中。
+  內容抽取在中文標點和常用語法助詞（的/了/是/在）處切分，實現輕量分詞而無需
+  外部依賴。CJK 停用詞約 32 個過濾雜訊；純漢字連續超過 6 字的段落跳過
+  （由 FTS5 trigram 覆蓋）。生產驗證：CJK topic 從 0 升至 772 筆，
+  總量僅增 1.09 倍。
+
+### 修復
+
+- **`rebuildKnowledgeMap` 漏掉 session-less 記憶** —— memory_topics 分支
+  對 sessions 用 INNER JOIN，靜默丟棄所有 `recall_save` 記憶（佔總數 14%）。
+  改用 LEFT JOIN + `COALESCE(s.project_id, m.project_id)` 回退。
+- **`getMemoriesByTopics` 同樣有 INNER JOIN 缺口** —— topic 檢索現在與
+  rebuild 路徑一致，session-less 記憶既被計入也可被查到。
+  （PTA cross-source finding：Simplify 與 Security 獨立指出。）
+
 ## [0.5.2] — 2026-07-23
 
 ### 變更
