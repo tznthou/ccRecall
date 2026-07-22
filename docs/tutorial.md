@@ -126,6 +126,42 @@ written by the post-session extraction wrapper or a manual `recall_save`.
 
 ---
 
+## Enabling Automatic Memory Extraction (Optional)
+
+Steps 1–3 plus hooks give you memory **injection** and manual `recall_save`. To also get **automatic** memory extraction — where Haiku distills each session into keyed memories after it ends (~$0.001/session) — source the extraction wrapper in your shell:
+
+```bash
+# Add to ~/.zshrc or ~/.bashrc (adjust if you used pnpm/yarn)
+source "$(npm root -g)/@tznthou/ccrecall/scripts/post-session-extract.sh"
+```
+
+Then use `ccrecall-extract` instead of `claude`:
+
+```bash
+ccrecall-extract            # instead of: claude
+ccrecall-extract --resume   # all claude flags work
+```
+
+After each session ends, the wrapper automatically:
+1. Queries the daemon for the just-ended session's metadata
+2. Builds a text-only transcript from the JSONL (~50x smaller than the raw file)
+3. Sends it to Haiku to extract 0–5 lasting memories via `recall_save`
+
+Most users alias it:
+
+```bash
+# Add to ~/.zshrc or ~/.bashrc
+alias ccdm='ccrecall-extract'
+```
+
+**Requirements:** `jq` and `curl` must be on PATH (both come pre-installed on macOS).
+
+**Skip extraction for a single session:** `CCRECALL_SKIP_EXTRACT=1 ccrecall-extract`
+
+**Without this step**, memories only accumulate when you explicitly call `recall_save` during a session. The extraction wrapper is what makes the memory layer grow automatically.
+
+---
+
 ## Verify It's Working
 
 ### Is the daemon alive?

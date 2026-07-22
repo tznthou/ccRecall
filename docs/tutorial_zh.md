@@ -126,6 +126,42 @@ wrapper 或 manual `recall_save` 寫入。
 
 ---
 
+## 啟用自動記憶萃取（可選）
+
+前面三步加 hooks 讓你有記憶**注入**和手動 `recall_save`。要讓記憶**自動累積**——每次 session 結束後由 Haiku 蒸餾出 keyed 記憶（約 $0.001/session）——把 extraction wrapper 加進你的 shell：
+
+```bash
+# 加到 ~/.zshrc 或 ~/.bashrc（pnpm/yarn 路徑自行調整）
+source "$(npm root -g)/@tznthou/ccrecall/scripts/post-session-extract.sh"
+```
+
+然後用 `ccrecall-extract` 取代 `claude`：
+
+```bash
+ccrecall-extract            # 取代 claude
+ccrecall-extract --resume   # 所有 claude 參數照傳
+```
+
+Session 結束後 wrapper 自動：
+1. 向 daemon 查詢剛結束的 session metadata
+2. 從 JSONL 建立純文字 transcript（比原始檔小約 50 倍）
+3. 送給 Haiku 萃取 0–5 筆記憶，經 `recall_save` 寫入
+
+大多數人會設 alias：
+
+```bash
+# 加到 ~/.zshrc 或 ~/.bashrc
+alias ccdm='ccrecall-extract'
+```
+
+**前置條件：** `jq` 和 `curl` 必須在 PATH 上（macOS 預裝兩者）。
+
+**單次跳過萃取：** `CCRECALL_SKIP_EXTRACT=1 ccrecall-extract`
+
+**不裝這步的話**，記憶只在你 session 中手動呼叫 `recall_save` 時才會增長。Extraction wrapper 是讓記憶層自動成長的關鍵。
+
+---
+
 ## 怎麼知道它在運作
 
 ### 確認 daemon 活著
