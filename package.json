@@ -11,6 +11,7 @@
   "files": [
     "dist",
     "hooks",
+    "scripts",
     "README.md",
     "README_ZH.md",
     "LICENSE"

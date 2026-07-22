@@ -35,7 +35,7 @@ Source code 是 truth。像 `src/core/watcher.ts:73` 這種指標帶你直接跳
 
 ## Bootstrap：為何要 await 第一次索引
 
-`src/index.ts:100-148`
+`src/index.ts:92-152`
 
 順序有講究：
 
@@ -113,14 +113,14 @@ Session 的 JSONL 只要使用者一直 resume 就會一直長。Watcher 看得�
 Hook 觸發時 daemon 可能還沒看到那個 JSONL（fresh-session race：hook fire 比 chokidar `add` event 更早），endpoint 會先 `rescueReindex` 再放棄。關鍵：
 
 ```ts
-// src/index.ts:141
+// src/index.ts:143
 const server = createServer(db, {
-  rescueReindex: () => runIndexer(db),   // 不是 watcher.runNow()
+  rescueReindex: coalesceRescue(() => runIndexer(db)),
   ...
 })
 ```
 
-`watcher.runNow()` 會尊重 watcher 的 single-flight——也就是已經有 scan 在跑時 rescue 會被默默 drop（只翻 `dirty`）。那是我們**不**想要的：client 正在等 200 回來，而 extraction wrapper 馬上就要用 `/session/last` 查這個 session。直接呼 `runIndexer(db)` 繞過 single-flight，給 caller 確定性的執行。
+`coalesceRescue` 在 `/session/end` 和 `/session/last` 同一次 session close 都 miss 時共用（而非丟棄）同一次 run。`watcher.runNow()` 會尊重 watcher 的 single-flight——也就是已經有 scan 在跑時 rescue 會被默默 drop（只翻 `dirty`）。那是我們**不**想要的：client 正在等 200 回來，而 extraction wrapper 馬上就要用 `/session/last` 查這個 session。直接呼 `runIndexer(db)` 繞過 single-flight，給 caller 確定性的執行。
 
 取捨：兩個 `runIndexer` 同時跑可能 writer 爭用。實際上不會 corrupt——SQLite WAL 會 serialize write——而且 window 很窄（rescue 只在 cache miss 時跑）。
 
@@ -168,11 +168,11 @@ v0.5.0 下了結論：journal 管線、rule scorer、harvest 分支整組移除�
 |---|---|
 | Bootstrap 順序長怎樣 | `src/index.ts`（grep `startDaemon`） |
 | Watcher 怎麼決定什麼時候 scan | `src/core/watcher.ts:73-109` |
-| runIndexer 實際做什麼 | `src/core/indexer.ts:62-262` |
+| runIndexer 實際做什麼 | `src/core/indexer.ts:62-271` |
 | Session 結束後 memory 怎麼寫入 | `scripts/post-session-extract.sh` + `scripts/extraction-prompt.md` |
 | Summarizer 吐什麼出來 | `src/core/summarizer.ts`（grep `summarizeSession`） |
 | 為什麼 `reason: 'resume'` 要跳 | `hooks/session-end.mjs:82` |
-| Compression 怎麼排程 | `src/core/maintenance-coordinator.ts:51-57` |
+| Compression 怎麼排程 | `src/core/maintenance-coordinator.ts:48-54` |
 | v24 砍刀場 migration 在哪定義 | `src/core/database.ts`（grep `version: 24`） |
 | 雙 hash 去重登記表怎麼運作 | `src/core/database.ts`（grep `hash64`） |
 

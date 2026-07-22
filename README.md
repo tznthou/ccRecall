@@ -125,7 +125,7 @@ The `notBefore` gate keeps a stale session from being extracted twice; the subag
 | FTS5 | Full-text search | Built into SQLite, trigram tokenizer with LIKE fallback for short CJK / mixed-script queries |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
 | chokidar | Filesystem watcher | Cross-platform JSONL change detection with 2 s debounce + single-flight |
-| vitest | Testing | 629 tests across 39 files, integration-style |
+| vitest | Testing | 524 tests across 34 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---

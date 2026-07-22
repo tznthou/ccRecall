@@ -8,11 +8,11 @@
 #   memories via Haiku after the session ends.
 #
 # Environment:
-#   CCRECALL_PORT         — daemon port (default 3177)
+#   CCRECALL_PORT         — daemon port (default 7749)
 #   CCRECALL_SKIP_EXTRACT — set to 1 to skip post-session extraction
 #   CCRECALL_EXTRACT_LOG  — telemetry log path (default ~/.ccrecall/extract.log.jsonl)
 
-CCRECALL_PORT="${CCRECALL_PORT:-3177}"
+CCRECALL_PORT="${CCRECALL_PORT:-7749}"
 CCRECALL_EXTRACT_LOG="${CCRECALL_EXTRACT_LOG:-$HOME/.ccrecall/extract.log.jsonl}"
 
 # Resolve the directory containing this script (for prompt file).

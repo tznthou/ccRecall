@@ -21,7 +21,7 @@ If the daemon is not running, hooks log a warning to stderr and exit cleanly —
 
 | Script | Claude Code Event | Action |
 |--------|------------------|--------|
-| `session-start.mjs` | `SessionStart` | GET `/memory/query` with the project name, write matching memories to stdout (Claude prepends them to context) |
+| `session-start.mjs` | `SessionStart` | GET `/memory/startup` with the project name (3-tier: cold + recent-confidence + FTS fallback), write matching memories to stdout (Claude prepends them to context) |
 | `session-end.mjs` | `SessionEnd` | POST `/session/end` to harvest the just-ended session into a memory |
 
 ## Finding the Hook Scripts
@@ -122,6 +122,6 @@ Check the daemon side: `~/Library/Logs/ccrecall/ccrecall.err.log` (macOS) or the
 - **Skip on `resume`**:
   - SessionEnd: `reason === 'resume'` means the session continues
   - SessionStart: `source === 'resume'` means the context is already loaded
-- **SessionStart query strategy**: uses the last path segment of `cwd` as a keyword against FTS5 — simple, no-prompt-yet heuristic; Phase 3+ will add smarter selection
+- **SessionStart query strategy**: uses the last path segment of `cwd` as a keyword. Default strategy `startup-v1` calls `/memory/startup` (3-tier: cold + recent-confidence + FTS fallback); legacy strategy calls `/memory/query` (project-name FTS only). Controlled by `CCRECALL_SESSION_START_STRATEGY` env var
 - **SessionStart stdout = context injection**: only memories are written to stdout; all errors and diagnostics go to stderr to avoid polluting Claude's context
 - **Timeouts**: SessionEnd 5s, SessionStart 2s (tighter because it sits on the pre-prompt critical path)

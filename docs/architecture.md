@@ -35,7 +35,7 @@ Each engine has a distinct responsibility, and the `single-flight` guards aren't
 
 ## Bootstrap: Why We Await the Initial Index
 
-`src/index.ts:100-148`
+`src/index.ts:92-152`
 
 The order matters:
 
@@ -114,14 +114,14 @@ The `reason: 'resume'` filter in `hooks/session-end.mjs:82` is the other half of
 When the hook fires and the daemon hasn't seen the JSONL yet (fresh-session race: the hook fires before chokidar's `add` event settles), the endpoint calls `rescueReindex` before giving up. Crucially:
 
 ```ts
-// src/index.ts:141
+// src/index.ts:143
 const server = createServer(db, {
-  rescueReindex: () => runIndexer(db),   // NOT watcher.runNow()
+  rescueReindex: coalesceRescue(() => runIndexer(db)),
   ...
 })
 ```
 
-`watcher.runNow()` would respect the watcher's single-flight — meaning if a scheduled scan is already in flight, the rescue gets silently dropped (just flips `dirty`). That's exactly what we *don't* want for a blocking confirm: the client is waiting on a 200, and the extraction wrapper is about to ask `/session/last` for this very session. Calling `runIndexer(db)` directly sidesteps the single-flight and gives the caller deterministic execution.
+`coalesceRescue` shares (never drops) the run when `/session/end` and `/session/last` both miss during the same session close. `watcher.runNow()` would respect the watcher's single-flight — meaning if a scheduled scan is already in flight, the rescue gets silently dropped (just flips `dirty`). That's exactly what we *don't* want for a blocking confirm: the client is waiting on a 200, and the extraction wrapper is about to ask `/session/last` for this very session. Calling `runIndexer(db)` directly sidesteps the single-flight and gives the caller deterministic execution.
 
 The tradeoff: two concurrent `runIndexer` runs can contend for the writer. In practice they don't corrupt — SQLite WAL serializes writes — and the window is narrow (rescue only runs on cache miss).
 
@@ -169,11 +169,11 @@ Authoritative state is always `gh issue list` plus project notes, not this file.
 |---|---|
 | What does the bootstrap sequence look like? | `src/index.ts` (grep `startDaemon`) |
 | How does the watcher decide when to scan? | `src/core/watcher.ts:73-109` |
-| What does runIndexer actually do? | `src/core/indexer.ts:62-262` |
+| What does runIndexer actually do? | `src/core/indexer.ts:62-271` |
 | How do memories get written after a session? | `scripts/post-session-extract.sh` + `scripts/extraction-prompt.md` |
 | What does the summarizer produce? | `src/core/summarizer.ts` (grep `summarizeSession`) |
 | Why is `reason: 'resume'` skipped? | `hooks/session-end.mjs:82` |
-| How is compression scheduled? | `src/core/maintenance-coordinator.ts:51-57` |
+| How is compression scheduled? | `src/core/maintenance-coordinator.ts:48-54` |
 | Where is the v24 knife-field migration defined? | `src/core/database.ts` (grep `version: 24`) |
 | How does the dual-hash dedup registry work? | `src/core/database.ts` (grep `hash64`) |
 
