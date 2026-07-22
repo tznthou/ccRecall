@@ -11,6 +11,26 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.5.2] — 2026-07-23
+
+### Changed
+
+- **Recall ranking blends FTS relevance and confidence multiplicatively** —
+  `recall_query` previously sorted by effective confidence first, with FTS rank
+  as a tiebreaker; a fresh but loosely matching memory could outrank an older
+  exact match. The new formula `(-rank) * sqrt(EC)` weights both signals
+  together, so a strong text match on a moderately decayed memory beats a weak
+  match on a fresh one. Same API shape, better ordering.
+
+- **Half-life grows logarithmically beyond 4 accesses** — access counts 1–4
+  still produce 14–35 day half-lives (identical to v0.5.1). Beyond that,
+  half-life follows `7 + 7 · (min(k,4) + 2.5 · ln(1 + max(0, k−4)))` instead
+  of capping flat at 35 days. k=10 → ~69 d, k=50 → ~102 d, k=302 → ~135 d.
+  Frequently accessed memories decay slower without becoming immortal.
+
+- Age days clamped to `MAX(0, ...)` to handle future-dated timestamps from
+  clock drift or manual edits.
+
 ## [0.5.0] — 2026-07-16
 
 The knife-field release. A 2026-06-10 audit delivered the verdict this release

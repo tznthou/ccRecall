@@ -257,6 +257,64 @@ describe('queryMemories LIKE fallback (short tokens)', () => {
   })
 })
 
+describe('queryMemories FTS ranking — relevance over recency', () => {
+  it('high FTS relevance beats high EC when text match is stronger', () => {
+    // A: strong match for "database migration" — query terms repeated
+    const idA = db.saveMemory(mem({
+      content: 'database migration strategy for production database migration rollback',
+      confidence: 0.9,
+    }))
+    // B: weak match — both terms present but buried in unrelated text
+    const idB = db.saveMemory(mem({
+      content: 'prefer pnpm config for general projects setup with notes on database and migration tooling compatibility and package management',
+      confidence: 0.9,
+    }))
+
+    // A: 14 days old, moderate access → moderate EC (~0.57)
+    db.rawExec(`UPDATE memories SET
+      created_at = datetime('now', '-14 days'),
+      last_accessed = datetime('now', '-14 days'),
+      access_count = 2
+      WHERE id = ${idA}`)
+    // B: fresh, higher access → high EC (~0.90)
+    db.rawExec(`UPDATE memories SET
+      created_at = datetime('now', '-1 day'),
+      last_accessed = datetime('now'),
+      access_count = 5
+      WHERE id = ${idB}`)
+
+    const results = db.queryMemories('database migration', 5)
+    expect(results.length).toBe(2)
+    expect(results[0].id).toBe(idA)
+  })
+
+  it('same FTS relevance falls back to EC (recency tiebreaker)', () => {
+    const idOld = db.saveMemory(mem({
+      content: 'sandbox configuration for isolated testing environment',
+      confidence: 0.9,
+    }))
+    const idNew = db.saveMemory(mem({
+      content: 'sandbox configuration for isolated testing environment',
+      confidence: 0.9,
+    }))
+
+    db.rawExec(`UPDATE memories SET
+      created_at = datetime('now', '-60 days'),
+      last_accessed = datetime('now', '-60 days'),
+      access_count = 1
+      WHERE id = ${idOld}`)
+    db.rawExec(`UPDATE memories SET
+      created_at = datetime('now', '-1 day'),
+      last_accessed = datetime('now'),
+      access_count = 10
+      WHERE id = ${idNew}`)
+
+    const results = db.queryMemories('sandbox configuration', 5)
+    expect(results.length).toBe(2)
+    expect(results[0].id).toBe(idNew)
+  })
+})
+
 describe('getMemoryCount', () => {
   it('returns 0 on empty', () => {
     expect(db.getMemoryCount()).toBe(0)

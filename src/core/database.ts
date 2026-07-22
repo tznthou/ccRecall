@@ -855,17 +855,19 @@ export class Database {
   /** Subagent 排除子查詢：用於所有面向使用者的 query，只顯示主 session */
   private static readonly EXCLUDE_SUBAGENTS = 'NOT IN (SELECT id FROM subagent_sessions)'
 
-  /** Phase 4b: SQL snippet for effective confidence with exponential decay and
-   *  access-extended half-life. Assumes `m` is the memories alias.
-   *    age_days   = julianday(now) − julianday(COALESCE(last_accessed, created_at))
-   *    half_life  = 7 + 7 · min(access_count, 4)  days
+  /** Effective confidence with exponential decay and access-extended half-life.
+   *  Assumes `m` is the memories alias.
+   *    age_days   = MAX(0, julianday(now) − julianday(COALESCE(last_accessed, created_at)))
+   *    half_life  = 7 + 7 · (min(k, 4) + 2.5 · ln(1 + max(0, k − 4)))  days
+   *                 k ≤ 4: identical to original (7, 14, 21, 28, 35 d)
+   *                 k = 10 → ~69 d, k = 50 → ~102 d, k = 302 → ~135 d
    *    effective  = confidence · exp(−ln 2 · age_days / half_life)
-   *  Use in ORDER BY; requires exp() user function registered in the constructor. */
+   *  Requires exp(), ln(), and sqrt() user functions registered in the constructor. */
   private static readonly EFFECTIVE_CONFIDENCE = `(
     m.confidence * exp(
       -0.6931471805599453 *
-      (julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) /
-      (7.0 + 7.0 * MIN(m.access_count, 4))
+      MAX(0.0, julianday('now') - julianday(COALESCE(m.last_accessed, m.created_at))) /
+      (7.0 + 7.0 * (MIN(m.access_count, 4) + 2.5 * ln(1.0 + MAX(0, m.access_count - 4))))
     )
   )`
 
@@ -888,6 +890,14 @@ export class Database {
     this.db.function('exp', { deterministic: true }, (x: unknown): number | null => {
       if (typeof x !== 'number' || !Number.isFinite(x)) return null
       return Math.exp(x)
+    })
+    this.db.function('ln', { deterministic: true }, (x: unknown): number | null => {
+      if (typeof x !== 'number' || !Number.isFinite(x) || x <= 0) return null
+      return Math.log(x)
+    })
+    this.db.function('sqrt', { deterministic: true }, (x: unknown): number | null => {
+      if (typeof x !== 'number' || !Number.isFinite(x) || x < 0) return null
+      return Math.sqrt(x)
     })
     this.initSchema()
     this.runMigrations()
@@ -1833,7 +1843,7 @@ export class Database {
                 (m.session_id IS NOT NULL AND s.project_id = ?) OR
                 (m.session_id IS NULL AND (m.project_id = ? OR m.project_id IS NULL))
               )
-            ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, rank, m.id DESC
+            ORDER BY (-rank) * sqrt(MAX(0.001, ${Database.EFFECTIVE_CONFIDENCE})) DESC, m.id DESC
             LIMIT ?
           `).all(q, projectId, projectId, cappedLimit)
         : this.db.prepare(`
@@ -1841,7 +1851,7 @@ export class Database {
             FROM memories_fts
             JOIN memories m ON m.id = memories_fts.rowid
             WHERE memories_fts MATCH ?
-            ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, rank, m.id DESC
+            ORDER BY (-rank) * sqrt(MAX(0.001, ${Database.EFFECTIVE_CONFIDENCE})) DESC, m.id DESC
             LIMIT ?
           `).all(q, cappedLimit)
       const mapped = (rows as MemoryRow[]).map(mapMemoryRow)
