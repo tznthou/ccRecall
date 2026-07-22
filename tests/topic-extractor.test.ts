@@ -118,9 +118,10 @@ describe('extractTopicsFromContent — CJK', () => {
     expect(topics).toContain('驗證設計')
   })
 
-  it('skips long Han-only runs (> 6 chars)', () => {
+  it('skips long Han-only runs but extracts segments split by particles', () => {
     const topics = extractTopicsFromContent('在本地單人多專案場景是獨特設計')
-    expect(topics).toEqual([])
+    expect(topics).toContain('獨特設計')
+    expect(topics).not.toContain('本地單人多專案場景')
   })
 
   it('filters CJK stopwords from content', () => {
@@ -128,6 +129,12 @@ describe('extractTopicsFromContent — CJK', () => {
     expect(topics).not.toContain('這個')
     expect(topics).not.toContain('不是')
     expect(topics).toContain('確認')
+  })
+
+  it('splits on common particles (的/了/是/在)', () => {
+    const topics = extractTopicsFromContent('流水線的設計價值')
+    expect(topics).toContain('流水線')
+    expect(topics).toContain('設計價值')
   })
 
   it('handles pure English content unchanged', () => {

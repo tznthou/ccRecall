@@ -59,6 +59,7 @@ export function extractTopicsFromContent(content: string): string[] {
 
   const processed = content
     .replace(/[，。、；：「」（）【】！？…·—]+/g, ' ')
+    .replace(/[的了是在]/g, ' ')
     .replace(/([\p{Script=Han}])([^\p{Script=Han}\s])/gu, '$1 $2')
     .replace(/([^\p{Script=Han}\s])([\p{Script=Han}])/gu, '$1 $2')
 
