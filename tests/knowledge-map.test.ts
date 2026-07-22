@@ -179,6 +179,35 @@ describe('rebuildKnowledgeMap', () => {
   })
 })
 
+describe('session-less memories in rebuildKnowledgeMap', () => {
+  it('includes memory_topics from memories with no session_id', () => {
+    db.upsertProject('proj-a', 'Project A')
+    const memId = db.saveMemory({ sessionId: null, messageId: null, content: 'CJK test', type: 'decision', projectId: 'proj-a' })
+    db.saveMemoryTopics(memId, 'proj-a', ['砍刀場'])
+
+    db.rebuildKnowledgeMap('proj-a')
+    const topics = knowledgeMapRows('proj-a')
+    expect(topics.find(t => t.topicKey === '砍刀場')).toBeTruthy()
+    expect(topics.find(t => t.topicKey === '砍刀場')?.mentionCount).toBe(1)
+  })
+
+  it('combines session-based and session-less memory topics', () => {
+    db.upsertProject('proj-a', 'Project A')
+    db.indexSession(sessionParams({ sessionId: 'sess-1', projectId: 'proj-a' }))
+    db.saveSessionTopics('sess-1', 'proj-a', ['typescript'])
+
+    const memWithSession = db.saveMemory({ sessionId: 'sess-1', messageId: null, content: 'x', type: 'decision' })
+    db.saveMemoryTopics(memWithSession, 'proj-a', ['typescript'])
+
+    const memNoSession = db.saveMemory({ sessionId: null, messageId: null, content: 'y', type: 'decision', projectId: 'proj-a' })
+    db.saveMemoryTopics(memNoSession, 'proj-a', ['typescript'])
+
+    db.rebuildKnowledgeMap('proj-a')
+    const topics = knowledgeMapRows('proj-a')
+    expect(topics.find(t => t.topicKey === 'typescript')?.mentionCount).toBe(3)
+  })
+})
+
 describe('subagent exclusion', () => {
   it('knowledge_map ignores topics from subagent sessions', () => {
     db.upsertProject('proj-a', 'Project A')

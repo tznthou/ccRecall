@@ -6,6 +6,8 @@ interface TopicSource {
 }
 
 const MIN_TOPIC_LENGTH = 3
+const MIN_TOPIC_LENGTH_CJK = 2
+const MAX_HAN_RUN = 6
 
 const STOPWORDS = new Set([
   // 通用英文
@@ -19,14 +21,27 @@ const STOPWORDS = new Set([
   'data', 'value', 'result',
 ])
 
+const CJK_STOPWORDS = new Set([
+  '這個', '我們', '那個', '可以', '什麼', '然後', '因為', '所以',
+  '但是', '已經', '沒有', '不是', '一個', '為什麼', '怎麼', '現在',
+  '或者', '如果', '雖然', '還是', '他們', '自己', '這些', '那些',
+  '而且', '只有', '之後', '以後', '以前', '應該', '需要', '可能',
+])
+
+const HAN_RE = /\p{Script=Han}/u
+
 /** 將原始字串正規化為 topic_key：以 / \ . 拆 segment 後各自 normalize、過濾 stopword/太短，再組合 */
 export function normalizeTopicKey(raw: string): string | null {
   if (!raw) return null
   const s = raw.trim().toLowerCase()
   if (!s) return null
   const segments = s.split(/[\\/.]/)
-    .map(seg => seg.replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, ''))
-    .filter(seg => seg.length >= MIN_TOPIC_LENGTH && !STOPWORDS.has(seg))
+    .map(seg => seg.replace(/[^a-z0-9_\-\p{Script=Han}]/gu, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, ''))
+    .filter(seg => {
+      if (!seg) return false
+      const minLen = HAN_RE.test(seg) ? MIN_TOPIC_LENGTH_CJK : MIN_TOPIC_LENGTH
+      return seg.length >= minLen && !STOPWORDS.has(seg) && !CJK_STOPWORDS.has(seg)
+    })
   if (segments.length === 0) return null
   return segments.join('-')
 }
@@ -41,8 +56,15 @@ function extractTopicsFromFile(filePath: string): string[] {
 export function extractTopicsFromContent(content: string): string[] {
   if (!content) return []
   const topics = new Set<string>()
-  const words = content.split(/[\s,;:()[\]{}"'`|/\\]+/).filter(Boolean)
+
+  const processed = content
+    .replace(/[，。、；：「」（）【】！？…·—]+/g, ' ')
+    .replace(/([\p{Script=Han}])([^\p{Script=Han}\s])/gu, '$1 $2')
+    .replace(/([^\p{Script=Han}\s])([\p{Script=Han}])/gu, '$1 $2')
+
+  const words = processed.split(/[\s,;:()[\]{}"'`|/\\]+/).filter(Boolean)
   for (const w of words) {
+    if (/^\p{Script=Han}+$/u.test(w) && w.length > MAX_HAN_RUN) continue
     const k = normalizeTopicKey(w)
     if (k) topics.add(k)
   }
