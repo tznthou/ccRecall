@@ -29,6 +29,45 @@ ccRecall 的重要版本變更記錄在這裡。
   rebuild 路徑一致，session-less 記憶既被計入也可被查到。
   （PTA cross-source finding：Simplify 與 Security 獨立指出。）
 
+### 升級指南
+
+**僅限記憶內容含 CJK 文字的使用者**（中文、日文漢字、韓文漢字）。
+純英文使用者無需任何動作，升級即完成。
+
+新的 CJK 抽取器只影響**升級後**寫入的記憶。要為既有記憶補上 CJK topics，
+升級 `npm install -g` 後跑一次：
+
+```sh
+pnpm tsx scripts/backfill-memory-topics.ts
+```
+
+此腳本會跳過已有 topics 的記憶，不會自動重新抽取 CJK topics。如果你從
+≤ 0.5.2 升級且想為舊記憶補 CJK topics，用以下指令（可重複執行，
+重複的會被忽略）：
+
+```sh
+npx tsx -e "
+  import {Database} from './src/core/database.js';
+  import {extractTopicsFromContent} from './src/core/topic-extractor.js';
+  const db = new Database(require('os').homedir()+'/.ccrecall/ccrecall.db');
+  const mems = db.rawAll('SELECT id,content,project_id,session_id FROM memories');
+  let n = 0;
+  for (const m of mems) {
+    const cjk = extractTopicsFromContent(m.content).filter(t => /\p{Script=Han}/u.test(t));
+    if (!cjk.length) continue;
+    const pid = m.project_id || '';
+    if (!pid) continue;
+    for (const t of cjk) {
+      try { db.rawExec(\`INSERT OR IGNORE INTO memory_topics VALUES (\${m.id},'\${t}','\${pid}')\`); n++; } catch {}
+    }
+  }
+  const projects = db.rawAll('SELECT id FROM projects');
+  for (const p of projects) db.rebuildKnowledgeMap(p.id);
+  console.log(n + ' CJK topic entries added');
+  db.close();
+"
+```
+
 ## [0.5.2] — 2026-07-23
 
 ### 變更

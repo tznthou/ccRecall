@@ -35,6 +35,46 @@ more like an iteration counter than a strict SemVer major).
   retrievable. (PTA cross-source finding: Simplify + Security independently
   flagged this.)
 
+### Upgrade guide
+
+**Only relevant if your memories contain CJK text** (Chinese, Japanese kanji,
+or Korean hanja). English-only users need no action — the upgrade is seamless.
+
+The new CJK-aware extractor only affects memories written **after** upgrading.
+To backfill CJK topics for existing memories, run once after `npm install -g`:
+
+```sh
+pnpm tsx scripts/backfill-memory-topics.ts
+```
+
+This script skips memories that already have topics, so it won't re-extract
+existing CJK topics on its own. If you upgraded from ≤ 0.5.2 and want CJK
+topics for older memories, use the one-liner below to add them (safe to run
+multiple times — duplicates are ignored):
+
+```sh
+npx tsx -e "
+  import {Database} from './src/core/database.js';
+  import {extractTopicsFromContent} from './src/core/topic-extractor.js';
+  const db = new Database(require('os').homedir()+'/.ccrecall/ccrecall.db');
+  const mems = db.rawAll('SELECT id,content,project_id,session_id FROM memories');
+  let n = 0;
+  for (const m of mems) {
+    const cjk = extractTopicsFromContent(m.content).filter(t => /\p{Script=Han}/u.test(t));
+    if (!cjk.length) continue;
+    const pid = m.project_id || '';
+    if (!pid) continue;
+    for (const t of cjk) {
+      try { db.rawExec(\`INSERT OR IGNORE INTO memory_topics VALUES (\${m.id},'\${t}','\${pid}')\`); n++; } catch {}
+    }
+  }
+  const projects = db.rawAll('SELECT id FROM projects');
+  for (const p of projects) db.rebuildKnowledgeMap(p.id);
+  console.log(n + ' CJK topic entries added');
+  db.close();
+"
+```
+
 ## [0.5.2] — 2026-07-23
 
 ### Changed
