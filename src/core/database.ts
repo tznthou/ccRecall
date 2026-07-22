@@ -2249,9 +2249,9 @@ export class Database {
     return count
   }
 
-  /** Full rebuild of knowledge_map for a project. project_id for memory_topics is derived
-      from sessions.project_id (not the denormalized column) so repo renames / reindex won't
-      leave stale cross-project associations. */
+  /** Full rebuild of knowledge_map for a project. Uses LEFT JOIN for the
+      memory_topics branch so session-less memories (e.g. recall_save) are included
+      — their project_id comes from the denormalized column on memories. */
   rebuildKnowledgeMap(projectId: string): void {
     const run = this.db.transaction(() => {
       this.db.prepare('DELETE FROM knowledge_map WHERE project_id = ?').run(projectId)
@@ -2266,13 +2266,13 @@ export class Database {
           WHERE s.project_id = ?
             AND s.id ${Database.EXCLUDE_SUBAGENTS}
           UNION ALL
-          SELECT mt.topic_key, s.project_id,
+          SELECT mt.topic_key, COALESCE(s.project_id, m.project_id) AS project_id,
                  COALESCE(m.created_at, datetime('now')) AS touched_at
           FROM memory_topics mt
           JOIN memories m ON m.id = mt.memory_id
-          JOIN sessions s ON s.id = m.session_id
-          WHERE s.project_id = ?
-            AND s.id ${Database.EXCLUDE_SUBAGENTS}
+          LEFT JOIN sessions s ON s.id = m.session_id
+          WHERE COALESCE(s.project_id, m.project_id) = ?
+            AND (s.id IS NULL OR s.id ${Database.EXCLUDE_SUBAGENTS})
         )
         GROUP BY topic_key, project_id
       `).run(projectId, projectId)
@@ -2288,9 +2288,9 @@ export class Database {
       SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
       FROM memory_topics mt
       JOIN memories m ON m.id = mt.memory_id
-      JOIN sessions s ON s.id = m.session_id
-      WHERE s.project_id = ?
-        AND s.id ${Database.EXCLUDE_SUBAGENTS}
+      LEFT JOIN sessions s ON s.id = m.session_id
+      WHERE COALESCE(s.project_id, m.project_id) = ?
+        AND (s.id IS NULL OR s.id ${Database.EXCLUDE_SUBAGENTS})
         AND mt.topic_key IN (${placeholders})
       ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
       LIMIT ?
