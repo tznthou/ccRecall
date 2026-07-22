@@ -270,6 +270,14 @@ describe('getMemoriesByTopics', () => {
     const aResults = db.getMemoriesByTopics('proj-a', ['shared'], 10)
     expect(aResults.map(r => r.id)).toEqual([ma])
   })
+
+  it('includes session-less memories (recall_save)', () => {
+    const memId = db.saveMemory({ sessionId: null, messageId: null, content: 'manual save', type: 'decision', projectId: 'proj-a' })
+    db.saveMemoryTopics(memId, 'proj-a', ['砍刀場'])
+
+    const results = db.getMemoriesByTopics('proj-a', ['砍刀場'], 10)
+    expect(results.map(r => r.id)).toEqual([memId])
+  })
 })
 
 describe('getTopicCount', () => {

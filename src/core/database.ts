@@ -2288,9 +2288,9 @@ export class Database {
       SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
       FROM memory_topics mt
       JOIN memories m ON m.id = mt.memory_id
-      JOIN sessions s ON s.id = m.session_id
-      WHERE s.project_id = ?
-        AND s.id ${Database.EXCLUDE_SUBAGENTS}
+      LEFT JOIN sessions s ON s.id = m.session_id
+      WHERE COALESCE(s.project_id, m.project_id) = ?
+        AND (s.id IS NULL OR s.id ${Database.EXCLUDE_SUBAGENTS})
         AND mt.topic_key IN (${placeholders})
       ORDER BY ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
       LIMIT ?
