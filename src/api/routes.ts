@@ -194,7 +194,7 @@ export function createRequestHandler(
       const budgeted = maxTokens !== null
         ? applyRowBudget(rows, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
         : { emitted: rows, droppedCount: 0, usedTokens: 0, truncated: false }
-      memoryService.touch(budgeted.emitted.map(m => m.id))
+      memoryService.touch(budgeted.emitted.map(m => m.id), 'query')
       const memories = budgeted.emitted.map(m => ({
         content: m.content,
         source: memorySource(m),
@@ -246,10 +246,11 @@ export function createRequestHandler(
         return Number.isNaN(n) || n < 1 ? DEFAULT_MAX_TOKENS : n
       })()
       const fallback = url.searchParams.get('q') ?? undefined
+      const sessionId = url.searchParams.get('sessionId') || null
 
       const rows = db.getStartupMemories(project, limit, fallback)
       const budgeted = applyRowBudget(rows, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
-      memoryService.touch(budgeted.emitted.map(m => m.id))
+      memoryService.touch(budgeted.emitted.map(m => m.id), 'startup', sessionId)
 
       const memories = budgeted.emitted.map(m => ({
         id: m.id,

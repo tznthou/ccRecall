@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // ── 從 ccRewind 抽取：JSONL Parser 型別 ──
 
+export type InjectionSource = 'startup' | 'query' | 'recall_query' | 'recall_context'
+
 /** 單行 JSONL 解析結果 */
 export interface ParsedLine {
   type: string

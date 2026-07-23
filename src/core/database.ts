@@ -3,7 +3,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic } from './types.js'
+import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, InjectionSource } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
 
 /** 64-bit signed hash for message_uuids (v24 dual-hash schema). First 8 bytes
@@ -843,6 +843,23 @@ const migrations: Migration[] = [
         DROP TABLE message_uuids;
         ALTER TABLE message_uuids_new RENAME TO message_uuids;
         CREATE INDEX idx_message_uuids_session ON message_uuids(session_hash);
+      `)
+    },
+  },
+  {
+    version: 25,
+    description: 'injection_log: track which memories were surfaced, by source and session',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS injection_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+          session_id TEXT,
+          source TEXT NOT NULL,
+          injected_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_injection_log_session ON injection_log(session_id);
+        CREATE INDEX IF NOT EXISTS idx_injection_log_memory ON injection_log(memory_id);
       `)
     },
   },
@@ -2038,6 +2055,18 @@ export class Database {
       for (const id of memIds) stmt.run(id)
     })
     run(ids)
+  }
+
+  /** Log which memories were surfaced, by source and optional session. */
+  logInjection(entries: Array<{ memoryId: number; source: InjectionSource; sessionId?: string | null }>): void {
+    if (entries.length === 0) return
+    const stmt = this.db.prepare(
+      'INSERT OR IGNORE INTO injection_log (memory_id, session_id, source) VALUES (?, ?, ?)',
+    )
+    const run = this.db.transaction((rows: typeof entries) => {
+      for (const e of rows) stmt.run(e.memoryId, e.sessionId ?? null, e.source)
+    })
+    run(entries)
   }
 
   /** Phase 4b: Delete a memory by id. memories_ad trigger syncs memories_fts. */

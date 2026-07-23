@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { Database } from './database.js'
+import type { InjectionSource } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
 
 /**
@@ -15,18 +16,19 @@ export class MemoryService {
   constructor(private readonly db: Database) {}
 
   /**
-   * Increment access_count and stamp last_accessed for each id. Dedupes
-   * automatically so the same memory surfaced in multiple topic clusters is
-   * only counted once per request.
+   * Increment access_count, stamp last_accessed, and log to injection_log.
+   * Dedupes automatically so the same memory surfaced in multiple topic
+   * clusters is only counted once per request.
    *
    * Fire-and-forget: swallows errors and logs to stderr so query latency is
    * never affected by touch failures.
    */
-  touch(ids: number[]): void {
+  touch(ids: number[], source: InjectionSource, sessionId?: string | null): void {
     const unique = Array.from(new Set(ids))
     if (unique.length === 0) return
     try {
       this.db.touchMemory(unique)
+      this.db.logInjection(unique.map(id => ({ memoryId: id, source, sessionId })))
     } catch (err) {
       console.warn('[memory-service] touch failed:', scrubErrorMessage(err))
     }

@@ -97,7 +97,7 @@ export function recallQueryHandler(
     // Phase 4c: touch only memories that actually reached the caller.
     // Budget-dropped rows are not "surfaced" — bumping their access_count
     // would skew decay / compression toward unused content.
-    memoryService.touch(emittedIds)
+    memoryService.touch(emittedIds, 'recall_query')
     // hitCount uses emittedIds (post-budget) to match HTTP /memory/query
     // semantics — telemetry records what reached the caller, not raw DB hits.
     appendRecallTelemetry({
@@ -260,7 +260,7 @@ export function recallContextHandler(
     )
     // Phase 4c: touch only memories that actually reached the caller.
     // MemoryService.touch dedupes internally.
-    memoryService.touch(emittedIds)
+    memoryService.touch(emittedIds, 'recall_context')
     return textResult(text)
   } catch (err) {
     return textError('Error building context', err)

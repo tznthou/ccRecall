@@ -119,7 +119,7 @@ describe('v24 migration — upgrade from simulated v23', () => {
 
     const dbB = new Database(dbPath)
     try {
-      expect(dbB.getSchemaVersion()).toBe(24)
+      expect(dbB.getSchemaVersion()).toBe(25)
 
       const tables = dbB.rawAll<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type='table'",
@@ -187,7 +187,7 @@ describe('v24 migration — upgrade from simulated v23', () => {
 
     const dbB = new Database(dbPath)
     try {
-      expect(dbB.getSchemaVersion()).toBe(24)
+      expect(dbB.getSchemaVersion()).toBe(25)
       const uuidCols = dbB.rawAll<{ name: string }>('PRAGMA table_info(message_uuids)').map(c => c.name)
       expect(uuidCols.sort()).toEqual(['session_hash', 'uuid_hash'])
       const sessionCols = dbB.rawAll<{ name: string }>('PRAGMA table_info(sessions)').map(c => c.name)

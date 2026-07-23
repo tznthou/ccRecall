@@ -76,13 +76,14 @@ async function queryLegacy(query, projectId) {
   return result && Array.isArray(result.memories) ? result.memories : []
 }
 
-async function queryStartupV1(query, projectId) {
+async function queryStartupV1(query, projectId, sessionId) {
   const params = new URLSearchParams({
     project: projectId,
     q: query,
     limit: String(MEMORY_LIMIT),
     maxTokens: String(MAX_TOKENS),
   })
+  if (sessionId) params.set('sessionId', sessionId)
   const result = await httpGet(`/memory/startup?${params.toString()}`)
   if (!result) return { memories: [], emittedIds: [], droppedCount: 0 }
   return {
@@ -164,11 +165,12 @@ async function main() {
   const query = projectNameFromCwd(input.cwd)
   if (!query) return
   const projectId = projectIdFromCwd(input.cwd)
+  const sessionId = input.session_id || null
 
   let text
   if (STRATEGY === 'startup-v1') {
     const [result, health] = await Promise.all([
-      queryStartupV1(query, projectId),
+      queryStartupV1(query, projectId, sessionId),
       httpGet('/health'),
     ])
     const memories = result.memories
