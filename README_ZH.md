@@ -11,9 +11,15 @@ Claude Code 的本地記憶服務——索引你的對話歷史，按需召回�
 
 ---
 
-> 📐 **v0.5.0 — 砍刀場版本：一條管線，零死代碼**
->
-> Post-session extraction via Haiku（約 $0.001/session）自 v0.4.1 起就是主要記憶寫入路徑，v0.4.2–v0.4.8 逐版強化。v0.5.0 把這條管線淘汰掉的東西一次清完——journal 審閱佇列（史上零 promotion）、規則 scorer、checkpoints、8 個零 caller 的 HTTP endpoint——並把 replay 去重登記表重建為精巧的 64-bit hash（資料庫實測 114MB → 42MB）。Manual `recall_save` 仍可用於 session 中即時存記憶。
+## 流派宣言
+
+五個立場，不妥協：
+
+1. **本地優先。** 你的機器，你的資料。不上雲、不開帳號、不信任 localhost 以外的任何服務。
+2. **SQLite 就是 API。** 一個 `.db` 檔案。`sqlite3` 隨時可查。你的記憶從不是黑箱。
+3. **FTS5，不用向量。** 程式碼對話搜的是檔案路徑、錯誤訊息、工具名稱——關鍵詞就夠了。幾百個 session 的規模，embedding 解決的是不存在的問題。
+4. **LLM 蒸餾，人類策展。** Haiku 在 session 結束後自動萃取（~$0.001）。auto memory 存你親手命名的決策。ccRecall 存沒人會手寫的長尾。
+5. **對 `~/.claude/` 唯讀。** 讀 JSONL 記錄，從不寫入 Claude Code 的狀態。最壞情況：搜尋結果不好。永遠不會：搞壞你的設定。
 
 ---
 
@@ -125,7 +131,7 @@ sequenceDiagram
 | FTS5 | 全文搜尋 | SQLite 內建、trigram tokenizer，短 token / 中英混合查詢透過 LIKE fallback 補齊 |
 | 原生 `http` | HTTP 伺服器 | 不用 Express——最小表面積、僅 localhost |
 | chokidar | 檔案系統 watcher | 跨平台 JSONL 變動偵測，2 秒 debounce + single-flight |
-| vitest | 測試 | 524 個測試（34 檔案）、整合式風格 |
+| vitest | 測試 | 542 個測試（34 檔案）、整合式風格 |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport，透過 WAL 共用 SQLite |
 
 ---
@@ -346,7 +352,7 @@ ccRecall/
 │   ├── tutorial_zh.md                # 使用者教學（安裝 → MCP → 日常使用）
 │   ├── architecture_zh.md            # Daemon 設計取捨（給 contributor 看）
 │   └── launchd.md                    # macOS LaunchAgent 安裝/troubleshoot
-├── tests/                            # 524 個測試橫跨 34 檔案（parser、scanner、
+├── tests/                            # 542 個測試橫跨 34 檔案（parser、scanner、
 │   │                                 # summarizer、database、indexer、e2e、MCP、
 │   │                                 # memories、hooks、watcher、CLI、migrations、
 │   │                                 # FTS5 CJK edge cases、integrity monitor 等）
@@ -363,35 +369,31 @@ ccRecall/
 
 ---
 
-## 隨想
+## 設計哲學
 
 ### 為什麼做這個
 
 Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管理的文章](https://x.com/trq212)——11,908 個書籤，因為大家存起來反覆看但沒人有工具做到。他把問題講得很精準：context rot 讓長 session 的模型表現退化，autocompact 在最爛的時機觸發。
 
-但他給了方法論，沒給工具。ccRecall 就是那個工具。
+他給了方法論，沒給工具。ccRecall 就是那個工具。
 
 真正的觸發點更簡單：我受夠了每次跨 session 都要重新跟 Claude Code 解釋同一個架構。不是 AI 記性差——它根本不能記。每個 session 從零開始。CLAUDE.md 能幫忙，但它是我手動維護的靜態檔案。維護成本的增長速度超過知識的增值速度。聽起來很熟？這正是人類放棄 wiki 的原因（Karpathy 的 LLM Wiki 洞見）。
 
-### 設計抉擇
+### 設計立場
 
-**規則式摘要引擎而非 LLM 呼叫。** claude-mem 用 Claude API 做摘要——花 AI 的錢幫 AI 記東西。ccRecall 用 heuristic 萃取（regex 模式、工具使用分析、outcome 推斷）。沒有 LLM 精緻，但成本精確歸零。對 session 摘要來說，「Edit×8, 5 files, committed」比一段文字更有用。
+每一條都從宣言延伸。每一條都是對流行做法的刻意拒絕。
 
-**FTS5 而非向量資料庫。** 語義搜尋聽起來更高級，但對話記錄搜尋的是具體的工具名、檔案路徑、錯誤訊息——關鍵詞匹配就夠了。FTS5 查詢在本地 <10ms。不需要 embedding model、不需要 Chroma、不需要 Docker container。在我們的規模（數百個 session，不是百萬文件），Karpathy 自己的分析也確認：「500 個來源以下，樸素索引 + 關鍵詞搜尋已經夠用。」
+**規則式，不靠 LLM。** claude-mem 用 Claude API 做摘要——花 AI 的錢幫 AI 記東西。ccRecall 用 heuristic 萃取（regex 模式、工具使用分析、outcome 推斷）。沒那麼精緻，但成本精確歸零。對 session 摘要來說，「Edit×8, 5 files, committed」比一段散文更有用。daemon 本體永遠不呼叫 LLM。選配的 Haiku extraction（~$0.001/session）可以跳過，只用手動 `recall_save` 也行。
 
-**HTTP + MCP 雙介面。** 研究顯示 MCP server tools 是注入 context 到 Claude 最穩定的方式（pull-based，Claude 決定何時取）。但 SessionStart hooks（push-based，自動注入）也穩定。所以 ccRecall 兩個都跑：HTTP 給 hooks 用，MCP 給按需查詢。同一個 SQLite 後端，兩種存取模式。
+**FTS5，不用向量搜尋。** 語義搜尋聽起來更高級，但對話記錄搜的是具體的工具名、檔案路徑、錯誤訊息——關鍵詞匹配就夠了。FTS5 查詢在本地 <10ms。不需要 embedding model、不需要 Chroma、不需要 Docker container。在我們的規模（數百個 session，不是百萬文件），Karpathy 自己的分析也確認：「500 個來源以下，樸素索引 + 關鍵詞搜尋已經夠用。」
 
-**唯讀約束。** ccRecall 絕不修改 `~/.claude/`。這不只是禮貌——是信任邊界。如果一個背景服務能寫入你的 Claude Code 設定，一個 bug 就可能毀掉你的 session。唯讀意味著最壞情況是「ccRecall 搜尋結果不好」，不是「ccRecall 搞壞了我的設定」。
+**HTTP + MCP 雙介面。** MCP tools 是注入 context 到 Claude 最穩定的方式（pull-based，Claude 決定何時取）。SessionStart hooks（push-based，自動注入）也穩定。ccRecall 兩個都跑：HTTP 給 hooks 用，MCP 給按需查詢。同一個 SQLite 後端，兩種存取模式。
 
-### 刻意不做的事
+**唯讀，無條件。** ccRecall 絕不修改 `~/.claude/`、絕不寫入 session 檔案、絕不自動把自己注入 Claude Code 的設定。這不是禮貌——是信任邊界。如果一個背景服務能寫入你的設定，一個 bug 就可能毀掉你的 session。使用者自己決定設定 hooks 和 MCP。ccRecall 不會自己安裝自己。
 
-**不用 Docker、不用 Electron、不用向量資料庫。** 這些是刻意排除，不是缺失的功能。Docker 對一個 `pnpm dev` 就能跑的東西增加了部署摩擦。Electron 是給 GUI 用的——ccRecall 沒有 UI（那是 ccRewind 的事）。向量資料庫解決的是我們在這個規模不存在的問題。
+**刻意排除的技術棧。** 不用 Docker——`pnpm dev` 就能跑的東西不需要部署摩擦。不用 Electron——ccRecall 沒有 UI（那是 ccRewind 的事）。不用向量資料庫——在我們的規模解決的是不存在的問題。這些是立場，不是缺失。
 
-**核心操作不依賴 LLM。** 如果 ccRecall 需要 API key 才能索引、搜尋、注入記憶，它就失敗了。摘要是規則式的，搜尋是 FTS5。選配的 post-session extraction wrapper 目前用 Haiku（~$0.001/session）在 session 結束後自動存記憶——但 daemon 本體永遠不呼叫 LLM，長期目標是用本地規則式方法取代 Haiku extraction。你完全可以跳過 extraction，只用手動 `recall_save`。
-
-**不做「智慧」記憶注入。** ccRecall 不替 Claude 決定該記住什麼。它提供搜尋 API——注入層（hooks、MCP）呈現結果，Claude 自己整合。帶偏見的記憶篩選是過早優化，而且會以我們無法預測的方式出錯。
-
-**不修改使用者資料。** ccRecall 讀取 `~/.claude/projects/` 的 JSONL 檔案。它絕不寫入那個目錄、絕不修改 session 檔案、絕不自動把自己注入 Claude Code 的設定。使用者自己決定設定 hooks 和 MCP——ccRecall 不會自己安裝自己。
+**不做帶偏見的注入。** ccRecall 不替 Claude 決定該記住什麼。它提供搜尋 API——注入層呈現結果，Claude 自己整合。帶偏見的記憶篩選是過早優化，而且會以我們無法預測的方式出錯。
 
 ---
 
@@ -402,7 +404,8 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 | **v0.3.x** | 手動存、自動召回——記憶來自明確的 `recall_save` 呼叫；SessionStart hook 和 MCP 工具在未來 session 注入 | 已釋出 |
 | **v0.4.x** | Post-session extraction via Haiku、跨專案 topic intersection 記憶、萃取管線強化（race gate、壓縮完整性、subagent 過濾、安全性） | 已釋出 |
 | **v0.5.0** | 砍刀場：journal/scorer/harvester 管線移除（史上零 promotion）、端點 13 → 5、`message_uuids` 雙 hash 重建（DB 114MB → 42MB） | 已釋出 |
-| **v0.5+** | CJK topic 抽取（`\p{Script=Han}` tokenizer + 中文 stopwords）、L1 keyword injection、README → manifesto | 規劃中 |
+| **v0.5.2** | 召回權重：對數壓縮 half-life decay、FTS relevance-first 排序 `(-rank)*sqrt(EC)` | 已釋出 |
+| **v0.5.3** | CJK topic 對齊：Han-aware topic 抽取（`\p{Script=Han}` tokenizer + 中文 stopwords 32 條 + 助詞分割）、session-less rebuild 修正 | 已釋出 |
 
 追蹤於 [GitHub Issues](https://github.com/tznthou/ccRecall/issues)。
 

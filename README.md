@@ -11,9 +11,15 @@ A local memory service for Claude Code — indexes your conversation history, re
 
 ---
 
-> 📐 **v0.5.0 — The knife-field release: one pipeline, nothing dead**
->
-> Post-session extraction via Haiku (~$0.001/session) has been the primary memory write path since v0.4.1, hardened across v0.4.2–v0.4.8. v0.5.0 removes everything that pipeline made obsolete — the journal review queue (zero promotions in its entire history), the rule scorer, checkpoints, and 8 caller-less HTTP endpoints — and rebuilds the replay-dedup registry as compact 64-bit hashes (database: 114MB → 42MB measured). Manual `recall_save` remains available for in-session saves.
+## Manifesto
+
+Five stances, non-negotiable:
+
+1. **Local-first.** Your machine, your data. No cloud, no accounts, no services beyond localhost.
+2. **SQLite is the API.** One `.db` file. `sqlite3` to inspect anything. Your memories are never a black box.
+3. **FTS5, not vectors.** Code conversations search for file paths, error messages, tool names — keywords, not vibes. At hundreds of sessions, embeddings solve a problem that doesn't exist.
+4. **LLM distills, human curates.** Haiku extracts post-session (~$0.001). Auto memory holds decisions you name. ccRecall holds the long tail no one writes down by hand.
+5. **Read-only toward `~/.claude/`.** Reads your JSONL logs, never writes to Claude Code's state. Worst case: bad search results. Never: a broken setup.
 
 ---
 
@@ -125,7 +131,7 @@ The `notBefore` gate keeps a stale session from being extracted twice; the subag
 | FTS5 | Full-text search | Built into SQLite, trigram tokenizer with LIKE fallback for short CJK / mixed-script queries |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
 | chokidar | Filesystem watcher | Cross-platform JSONL change detection with 2 s debounce + single-flight |
-| vitest | Testing | 524 tests across 34 files, integration-style |
+| vitest | Testing | 542 tests across 34 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
@@ -354,7 +360,7 @@ ccRecall/
 │   ├── tutorial.md               # End-user walkthrough (install → MCP → usage)
 │   ├── architecture.md           # Daemon design rationale (contributor-oriented)
 │   └── launchd.md                # macOS LaunchAgent install/troubleshoot
-├── tests/                        # 524 tests across 34 files (parser, scanner,
+├── tests/                        # 542 tests across 34 files (parser, scanner,
 │   │                             # summarizer, database, indexer, e2e, MCP,
 │   │                             # memories, hooks, watcher, CLI, migrations,
 │   │                             # FTS5 CJK edge cases, integrity monitor, ...)
@@ -371,35 +377,31 @@ ccRecall/
 
 ---
 
-## Reflections
+## Philosophy
 
-### Why This Exists
+### Why this exists
 
 Thariq from Anthropic's Claude Code team [wrote about context management](https://x.com/trq212) in April 2026 — 11,908 bookmarks, because everyone saved it to re-read but nobody had the tools to actually do it. He described the problem perfectly: context rot degrades model performance in long sessions, and autocompact fires at the worst possible moment.
 
-But he gave methodology, not tools. ccRecall is the tool.
+He gave methodology, not tools. ccRecall is the tool.
 
 The real trigger was simpler: I kept re-explaining the same architecture to Claude Code across sessions. Not because the AI is bad at remembering — it literally can't. Every session starts from zero. CLAUDE.md helps, but it's a static file I maintain by hand. The maintenance cost grows faster than the value. Sound familiar? That's exactly why humans abandon wikis too (Karpathy's LLM Wiki insight).
 
-### Design Decisions
+### Design stances
 
-**Rule-based summarizer instead of LLM calls.** claude-mem uses the Claude API for summarization — you're paying AI money to help AI remember. ccRecall uses heuristic extraction (regex patterns, tool usage analysis, outcome inference). It's less sophisticated but costs exactly zero. For session summaries, "Edit x8, 5 files, committed" is more useful than a paragraph of prose anyway.
+Each flows from the manifesto. Each was a conscious choice against a popular alternative.
 
-**FTS5 instead of vector database.** Semantic search sounds better on paper, but for conversation logs — where you're searching for specific tools, file paths, error messages — keyword matching wins. FTS5 queries run in <10ms locally. No embedding model, no Chroma, no Docker container. At the scale we're operating (hundreds of sessions, not millions of documents), Karpathy's own analysis confirms: "plain index + keyword search is already sufficient under 500 sources."
+**Rule-based, not LLM-powered.** claude-mem uses the Claude API for summarization — paying AI to help AI remember. ccRecall uses heuristic extraction (regex patterns, tool usage analysis, outcome inference). Less sophisticated, costs exactly zero. For session summaries, "Edit x8, 5 files, committed" is more useful than a paragraph of prose. The daemon never calls an LLM. The optional Haiku extraction (~$0.001/session) is opt-in, and you can skip it entirely with manual `recall_save`.
 
-**HTTP + MCP dual interface.** Research showed that MCP server tools are the most stable way to inject context into Claude (pull-based, Claude decides when to fetch). But SessionStart hooks (push-based, automatic) are also stable. So ccRecall runs both: HTTP for hooks, MCP for on-demand queries. Same SQLite backend, two access patterns.
+**FTS5, not vector search.** Semantic search sounds better on paper, but for conversation logs — specific tools, file paths, error messages — keyword matching wins. FTS5 queries run in <10ms locally. No embedding model, no Chroma, no Docker container. At hundreds of sessions (not millions of documents), Karpathy's own analysis confirms: "plain index + keyword search is already sufficient under 500 sources."
 
-**Read-only constraint.** ccRecall never modifies `~/.claude/`. This isn't just politeness — it's a trust boundary. If a background service can write to your Claude Code config, one bug could corrupt your sessions. Read-only means the worst case is "ccRecall gives bad search results," not "ccRecall broke my setup."
+**HTTP + MCP dual interface.** MCP tools are the most stable way to inject context into Claude (pull-based, Claude decides when to fetch). SessionStart hooks (push-based, automatic) are also stable. ccRecall runs both: HTTP for hooks, MCP for on-demand queries. Same SQLite backend, two access patterns.
 
-### Non-goals
+**Read-only, unconditionally.** ccRecall never modifies `~/.claude/`, never writes to session files, never injects itself into Claude Code's config. This isn't politeness — it's a trust boundary. If a background service can write to your config, one bug could corrupt your sessions. The user explicitly configures hooks and MCP. ccRecall doesn't install itself.
 
-**No Docker, no Electron, no vector database.** These are deliberate exclusions, not missing features. Docker adds deployment friction for what should be a `pnpm dev` experience. Electron is for GUIs — ccRecall has no UI (that's ccRewind's job). Vector databases solve a problem we don't have at this scale.
+**The excluded stack.** No Docker — deployment friction for what should be a `pnpm dev` experience. No Electron — ccRecall has no UI (that's ccRewind's job). No vector database — solves a problem we don't have at this scale. These are deliberate exclusions, not missing features.
 
-**No LLM dependency for core operations.** If ccRecall needs an API key to index, search, or inject memories, it has failed. Summarization is rule-based. Search is FTS5. The optional post-session extraction wrapper currently uses Haiku (~$0.001/session) to save memories after a session ends — but the daemon itself never calls an LLM, and the long-term goal is to replace Haiku extraction with local rule-based methods. You can skip extraction entirely and use only manual `recall_save`.
-
-**No "smart" memory injection.** ccRecall doesn't decide what Claude should remember. It provides a search API — the injection layer (hooks, MCP) presents results, and Claude integrates them. Opinionated memory selection is a premature optimization that would be wrong in ways we can't predict.
-
-**No modification of user data.** ccRecall reads `~/.claude/projects/` JSONL files. It never writes to that directory, never modifies session files, never injects itself into Claude Code's config automatically. The user explicitly configures hooks and MCP — ccRecall doesn't install itself.
+**No opinionated injection.** ccRecall doesn't decide what Claude should remember. It provides a search API — the injection layer presents results, Claude integrates them. Opinionated memory selection is a premature optimization that would be wrong in ways we can't predict.
 
 ---
 
@@ -410,7 +412,8 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 | **v0.3.x** | Manual save, automatic recall — memories come from explicit `recall_save` calls; SessionStart hook and MCP tools inject them into future sessions | Released |
 | **v0.4.x** | Post-session extraction via Haiku, cross-project memory via topic intersection, extraction pipeline hardening (race gates, compression integrity, subagent filtering, security) | Released |
 | **v0.5.0** | The knife field: journal/scorer/harvester pipelines removed (zero promotions ever), endpoints 13 → 5, `message_uuids` dual-hash rebuild (DB 114MB → 42MB) | Released |
-| **v0.5+** | CJK-aware topic extraction (`\p{Script=Han}` tokenizer + Chinese stopwords), L1 keyword injection, README → manifesto | Planned |
+| **v0.5.2** | Recall weighting: log-compressed half-life decay, FTS relevance-first ranking via `(-rank)*sqrt(EC)` | Released |
+| **v0.5.3** | CJK topic alignment: Han-aware topic extraction (`\p{Script=Han}` tokenizer + 32 Chinese stopwords + particle split), session-less rebuild fix | Released |
 
 Tracked in [GitHub Issues](https://github.com/tznthou/ccRecall/issues).
 
