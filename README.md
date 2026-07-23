@@ -35,6 +35,24 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/cc
 
 ---
 
+## Dogfood baseline
+
+Single-user daily-driver data, not a controlled study. Updated 2026-07-23.
+
+| Metric | Value |
+|--------|-------|
+| Running continuously | 97 days |
+| Sessions indexed | 2,298 across 46 projects |
+| Memories stored | 532 (93% keyed for dedup) |
+| Topics in knowledge map | 18,495 |
+| DB on disk | 50 MB |
+
+n = 1. These numbers show the system runs and accumulates data — not that every memory is useful. We don't yet have a good metric for "did this memory actually help the session." That's an [open problem](https://github.com/tznthou/ccRecall/issues/71).
+
+What the numbers don't show: without ccRecall, every session starts cold — you re-explain context the AI already learned yesterday. With it, startup injection surfaces the relevant memory and the session picks up mid-thought. One injection that saves a five-minute preamble pays for the entire daemon.
+
+---
+
 ## Features
 
 | Feature | Description |
@@ -248,7 +266,7 @@ ccRecall lives alongside Claude Code's built-in auto memory (`~/.claude/projects
 
 |  | auto memory | ccRecall |
 |---|---|---|
-| **Write path** | Claude curates by hand — new `.md` file + MEMORY.md index line | Automatic: SessionEnd hook harvests each session into the DB |
+| **Write path** | Claude curates by hand — new `.md` file + MEMORY.md index line | Two tracks: rule-based session summaries (automatic, free) + opt-in Haiku extraction (~$0.001/session, where most searchable memories come from) |
 | **Read path** | Always in session context (MEMORY.md loads at session start) | On-demand MCP query when auto memory has no entry |
 | **Signal density** | High — facts worth naming | Long tail — everything the hook can extract |
 | **Typical use** | "Remember X" / "always Y" — durable preferences, decisions | "Didn't we fix that?" / "last time" — cross-session recall |
@@ -258,6 +276,8 @@ ccRecall lives alongside Claude Code's built-in auto memory (`~/.claude/projects
 **Default for querying:** MEMORY.md is already in context — check the index first. Fall back to `recall_query` / `recall_context` only when the user references past work and auto memory has no matching entry.
 
 ccRecall's value is the long tail that auto memory can't cover (nobody hand-curates 500 sessions of notes). If Claude defaults to both, auto memory wins because it's already loaded and curated. ccRecall earns its keep when the curated index misses.
+
+**What if Anthropic builds this in?** Auto memory today is `.md` files tied to Claude Code's project structure — portable as text, but not queryable. ccRecall is a single SQLite file you can inspect with `sqlite3`, query with SQL, back up by copying one file, and use independently of Claude Code's config. The difference isn't local vs. cloud — it's a curated document store vs. a searchable database. If built-in memory covers your needs, use it. ccRecall is for when you want structured recall across hundreds of sessions that no one will curate by hand.
 
 ---
 
@@ -391,7 +411,7 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 
 Each flows from the manifesto. Each was a conscious choice against a popular alternative.
 
-**Rule-based, not LLM-powered.** claude-mem uses the Claude API for summarization — paying AI to help AI remember. ccRecall uses heuristic extraction (regex patterns, tool usage analysis, outcome inference). Less sophisticated, costs exactly zero. For session summaries, "Edit x8, 5 files, committed" is more useful than a paragraph of prose. The daemon never calls an LLM. The optional Haiku extraction (~$0.001/session) is opt-in, and you can skip it entirely with manual `recall_save`.
+**Rule-based, with a ceiling.** The daemon uses heuristic extraction (regex patterns, tool usage analysis, outcome inference) for session summaries — zero API cost. For that job, "Edit x8, 5 files, committed" is more useful than a paragraph of prose. But rule-based has a ceiling: it handles structured signals (tool calls, file edits, commit messages) well; it misses discussion-only decisions, nuanced trade-offs, and anything that lives in natural language. That ceiling is why v0.4.1 added post-session Haiku extraction (~$0.001/session) — an LLM pass that catches what heuristics can't. In practice, the memories I actually search for mostly come from Haiku extraction or manual `recall_save`, not the rule-based layer. The daemon itself never calls an LLM; the LLM pass is opt-in and runs outside the daemon as a separate process.
 
 **FTS5, not vector search.** Semantic search sounds better on paper, but for conversation logs — specific tools, file paths, error messages — keyword matching wins. FTS5 queries run in <10ms locally. No embedding model, no Chroma, no Docker container. At hundreds of sessions (not millions of documents), Karpathy's own analysis confirms: "plain index + keyword search is already sufficient under 500 sources."
 

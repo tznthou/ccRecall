@@ -35,6 +35,24 @@ ccRecall 是 [ccRewind](https://github.com/tznthou/ccRewind)（對話回放 GUI�
 
 ---
 
+## Dogfood 基準線
+
+單人日用實測數據，不是對照實驗。更新於 2026-07-23。
+
+| 指標 | 數值 |
+|------|------|
+| 持續運行 | 97 天 |
+| 已索引 session | 2,298 筆，橫跨 46 個專案 |
+| 記憶總數 | 532 筆（93% 帶 key 去重） |
+| Knowledge map topics | 18,495 |
+| 磁碟佔用 | 50 MB |
+
+n = 1。這些數字說明系統有在跑、有在累積資料——不代表每條記憶都有用。「這條記憶到底有沒有幫到 session」目前沒有好的量測方式，這是個[開放問題](https://github.com/tznthou/ccRecall/issues/71)。
+
+數字看不出來的是體感：沒有 ccRecall，每個 session 從零開始——你要把昨天 AI 已經學過的東西重講一遍。有了它，startup injection 把相關記憶帶回來，session 直接從上次斷的地方接上。一次注入省掉五分鐘的前情提要，就值回整個 daemon 的存在。
+
+---
+
 ## 功能特色
 
 | 功能 | 說明 |
@@ -245,7 +263,7 @@ ccRecall 和 Claude Code 內建的 auto memory（`~/.claude/projects/*/memory/`�
 
 |  | auto memory | ccRecall |
 |---|---|---|
-| **寫入路徑** | Claude 手動策展——新開一個 `.md` 檔 + 更新 MEMORY.md index | 自動化：SessionEnd hook 把整個 session 萃取進資料庫 |
+| **寫入路徑** | Claude 手動策展——新開一個 `.md` 檔 + 更新 MEMORY.md index | 雙軌：規則式 session 摘要（自動、免費）+ 選配 Haiku extraction（~$0.001/session，可搜尋的記憶主要來自這條路） |
 | **讀取路徑** | 永遠在 session context（MEMORY.md 啟動時就載入） | auto memory 沒答案時，才用 MCP 查詢 |
 | **訊號密度** | 高——值得被命名的決策和偏好 | 長尾——hook 能抓到的都留著 |
 | **適用情境** | 「記住 X」「以後都 Y」——重要偏好、明確決策 | 「上次那個怎麼修的？」——跨多個 session 的回憶 |
@@ -255,6 +273,8 @@ ccRecall 和 Claude Code 內建的 auto memory（`~/.claude/projects/*/memory/`�
 **查詢預設：MEMORY.md 已經在 context 裡，先看 index 有沒有。** auto memory 沒答案，才 fallback 到 `recall_query` / `recall_context`。
 
 ccRecall 的價值在長尾——幾百個 session 不可能全手工整理。如果 Claude 兩邊都試，auto memory 永遠會贏（本來就在 context 裡而且已經被策展）。ccRecall 存在的意義是：策展索引漏掉時，長尾那堆還在資料庫裡可以撈出來。
+
+**如果 Anthropic 自己做了呢？** 現在的 auto memory 是綁在 Claude Code 專案結構裡的 `.md` 檔案——文字可攜，但不能查詢。ccRecall 是一個 SQLite 檔案，`sqlite3` 直接查、SQL 隨便下、備份就是複製一個檔案、不依賴 Claude Code 的設定才能用。差異不在 local vs cloud——是策展型文件庫 vs 可搜尋的資料庫。如果內建 memory 夠用，用它。ccRecall 是給那些累積了幾百個 session、沒人會手動整理、但你還是想搜的長尾用的。
 
 ---
 
@@ -383,7 +403,7 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 
 每一條都從宣言延伸。每一條都是對流行做法的刻意拒絕。
 
-**規則式，不靠 LLM。** claude-mem 用 Claude API 做摘要——花 AI 的錢幫 AI 記東西。ccRecall 用 heuristic 萃取（regex 模式、工具使用分析、outcome 推斷）。沒那麼精緻，但成本精確歸零。對 session 摘要來說，「Edit×8, 5 files, committed」比一段散文更有用。daemon 本體永遠不呼叫 LLM。選配的 Haiku extraction（~$0.001/session）可以跳過，只用手動 `recall_save` 也行。
+**規則式，有天花板。** daemon 用 heuristic 萃取（regex 模式、工具使用分析、outcome 推斷）做 session 摘要——零 API 成本。做這件事，「Edit×8, 5 files, committed」比一段散文更有用。但 rule-based 有天花板：結構化訊號（tool call、檔案編輯、commit message）抓得到；討論中的決策、微妙的取捨、任何活在自然語言裡的東西，它抓不到。這就是 v0.4.1 加入 post-session Haiku extraction（~$0.001/session）的原因——用一次 LLM pass 補上 heuristic 的盲區。實際上，我真正會搜到的記憶大多來自 Haiku extraction 或手動 `recall_save`，不是規則式那層。daemon 本體永遠不呼叫 LLM；LLM pass 是選配的，作為獨立進程在 daemon 之外執行。
 
 **FTS5，不用向量搜尋。** 語義搜尋聽起來更高級，但對話記錄搜的是具體的工具名、檔案路徑、錯誤訊息——關鍵詞匹配就夠了。FTS5 查詢在本地 <10ms。不需要 embedding model、不需要 Chroma、不需要 Docker container。在我們的規模（數百個 session，不是百萬文件），Karpathy 自己的分析也確認：「500 個來源以下，樸素索引 + 關鍵詞搜尋已經夠用。」
 
