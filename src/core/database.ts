@@ -1982,7 +1982,10 @@ export class Database {
           AND (m.project_id IS NULL OR m.project_id != ?)
           AND m.confidence >= 0.8
           AND m.type != 'query'
-        ORDER BY m.confidence DESC, m.created_at DESC
+        ORDER BY m.confidence DESC,
+                 (SELECT MAX(il.injected_at) FROM injection_log il
+                  WHERE il.memory_id = m.id) ASC,
+                 m.created_at DESC
         LIMIT ?
       `).all(projectId, projectId, tier0Limit) as MemoryRow[]
       pushUnique(tier0Rows.map(mapMemoryRow))
