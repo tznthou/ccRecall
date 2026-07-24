@@ -312,6 +312,32 @@ describe('getStartupMemories — Tier 0 cross-project', () => {
     expect(local.length).toBe(1)
   })
 
+  it('Tier 0 rotates within same confidence group by injection recency', () => {
+    const ids: number[] = []
+    for (let i = 0; i < 3; i++) {
+      const id = db.saveMemory({
+        sessionId: 'sa', messageId: null, type: 'decision',
+        content: `SQLite rotation test memory ${i}`,
+      })
+      db.saveMemoryTopics(id, 'proj-A', ['sqlite'])
+      ids.push(id)
+    }
+
+    // Before injection: all NULL injected_at, all present
+    let results = db.getStartupMemories('proj-B', 3)
+    let rotated = results.filter(m => m.content.includes('rotation test'))
+    expect(rotated.length).toBe(3)
+
+    // Inject memory 2 — it should drop to the back (most recently injected)
+    db.logInjection([{ memoryId: ids[2], source: 'startup', sessionId: 'sb' }])
+
+    results = db.getStartupMemories('proj-B', 3)
+    rotated = results.filter(m => m.content.includes('rotation test'))
+    expect(rotated.length).toBe(3)
+    // NULL injected_at (memories 0,1) sort before non-NULL (memory 2) in ASC
+    expect(rotated[2].content).toContain('memory 2')
+  })
+
   it('dedupes between Tier 0 and Tier 1 (global memory appears once)', () => {
     // Global memory with sqlite topic — visible in both Tier 0 (topic intersection) and Tier 1 (project_id IS NULL)
     const memId = db.saveMemory({
