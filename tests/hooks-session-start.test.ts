@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
@@ -11,6 +11,10 @@ const SCRIPT_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../hooks/session-start.mjs',
 )
+
+// Default HOME for spawned hooks — telemetry writes go to $HOME/.ccrecall,
+// so every test must run against a throwaway HOME, never the real one.
+let defaultTmpHome: string
 
 type MemoryShape = { content: string; source: string; confidence: number; depth: null }
 type Received = { path: string | undefined; method: string | undefined }
@@ -53,9 +57,11 @@ function runHook(
     const proc = spawn('node', [SCRIPT_PATH], {
       env: {
         ...process.env,
-        // Strip operator env override so the default-strategy assertions
-        // pass under a parent shell that exports startup-v1 / off.
+        // Strip operator env overrides so the default-strategy and telemetry
+        // assertions pass under a parent shell that exports them.
         CCRECALL_SESSION_START_STRATEGY: undefined,
+        CCRECALL_TELEMETRY: undefined,
+        HOME: defaultTmpHome,
         CCRECALL_PORT: String(port),
         ...envOverrides,
       },
@@ -74,6 +80,14 @@ function runHook(
 
 describe('hooks/session-start.mjs', () => {
   let server: http.Server | null = null
+
+  beforeAll(async () => {
+    defaultTmpHome = await mkdtemp(path.join(os.tmpdir(), 'cchooks-home-'))
+  })
+
+  afterAll(async () => {
+    await rm(defaultTmpHome, { recursive: true, force: true })
+  })
 
   afterEach(() => {
     if (server && server.listening) server.close()

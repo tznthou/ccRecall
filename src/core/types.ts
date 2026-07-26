@@ -259,7 +259,9 @@ export interface HealthResult {
   status: 'ok' | 'error'
   version: string
   dbPath: string
-  sessionCount: number
+  /** Main sessions only — subagent sessions are excluded, so this is lower
+   *  than the raw sessions table count. */
+  mainSessionCount: number
   memoryCount: number
   topicCount: number
   uptime: number

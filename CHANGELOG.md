@@ -11,6 +11,49 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **`/health` field `sessionCount` renamed to `mainSessionCount`** — the value
+  has always counted main sessions only (subagent sessions are excluded), so
+  the old name read like the full sessions-table count when it wasn't. Update
+  the field name if you script against `/health`.
+
+### Added
+
+- **SessionEnd hook logs its harvest decision to stderr** — skips (resume /
+  missing session_id) and harvest starts now log the hook `reason`, so the
+  reason distribution can be aggregated when diagnosing harvest misses.
+  Previously skips were silent, making misses undiagnosable.
+
+## [0.5.5] — 2026-07-24
+
+### Changed
+
+- **Tier 0 startup injection now rotates** (#71 Phase B) — Tier 0 ordering was
+  purely static, so the same three memories occupied the startup injection
+  slots every session. An injection_log subquery is now the second sort key:
+  confidence DESC, then least-recently-injected first (never injected = top
+  priority), then created_at DESC.
+
+### Added
+
+- **`scripts/usefulness-report.sql`** — topic-overlap analysis (#71 S1) with a
+  data quality gate, overlap distribution, per-source breakdown, and the
+  top-10 most-injected memories.
+
+## [0.5.4] — 2026-07-23
+
+### Added
+
+- **injection_log** (#71 Phase A) — migration v25 adds an `injection_log`
+  table recording every memory `touch()` with its source (startup / query /
+  recall_query / recall_context) and optional session_id, enabling usefulness
+  attribution. The SessionStart hook now passes session_id to
+  `/memory/startup`; sessionId is normalized server-side (empty string →
+  null); INSERT OR IGNORE keeps logging FK-safe for nonexistent memory IDs.
+
 ## [0.5.3] — 2026-07-23
 
 ### Changed

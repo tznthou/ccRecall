@@ -69,7 +69,7 @@ describe('hooks/session-end.mjs', () => {
   })
 
   it('POSTs sessionId to /session/end on normal end', async () => {
-    const { code } = await runHook(port, JSON.stringify({
+    const { code, stderr } = await runHook(port, JSON.stringify({
       session_id: 'abc-123',
       transcript_path: '/tmp/x',
       cwd: '/tmp',
@@ -81,25 +81,28 @@ describe('hooks/session-end.mjs', () => {
     expect(received[0].path).toBe('/session/end')
     expect(received[0].method).toBe('POST')
     expect(JSON.parse(received[0].body)).toEqual({ sessionId: 'abc-123' })
+    expect(stderr).toContain('harvest start (reason: logout)')
   })
 
-  it('skips POST when reason is "resume"', async () => {
-    const { code } = await runHook(port, JSON.stringify({
+  it('skips POST when reason is "resume" and logs the skip', async () => {
+    const { code, stderr } = await runHook(port, JSON.stringify({
       session_id: 'abc',
       reason: 'resume',
       hook_event_name: 'SessionEnd',
     }))
     expect(code).toBe(0)
     expect(received).toHaveLength(0)
+    expect(stderr).toContain('skip harvest (reason: resume)')
   })
 
-  it('skips POST when session_id is missing', async () => {
-    const { code } = await runHook(port, JSON.stringify({
+  it('skips POST when session_id is missing and logs the reason', async () => {
+    const { code, stderr } = await runHook(port, JSON.stringify({
       reason: 'logout',
       hook_event_name: 'SessionEnd',
     }))
     expect(code).toBe(0)
     expect(received).toHaveLength(0)
+    expect(stderr).toContain('skip harvest (reason: logout, no session_id)')
   })
 
   it('exits 0 and logs on invalid JSON stdin', async () => {
