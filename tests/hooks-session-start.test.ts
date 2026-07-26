@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
@@ -11,6 +11,10 @@ const SCRIPT_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../hooks/session-start.mjs',
 )
+
+// Per-test HOME for spawned hooks — telemetry writes go to $HOME/.ccrecall,
+// so every test runs against a fresh throwaway HOME, never the real one.
+let defaultTmpHome: string
 
 type MemoryShape = { content: string; source: string; confidence: number; depth: null }
 type Received = { path: string | undefined; method: string | undefined }
@@ -53,11 +57,15 @@ function runHook(
     const proc = spawn('node', [SCRIPT_PATH], {
       env: {
         ...process.env,
-        // Strip operator env override so the default-strategy assertions
-        // pass under a parent shell that exports startup-v1 / off.
+        // Strip operator env overrides so the default-strategy and telemetry
+        // assertions pass under a parent shell that exports them.
         CCRECALL_SESSION_START_STRATEGY: undefined,
+        CCRECALL_TELEMETRY: undefined,
         CCRECALL_PORT: String(port),
         ...envOverrides,
+        // Pinned after the spread — no test may redirect hook writes to the
+        // real HOME (tests must never touch the real ~/.ccrecall).
+        HOME: defaultTmpHome,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -75,9 +83,14 @@ function runHook(
 describe('hooks/session-start.mjs', () => {
   let server: http.Server | null = null
 
-  afterEach(() => {
+  beforeEach(async () => {
+    defaultTmpHome = await mkdtemp(path.join(os.tmpdir(), 'cchooks-home-'))
+  })
+
+  afterEach(async () => {
     if (server && server.listening) server.close()
     server = null
+    await rm(defaultTmpHome, { recursive: true, force: true })
   })
 
   it('legacy strategy queries /memory/query with cwd basename and writes memories to stdout', async () => {
@@ -217,35 +230,30 @@ describe('hooks/session-start.mjs', () => {
     }))
     server = ctx.server
 
-    const tmpHome = await mkdtemp(path.join(os.tmpdir(), 'cchooks-'))
-    try {
-      const { code, stdout } = await runHook(ctx.port, JSON.stringify({
-        session_id: 'x',
-        cwd: '/Users/tznthou/Documents/ccRecall',
-        source: 'startup',
-        hook_event_name: 'SessionStart',
-      }), { CCRECALL_SESSION_START_STRATEGY: 'startup-v1', HOME: tmpHome })
+    const { code, stdout } = await runHook(ctx.port, JSON.stringify({
+      session_id: 'x',
+      cwd: '/Users/tznthou/Documents/ccRecall',
+      source: 'startup',
+      hook_event_name: 'SessionStart',
+    }), { CCRECALL_SESSION_START_STRATEGY: 'startup-v1' })
 
-      expect(code).toBe(0)
-      expect(ctx.received).toHaveLength(2)
-      const startupReq = ctx.received.find(r => r.path?.includes('/memory/startup'))
-      expect(startupReq).toBeDefined()
-      expect(startupReq!.path).toContain('project=-Users-tznthou-Documents-ccRecall')
-      expect(startupReq!.path).toContain('maxTokens=300')
-      expect(stdout).toContain('漸進披露探索法')
-      expect(stdout).toContain('memories available')
+    expect(code).toBe(0)
+    expect(ctx.received).toHaveLength(2)
+    const startupReq = ctx.received.find(r => r.path?.includes('/memory/startup'))
+    expect(startupReq).toBeDefined()
+    expect(startupReq!.path).toContain('project=-Users-tznthou-Documents-ccRecall')
+    expect(startupReq!.path).toContain('maxTokens=300')
+    expect(stdout).toContain('漸進披露探索法')
+    expect(stdout).toContain('memories available')
 
-      const logPath = path.join(tmpHome, '.ccrecall', 'startup-recall.log.jsonl')
-      const logContent = await readFile(logPath, 'utf8')
-      const lines = logContent.trim().split('\n')
-      expect(lines).toHaveLength(1)
-      const record = JSON.parse(lines[0])
-      expect(record.emittedIds).toEqual([42])
-      expect(record.droppedCount).toBe(1)
-      expect(record.projectId).toBe('-Users-tznthou-Documents-ccRecall')
-    } finally {
-      await rm(tmpHome, { recursive: true, force: true })
-    }
+    const logPath = path.join(defaultTmpHome, '.ccrecall', 'startup-recall.log.jsonl')
+    const logContent = await readFile(logPath, 'utf8')
+    const lines = logContent.trim().split('\n')
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.emittedIds).toEqual([42])
+    expect(record.droppedCount).toBe(1)
+    expect(record.projectId).toBe('-Users-tznthou-Documents-ccRecall')
   })
 
   it('off strategy makes no HTTP call and emits nothing', async () => {

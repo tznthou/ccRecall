@@ -78,12 +78,23 @@ async function main() {
     return
   }
 
+  // Every path logs its reason to stderr so the reason distribution can be
+  // aggregated later — harvest misses were undiagnosable when skips were silent.
+  const reason = sanitizeForLog(String(input.reason ?? 'unknown'))
+
   // 'resume' means session is continuing, not ending — skip harvest.
-  if (input.reason === 'resume') return
+  if (input.reason === 'resume') {
+    console.error('[ccRecall] skip harvest (reason: resume)')
+    return
+  }
 
   const sessionId = input.session_id
-  if (!sessionId) return
+  if (!sessionId) {
+    console.error(`[ccRecall] skip harvest (reason: ${reason}, no session_id)`)
+    return
+  }
 
+  console.error(`[ccRecall] harvest start (reason: ${reason})`)
   await postSessionEnd(sessionId)
 }
 

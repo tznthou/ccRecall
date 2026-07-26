@@ -97,7 +97,7 @@ export function createRequestHandler(
         status: 'ok',
         version: opts.version ?? 'unknown',
         dbPath: opts.dbPath ?? '',
-        sessionCount: db.getMainSessionCount(),
+        mainSessionCount: db.getMainSessionCount(),
         memoryCount: db.getMemoryCount(),
         topicCount: db.getTopicCount(),
         uptime: Math.floor((Date.now() - startTime) / 1000),

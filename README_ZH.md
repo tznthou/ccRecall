@@ -180,7 +180,7 @@ pnpm dev
 ### 驗證
 
 ```bash
-# 健康檢查——sessionCount 應該 > 0
+# 健康檢查——mainSessionCount 應該 > 0
 curl http://127.0.0.1:7749/health
 
 # 搜尋你的對話歷史

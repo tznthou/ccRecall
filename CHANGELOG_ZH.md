@@ -8,6 +8,45 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [Unreleased]
+
+### 變更
+
+- **`/health` 欄位 `sessionCount` 更名為 `mainSessionCount`** —— 這個值
+  一直只計算 main session（排除 subagent session），舊名稱讀起來像
+  sessions 表的總量，實際不是。若有 script 讀 `/health`，請更新欄位名。
+
+### 新增
+
+- **SessionEnd hook 的 harvest 決策記錄到 stderr** —— skip（resume /
+  缺 session_id）與 harvest 啟動現在都會記錄 hook `reason`，事後可以
+  聚合出 reason 分布來診斷 harvest 漏抓。先前 skip 完全靜默，漏抓無從查起。
+
+## [0.5.5] — 2026-07-24
+
+### 變更
+
+- **Tier 0 啟動注入現在會輪替**（#71 Phase B）—— Tier 0 排序先前是純靜態，
+  同樣三筆記憶每個 session 都佔據啟動注入的位置。現在以 injection_log
+  subquery 作為第二排序鍵：confidence 降冪，其次最久未注入者優先
+  （從未注入 = 最高優先），再以 created_at 降冪。
+
+### 新增
+
+- **`scripts/usefulness-report.sql`** —— topic 重疊分析（#71 S1），含資料
+  品質閘門、重疊分布、各 source 細分、注入次數 top-10 記憶。
+
+## [0.5.4] — 2026-07-23
+
+### 新增
+
+- **injection_log**（#71 Phase A）—— migration v25 新增 `injection_log` 表，
+  記錄每次記憶 `touch()` 的 source（startup / query / recall_query /
+  recall_context）與可選的 session_id，為 usefulness 歸因鋪路。
+  SessionStart hook 現在會把 session_id 傳給 `/memory/startup`；
+  sessionId 由 server 端正規化（空字串 → null）；INSERT OR IGNORE
+  讓不存在的 memory ID 也能安全記錄。
+
 ## [0.5.3] — 2026-07-23
 
 ### 變更

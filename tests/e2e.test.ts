@@ -85,12 +85,13 @@ describe('E2E: index → search → HTTP', () => {
     expect(page.results.length).toBeGreaterThan(0)
   })
 
-  it('GET /health returns real session count', async () => {
+  it('GET /health returns real main-session count', async () => {
     const { status, body } = await fetch(`http://127.0.0.1:${port}/health`)
     expect(status).toBe(200)
-    const b = body as { status: string; sessionCount: number }
+    const b = body as { status: string; mainSessionCount: number; sessionCount?: number }
     expect(b.status).toBe('ok')
-    expect(b.sessionCount).toBeGreaterThan(0)
+    expect(b.mainSessionCount).toBeGreaterThan(0)
+    expect(b.sessionCount).toBeUndefined()
   })
 
   it('saveMemory → GET /memory/query round-trip', async () => {

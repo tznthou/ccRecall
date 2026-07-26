@@ -180,7 +180,7 @@ The service starts at `http://127.0.0.1:7749` and indexes all JSONL files in `~/
 ### Verify
 
 ```bash
-# Health check — should show sessionCount > 0
+# Health check — should show mainSessionCount > 0
 curl http://127.0.0.1:7749/health
 
 # Search your conversation history
