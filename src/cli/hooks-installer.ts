@@ -27,10 +27,21 @@ import { fileURLToPath } from 'node:url'
 const HOOK_FILENAMES = {
   SessionStart: 'session-start.mjs',
   SessionEnd: 'session-end.mjs',
+  UserPromptSubmit: 'user-prompt-submit.mjs',
 } as const
 
 type HookEvent = keyof typeof HOOK_FILENAMES
-const HOOK_EVENTS: HookEvent[] = ['SessionStart', 'SessionEnd']
+const HOOK_EVENTS: HookEvent[] = ['SessionStart', 'SessionEnd', 'UserPromptSubmit']
+
+/** Single place mapping an event to its script. A switch rather than a lookup so
+ *  adding an event to HOOK_FILENAMES without wiring a path fails to compile. */
+function scriptPathFor(event: HookEvent, paths: HookPaths): string {
+  switch (event) {
+    case 'SessionStart': return paths.sessionStart
+    case 'SessionEnd': return paths.sessionEnd
+    case 'UserPromptSubmit': return paths.userPromptSubmit
+  }
+}
 
 export interface HookCommand {
   type: 'command'
@@ -49,6 +60,7 @@ export interface ClaudeSettings {
 export interface HookPaths {
   sessionStart: string
   sessionEnd: string
+  userPromptSubmit: string
   hooksDir: string
 }
 
@@ -68,6 +80,7 @@ export function resolveHookPaths(overrides: HookPathOverrides = {}): HookPaths {
     hooksDir,
     sessionStart: path.join(hooksDir, HOOK_FILENAMES.SessionStart),
     sessionEnd: path.join(hooksDir, HOOK_FILENAMES.SessionEnd),
+    userPromptSubmit: path.join(hooksDir, HOOK_FILENAMES.UserPromptSubmit),
   }
 }
 
@@ -194,7 +207,7 @@ export function mergeHooks(settings: ClaudeSettings, paths: HookPaths, nodeBin?:
   let changed = false
 
   for (const event of HOOK_EVENTS) {
-    const scriptPath = event === 'SessionStart' ? paths.sessionStart : paths.sessionEnd
+    const scriptPath = scriptPathFor(event, paths)
     const expectedCommand = buildHookCommand(scriptPath, nodeBin)
     const filename = HOOK_FILENAMES[event]
 
@@ -265,7 +278,7 @@ export function removeHooks(settings: ClaudeSettings, paths: HookPaths, nodeBin?
   let changed = false
 
   for (const event of HOOK_EVENTS) {
-    const scriptPath = event === 'SessionStart' ? paths.sessionStart : paths.sessionEnd
+    const scriptPath = scriptPathFor(event, paths)
     const expectedCommand = buildHookCommand(scriptPath, nodeBin)
     const blocks = next.hooks![event]
     if (!blocks) continue

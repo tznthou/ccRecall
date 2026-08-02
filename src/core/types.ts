@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // ── 從 ccRewind 抽取：JSONL Parser 型別 ──
 
-export type InjectionSource = 'startup' | 'query' | 'recall_query' | 'recall_context'
+// 'prompt' = mid-conversation recall via the UserPromptSubmit hook (L1). Kept
+// distinct from 'startup' so the two paths stay separable in analysis — #71's
+// observation window measures the startup memory_id distribution and must not
+// absorb prompt-triggered rows.
+export type InjectionSource = 'startup' | 'query' | 'recall_query' | 'recall_context' | 'prompt'
 
 /** 單行 JSONL 解析結果 */
 export interface ParsedLine {

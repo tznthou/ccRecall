@@ -872,6 +872,14 @@ export class Database {
   /** Subagent 排除子查詢：用於所有面向使用者的 query，只顯示主 session */
   private static readonly EXCLUDE_SUBAGENTS = 'NOT IN (SELECT id FROM subagent_sessions)'
 
+  /** A topic appearing in more than this share of all memories carries no
+   *  discriminating signal and is excluded from prompt-relevance lookup. Held
+   *  as a share rather than a count so it survives corpus growth. Calibrated
+   *  against the live distribution at 742 memories, where the topics above this
+   *  line were function words (`when` 302, `only` 166, `before` 136) and the
+   *  ones below were real subjects. See getMemoriesByTopicRelevance. */
+  private static readonly PROMPT_TOPIC_MAX_SHARE = 0.05
+
   /** Effective confidence with exponential decay and access-extended half-life.
    *  Assumes `m` is the memories alias.
    *    age_days   = MAX(0, julianday(now) − julianday(COALESCE(last_accessed, created_at)))
@@ -2072,6 +2080,87 @@ export class Database {
     run(entries)
   }
 
+  /** Topic lookup ranked by relevance, for mid-conversation recall (L1).
+   *
+   *  getMemoriesByTopics orders by confidence alone, which is right for the
+   *  SessionStart tiers (they choose *what is worth knowing*) but wrong here
+   *  (this must choose *what relates to this prompt*). Ordering by confidence
+   *  against prompt-derived topics returns the highest-confidence memories in
+   *  the project regardless of subject — measured against real data, asking
+   *  about mktemp surfaced memories about naming policy and a cleanup backlog.
+   *
+   *  Two corrections, both driven by the observed topic distribution (742
+   *  memories: `when` appears in 302 of them, `only` 166, `before` 136 — the
+   *  head of the distribution is function words, while 56% of topics appear in
+   *  exactly one memory):
+   *
+   *  1. Topics common enough to carry no signal are dropped outright. The
+   *     threshold is a share of the corpus, not a constant, so it holds as the
+   *     database grows; 5% sits between the function words above and genuine
+   *     recurring subjects.
+   *  2. Surviving matches are weighted by inverse document frequency, so a
+   *     memory matching one rare topic outranks one matching three common ones.
+   *     The weight is then divided by the square root of the memory's own topic
+   *     count: a long memory carries more topics and would otherwise accumulate
+   *     a higher score for every query regardless of subject — the same
+   *     length bias that makes long memories dominate startup selection (#76).
+   *
+   *  A prompt whose topics are all filtered out returns nothing — silence is
+   *  the correct answer for "no specific subject", and injecting an unrelated
+   *  memory costs context permanently (anthropics/claude-code#40216). */
+  getMemoriesByTopicRelevance(projectId: string, topicKeys: string[], limit: number): Memory[] {
+    if (topicKeys.length === 0) return []
+    const cappedLimit = Math.min(limit, 50)
+    const placeholders = topicKeys.map(() => '?').join(',')
+    const rows = this.db.prepare(`
+      WITH df AS (
+        SELECT mt.topic_key, COUNT(DISTINCT mt.memory_id) AS n
+        FROM memory_topics mt
+        WHERE mt.topic_key IN (${placeholders})
+        GROUP BY mt.topic_key
+        HAVING n <= MAX(1, (SELECT COUNT(*) FROM memories) * ${Database.PROMPT_TOPIC_MAX_SHARE})
+      )
+      SELECT m.id, m.session_id, m.message_id, m.content, m.type,
+             m.confidence, m.key, m.created_at,
+             SUM(1.0 / df.n)
+               / SQRT(MAX(1, (SELECT COUNT(*) FROM memory_topics x WHERE x.memory_id = m.id)))
+               AS relevance
+      FROM memory_topics mt
+      JOIN df ON df.topic_key = mt.topic_key
+      JOIN memories m ON m.id = mt.memory_id
+      LEFT JOIN sessions s ON s.id = m.session_id
+      WHERE COALESCE(s.project_id, m.project_id) = ?
+        AND (s.id IS NULL OR s.id ${Database.EXCLUDE_SUBAGENTS})
+      GROUP BY m.id
+      ORDER BY relevance DESC, ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
+      LIMIT ?
+    `).all(...topicKeys, projectId, cappedLimit) as MemoryRow[]
+    return rows.map(mapMemoryRow)
+  }
+
+  /** What a session has already been given, for mid-conversation recall (L1).
+   *
+   *  Returns every memory id already surfaced in this session (any source) plus
+   *  how many prompt-triggered injections it has spent. Both are needed because
+   *  additionalContext accumulates rather than being request-scoped
+   *  (anthropics/claude-code#40216): a repeat costs permanent context weight for
+   *  zero new information, and an unbounded session would pile up indefinitely.
+   *
+   *  One query rather than two — a session's log is at most a few dozen rows and
+   *  idx_injection_log_session covers it. */
+  getSessionInjectionState(sessionId: string): { injectedIds: number[]; promptInjections: number } {
+    const rows = this.db.prepare(
+      'SELECT memory_id, source FROM injection_log WHERE session_id = ?',
+    ).all(sessionId) as Array<{ memory_id: number; source: string }>
+    const injectedIds: number[] = []
+    let promptInjections = 0
+    for (const r of rows) {
+      injectedIds.push(r.memory_id)
+      if (r.source === 'prompt') promptInjections++
+    }
+    return { injectedIds, promptInjections }
+  }
+
   /** Phase 4b: Delete a memory by id. memories_ad trigger syncs memories_fts. */
   deleteMemory(id: number): boolean {
     const info = this.db.prepare('DELETE FROM memories WHERE id = ?').run(id)
@@ -2317,7 +2406,7 @@ export class Database {
     const cappedLimit = Math.min(limit, 100)
     const placeholders = topicKeys.map(() => '?').join(',')
     const rows = this.db.prepare(`
-      SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.created_at
+      SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type, m.confidence, m.key, m.created_at
       FROM memory_topics mt
       JOIN memories m ON m.id = mt.memory_id
       LEFT JOIN sessions s ON s.id = m.session_id

@@ -7,10 +7,30 @@ import { MemoryService } from '../core/memory-service.js'
 import { scrubErrorMessage } from '../core/log-safe.js'
 import { applyRowBudget, DEFAULT_MAX_TOKENS, DEFAULT_PER_ROW_CHAR_CAP } from '../core/token-budget.js'
 import { appendRecallTelemetry } from '../core/recall-telemetry.js'
+import { extractTopicsFromContent } from '../core/topic-extractor.js'
 import type { HealthResult, Memory } from '../core/types.js'
 import type { IntegrityCheckRecord } from '../core/integrity-monitor.js'
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
+
+// Mid-conversation recall (L1) budgets. Every one of these numbers exists to
+// bound a cost that additionalContext accumulation makes permanent
+// (anthropics/claude-code#40216) — unlike SessionStart, which pays its cost once.
+//
+// 120 tokens: SessionStart spends 300 for the session's whole opening context.
+// A mid-conversation nudge answers one prompt, so it gets a fraction — enough
+// for two ~150-char excerpts plus their handles, and small enough that the
+// worst case below stays affordable.
+const PROMPT_RECALL_MAX_TOKENS = 120
+// 8 per session: 8 × 120 ≈ 960 tokens of permanent weight in the longest
+// sessions, comparable to three SessionStart injections. Sessions rarely change
+// subject more than a handful of times, so this bounds pathology rather than
+// normal use.
+const PROMPT_RECALL_MAX_PER_SESSION = 8
+// 12 topics: a prompt's first dozen distinct topics carry its subject; beyond
+// that the tail is incidental vocabulary that widens the IN-clause and pulls in
+// loosely related memories.
+const PROMPT_RECALL_MAX_TOPICS = 12
 
 function isLoopbackOrigin(origin: string | undefined): boolean {
   if (!origin) return true
@@ -225,6 +245,79 @@ export function createRequestHandler(
     }
 
     // GET /memory/startup?project=...&limit=...&maxTokens=...&q=<fallback>
+    // GET /memory/prompt — mid-conversation recall (L1), backing the
+    // UserPromptSubmit hook. SessionStart fires once and everything after it ran
+    // with no memory access at all; this is the second trigger point.
+    //
+    // Topic lookup rather than FTS: the caller passes raw user prose, and FTS
+    // would treat a whole sentence as one phrase and match nothing. Topics are
+    // already normalised across CJK and Latin (v0.5.3) and every existing memory
+    // carries them, which is the corpus this path searches — a memory created in
+    // the live session is still in the model's context and does not need recall.
+    //
+    // Two limits exist because additionalContext accumulates rather than being
+    // request-scoped (anthropics/claude-code#40216): every injection is
+    // permanent context weight, so repeats are suppressed per session and the
+    // session as a whole is capped.
+    if (req.method === 'GET' && path === '/memory/prompt') {
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        sendJson(res, 403, { error: 'cross-origin requests forbidden' })
+        return
+      }
+      const project = url.searchParams.get('project')
+      if (!project) {
+        sendJson(res, 400, { error: 'project is required' })
+        return
+      }
+      const q = (url.searchParams.get('q') ?? '').trim()
+      const sessionId = url.searchParams.get('sessionId') || null
+      const rawLimit = parseInt(url.searchParams.get('limit') ?? '2', 10)
+      const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 2 : Math.min(rawLimit, 5)
+      const rawMaxTokens = parseInt(url.searchParams.get('maxTokens') ?? '', 10)
+      const maxTokens = Number.isNaN(rawMaxTokens) || rawMaxTokens < 1
+        ? PROMPT_RECALL_MAX_TOKENS
+        : rawMaxTokens
+
+      const empty = (throttled: boolean) => sendJson(res, 200, {
+        memories: [], emittedIds: [], droppedCount: 0, throttled, project,
+      })
+
+      if (!q) { empty(false); return }
+
+      let alreadySeen = new Set<number>()
+      if (sessionId) {
+        const state = db.getSessionInjectionState(sessionId)
+        if (state.promptInjections >= PROMPT_RECALL_MAX_PER_SESSION) { empty(true); return }
+        alreadySeen = new Set(state.injectedIds)
+      }
+
+      const topics = extractTopicsFromContent(q).slice(0, PROMPT_RECALL_MAX_TOPICS)
+      if (topics.length === 0) { empty(false); return }
+
+      // Over-fetch so suppression cannot starve the result, then trim.
+      const candidates = db.getMemoriesByTopicRelevance(project, topics, limit + alreadySeen.size + 5)
+      const fresh = candidates.filter(m => !alreadySeen.has(m.id)).slice(0, limit)
+      if (fresh.length === 0) { empty(false); return }
+
+      const budgeted = applyRowBudget(fresh, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
+      memoryService.touch(budgeted.emitted.map(m => m.id), 'prompt', sessionId)
+
+      sendJson(res, 200, {
+        memories: budgeted.emitted.map(m => ({
+          id: m.id,
+          content: m.content,
+          source: memorySource(m),
+          confidence: m.confidence,
+          key: m.key ?? null,
+        })),
+        emittedIds: budgeted.emitted.map(m => m.id),
+        droppedCount: budgeted.droppedCount,
+        throttled: false,
+        project,
+      })
+      return
+    }
+
     // SessionStart-tier retrieval: cold + recent-conf + FTS fallback,
     // closes the keyword echo chamber (see memory #119 / pi-plan 2026-05-13).
     if (req.method === 'GET' && path === '/memory/startup') {
@@ -252,11 +345,17 @@ export function createRequestHandler(
       const budgeted = applyRowBudget(rows, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
       memoryService.touch(budgeted.emitted.map(m => m.id), 'startup', sessionId)
 
+      // `key` rides along unbudgeted, by design: applyRowBudget above prices only
+      // `content`, so adding the handle cannot change which memories are selected
+      // — that keeps #71's observation window (a memory_id distribution) clean.
+      // The honest accounting (prefix chars are real tokens the 300 contract does
+      // not count) is deferred until that window closes; see #77.
       const memories = budgeted.emitted.map(m => ({
         id: m.id,
         content: m.content,
         source: memorySource(m),
         confidence: m.confidence,
+        key: m.key ?? null,
       }))
 
       sendJson(res, 200, {

@@ -138,12 +138,28 @@ function formatStartupV1(memories, query, totalMemoryCount) {
     const conf = m.confidence != null && m.confidence !== 1
       ? ` (conf ${Number(m.confidence).toFixed(2)})`
       : ''
-    return `- ${m.content}${conf}`
+    // #77: each line is a ~150-char excerpt of a memory averaging ~600, and the
+    // cut typically lands before the conclusion. The key is the only handle that
+    // makes the rest reachable — without it the reader can see that a line was
+    // clipped (the ellipsis) but has no way to ask for the remainder. Appended
+    // rather than prefixed so the content still leads.
+    const handle = m.key ? ` [key: ${m.key}]` : ''
+    return `- ${m.content}${conf}${handle}`
   })
   const parts = ['[ccRecall memory recall]', '']
   if (lines.length > 0) parts.push(...lines, '')
-  if (totalMemoryCount > memories.length) {
-    parts.push(`(${totalMemoryCount} memories available — use recall_query to search more)`)
+  if (lines.length > 0) {
+    // The old footer only reported how many rows existed, which implied the rows
+    // shown were whole. Say plainly that they are excerpts, and name the way out.
+    const available = totalMemoryCount > memories.length
+      ? ` ${totalMemoryCount} memories available.`
+      : ''
+    parts.push(
+      `(Each line is a ~150-char excerpt — conclusions are often past the cut.`
+      + ` recall_query a [key] for the full text.${available})`,
+    )
+  } else if (totalMemoryCount > 0) {
+    parts.push(`(${totalMemoryCount} memories available — use recall_query to search.)`)
   }
   return parts.join('\n')
 }

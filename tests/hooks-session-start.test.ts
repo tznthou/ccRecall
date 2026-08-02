@@ -16,7 +16,13 @@ const SCRIPT_PATH = path.resolve(
 // so every test runs against a fresh throwaway HOME, never the real one.
 let defaultTmpHome: string
 
-type MemoryShape = { content: string; source: string; confidence: number; depth: null }
+type MemoryShape = {
+  content: string
+  source: string
+  confidence: number
+  depth: null
+  key?: string | null
+}
 type Received = { path: string | undefined; method: string | undefined }
 
 function startMockServer(
@@ -254,6 +260,96 @@ describe('hooks/session-start.mjs', () => {
     expect(record.emittedIds).toEqual([42])
     expect(record.droppedCount).toBe(1)
     expect(record.projectId).toBe('-Users-tznthou-Documents-ccRecall')
+  })
+
+  // #77 / L2: injected lines are ~150-char excerpts, and the actionable part
+  // (conclusion, fix) usually falls past the cut. Without a handle the reader
+  // cannot tell how much was lost or how to fetch the rest, so recall_query
+  // sits at under 1% of all surfacing. These assertions pin the two signals
+  // that make follow-up possible: a per-line key, and a footer that says the
+  // lines are excerpts rather than implying they are whole.
+  it('renders each memory key as a queryable handle', async () => {
+    const ctx = await startMockServer(() => ({
+      status: 200,
+      memories: [
+        {
+          content: 'BSD mktemp only substitutes trailing X characters',
+          source: 's1:session',
+          confidence: 0.9,
+          depth: null,
+          key: 'bsd-mktemp-trailing-x-only',
+        },
+      ],
+      extra: { emittedIds: [7], droppedCount: 0 },
+    }))
+    server = ctx.server
+
+    const { code, stdout } = await runHook(ctx.port, JSON.stringify({
+      session_id: 'k1',
+      cwd: '/Users/tznthou/Documents/ccRecall',
+      source: 'startup',
+      hook_event_name: 'SessionStart',
+    }))
+
+    expect(code).toBe(0)
+    expect(stdout).toContain('bsd-mktemp-trailing-x-only')
+    // The content must still lead — the handle is a suffix, not a prefix that
+    // would push the excerpt further from the reader's eye.
+    const line = stdout.split('\n').find(l => l.includes('bsd-mktemp'))!
+    expect(line.indexOf('BSD mktemp')).toBeLessThan(line.indexOf('bsd-mktemp-trailing-x-only'))
+  })
+
+  it('omits the handle for memories that have no key', async () => {
+    const ctx = await startMockServer(() => ({
+      status: 200,
+      memories: [
+        { content: 'memory whose key field is absent', source: 's2:session', confidence: 0.9, depth: null },
+        { content: 'memory whose key field is explicitly empty', source: 's3:session', confidence: 0.9, depth: null, key: null },
+      ],
+      extra: { emittedIds: [8, 9], droppedCount: 0 },
+    }))
+    server = ctx.server
+
+    const { code, stdout } = await runHook(ctx.port, JSON.stringify({
+      session_id: 'k2',
+      cwd: '/Users/tznthou/Documents/ccRecall',
+      source: 'startup',
+      hook_event_name: 'SessionStart',
+    }))
+
+    expect(code).toBe(0)
+    expect(stdout).toContain('memory whose key field is absent')
+    expect(stdout).toContain('memory whose key field is explicitly empty')
+    // Neither line may carry a handle at all — no empty brackets, no "null"/
+    // "undefined" leaking through string interpolation.
+    const memoryLines = stdout.split('\n').filter(l => l.startsWith('- '))
+    expect(memoryLines).toHaveLength(2)
+    for (const line of memoryLines) expect(line).not.toContain('[key:')
+  })
+
+  it('footer says the lines are excerpts and names the way to read one in full', async () => {
+    const ctx = await startMockServer(() => ({
+      status: 200,
+      memories: [
+        { content: 'some memory', source: 's4:session', confidence: 0.9, depth: null, key: 'some-memory' },
+      ],
+      extra: { emittedIds: [10], droppedCount: 0 },
+    }), { memoryCount: 742 })
+    server = ctx.server
+
+    const { code, stdout } = await runHook(ctx.port, JSON.stringify({
+      session_id: 'k3',
+      cwd: '/Users/tznthou/Documents/ccRecall',
+      source: 'startup',
+      hook_event_name: 'SessionStart',
+    }))
+
+    expect(code).toBe(0)
+    // Must state the lines are partial — the old wording ("N memories available")
+    // only spoke to how many rows exist, which reads as "these ones are complete".
+    expect(stdout).toMatch(/excerpt/i)
+    expect(stdout).toContain('recall_query')
+    expect(stdout).toContain('742')
   })
 
   it('off strategy makes no HTTP call and emits nothing', async () => {
