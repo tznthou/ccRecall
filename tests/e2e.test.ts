@@ -7,6 +7,7 @@ import http from 'node:http'
 import { Database } from '../src/core/database'
 import { runIndexer } from '../src/core/indexer'
 import { createServer } from '../src/api/server'
+import { extractTopicsFromContent } from '../src/core/topic-extractor'
 import { postJson, fetchJson as fetch } from './fixtures/helpers.js'
 
 describe('E2E: index → search → HTTP', () => {
@@ -233,6 +234,220 @@ describe('E2E: index → search → HTTP', () => {
     const found = b.memories.find(m => m.content.includes('漸進披露'))
     expect(found).toBeDefined()
     expect(b.emittedIds).toContain(found!.id)
+  })
+
+  it('GET /memory/startup returns each memory key so the excerpt stays reachable (#77)', async () => {
+    // Injected lines are ~150-char excerpts of memories averaging far more. The
+    // key is the handle that lets the reader fetch the rest; before this it was
+    // selected in SQL, then dropped when the response was assembled.
+    const keyed = db.saveMemory({
+      sessionId: null, messageId: null,
+      content: 'BSD mktemp only substitutes X characters at the END of the template',
+      type: 'discovery',
+      projectId: '-key-project',
+      confidence: 0.9,
+      key: 'bsd-mktemp-trailing-x-only',
+    })
+    expect(keyed).toBeGreaterThan(0)
+    const unkeyed = db.saveMemory({
+      sessionId: null, messageId: null,
+      content: 'a memory written before keys existed',
+      type: 'discovery',
+      projectId: '-key-project',
+      confidence: 0.9,
+    })
+    expect(unkeyed).toBeGreaterThan(0)
+
+    const { status, body } = await fetch(
+      `http://127.0.0.1:${port}/memory/startup?project=-key-project&limit=5&maxTokens=300`,
+    )
+    expect(status).toBe(200)
+    const b = body as { memories: Array<{ id: number; content: string; key: string | null }> }
+
+    const withKey = b.memories.find(m => m.id === keyed)
+    expect(withKey).toBeDefined()
+    expect(withKey!.key).toBe('bsd-mktemp-trailing-x-only')
+
+    // Legacy rows must carry an explicit null, never undefined — the hook keys
+    // its rendering off truthiness and would print a broken handle otherwise.
+    const withoutKey = b.memories.find(m => m.id === unkeyed)
+    expect(withoutKey).toBeDefined()
+    expect(withoutKey!.key).toBeNull()
+  })
+
+  // L1: mid-conversation recall. SessionStart fires once; everything after it
+  // ran with no memory access at all, which is why recall_query sat at under 1%
+  // of all surfacing. This endpoint backs a UserPromptSubmit hook.
+  //
+  // The hard constraint is anthropics/claude-code#40216: additionalContext
+  // accumulates in history instead of being request-scoped, so every injection
+  // is permanent context weight. Hence per-session dedup and a hard ceiling —
+  // without them a long session would silently pile up dozens of blocks.
+  describe('GET /memory/prompt (mid-conversation recall)', () => {
+    // Production memories all carry topics (backfilled in v0.5.3); saveMemory
+    // alone does not create them, so tests must mirror that state explicitly.
+    const saveWithTopics = (opts: Parameters<typeof db.saveMemory>[0] & { projectId: string }): number => {
+      const id = db.saveMemory(opts)
+      db.saveMemoryTopics(id, opts.projectId, extractTopicsFromContent(opts.content))
+      return id
+    }
+
+    it('returns memories matching the prompt, with keys for follow-up', async () => {
+      const id = saveWithTopics({
+        sessionId: null, messageId: null,
+        content: 'BSD mktemp only substitutes X characters at the END of the template',
+        type: 'discovery',
+        projectId: '-prompt-project',
+        confidence: 0.9,
+        key: 'bsd-mktemp-trailing-x-only',
+      })
+      const { status, body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-prompt-project&q=mktemp%20template&sessionId=s-basic&limit=2&maxTokens=120`,
+      )
+      expect(status).toBe(200)
+      const b = body as { memories: Array<{ id: number; key: string | null }>; emittedIds: number[]; throttled: boolean }
+      expect(b.throttled).toBe(false)
+      expect(b.emittedIds).toContain(id)
+      expect(b.memories.find(m => m.id === id)!.key).toBe('bsd-mktemp-trailing-x-only')
+    })
+
+    it('never re-surfaces a memory already injected in the same session', async () => {
+      const id = saveWithTopics({
+        sessionId: null, messageId: null,
+        content: 'zsh echo expands escapes, so pipe JSON with printf %s instead',
+        type: 'discovery',
+        projectId: '-dedup-project',
+        confidence: 0.9,
+        key: 'zsh-echo-escape-printf',
+      })
+      // Already delivered at session start — re-injecting it would be pure
+      // context weight for zero new information.
+      db.logInjection([{ memoryId: id, source: 'startup', sessionId: 's-dedup' }])
+
+      const { body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-dedup-project&q=printf%20zsh&sessionId=s-dedup&limit=2&maxTokens=120`,
+      )
+      const b = body as { emittedIds: number[] }
+      expect(b.emittedIds).not.toContain(id)
+
+      // ...but a different session must still see it.
+      const other = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-dedup-project&q=printf%20zsh&sessionId=s-other&limit=2&maxTokens=120`,
+      )
+      expect((other.body as { emittedIds: number[] }).emittedIds).toContain(id)
+    })
+
+    it('stops injecting once the per-session ceiling is reached', async () => {
+      const id = saveWithTopics({
+        sessionId: null, messageId: null,
+        content: 'a memory about throttling behaviour in long sessions',
+        type: 'pattern',
+        projectId: '-throttle-project',
+        confidence: 0.9,
+        key: 'throttle-ceiling',
+      })
+      // Simulate a session that already consumed its budget of prompt-triggered
+      // injections (distinct memory ids so dedup is not what stops it).
+      for (let i = 0; i < 8; i++) {
+        const filler = db.saveMemory({
+          sessionId: null, messageId: null,
+          content: `filler memory ${i} for throttle accounting`,
+          type: 'pattern', projectId: '-throttle-project', confidence: 0.9,
+          key: `throttle-filler-${i}`,
+        })
+        db.logInjection([{ memoryId: filler, source: 'prompt', sessionId: 's-throttle' }])
+      }
+
+      const { body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-throttle-project&q=throttling%20behaviour&sessionId=s-throttle&limit=2&maxTokens=120`,
+      )
+      const b = body as { memories: unknown[]; emittedIds: number[]; throttled: boolean }
+      expect(b.throttled).toBe(true)
+      expect(b.memories).toHaveLength(0)
+      expect(b.emittedIds).not.toContain(id)
+    })
+
+    it('returns empty without touching anything when the query is blank', async () => {
+      const { status, body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-prompt-project&q=&sessionId=s-blank&limit=2`,
+      )
+      expect(status).toBe(200)
+      const b = body as { memories: unknown[]; throttled: boolean }
+      expect(b.memories).toHaveLength(0)
+      expect(b.throttled).toBe(false)
+    })
+
+    it('refuses to inject without a session id', async () => {
+      // Both guards — dedup and the ceiling — key off the session. Without one
+      // they silently do not apply, which would allow the same memory to be
+      // re-injected on every prompt for the life of the session. Fail closed.
+      const id = saveWithTopics({
+        sessionId: null, messageId: null,
+        content: 'a memory that would otherwise match this query easily',
+        type: 'discovery',
+        projectId: '-nosession-project',
+        confidence: 0.9,
+        key: 'no-session-guard',
+      })
+      const { status, body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-nosession-project&q=memory%20match%20query&limit=2`,
+      )
+      expect(status).toBe(200)
+      const b = body as { memories: unknown[]; emittedIds: number[]; throttled: boolean }
+      expect(b.memories).toHaveLength(0)
+      expect(b.emittedIds).not.toContain(id)
+      expect(b.throttled).toBe(false)
+    })
+
+    it('scopes topic frequency to the project, so another project cannot blind it', async () => {
+      // One database holds every project. A topic used once here but constantly
+      // in an unrelated project must still be usable here.
+      const mine = saveWithTopics({
+        sessionId: null, messageId: null,
+        content: 'harvester atomicity constraint discovered during phase three',
+        type: 'discovery',
+        projectId: '-scoped-mine',
+        confidence: 0.9,
+        key: 'harvester-atomicity',
+      })
+      for (let i = 0; i < 40; i++) {
+        saveWithTopics({
+          sessionId: null, messageId: null,
+          content: `harvester note ${i} in an unrelated project`,
+          type: 'pattern', projectId: '-scoped-other', confidence: 0.9,
+          key: `other-harvester-${i}`,
+        })
+      }
+
+      const { body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-scoped-mine&q=harvester%20atomicity&sessionId=s-scoped&limit=2`,
+      )
+      expect((body as { emittedIds: number[] }).emittedIds).toContain(mine)
+    })
+
+    it('clamps maxTokens so a caller cannot opt out of the budget', async () => {
+      for (let i = 0; i < 6; i++) {
+        saveWithTopics({
+          sessionId: null, messageId: null,
+          content: `clamp probe ${i}: ${'padding phrase about clamping budgets '.repeat(12)}`,
+          type: 'pattern', projectId: '-clamp-project', confidence: 0.9,
+          key: `clamp-probe-${i}`,
+        })
+      }
+      const { body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-clamp-project&q=clamp%20probe%20padding&sessionId=s-clamp&limit=5&maxTokens=999999`,
+      )
+      const b = body as { memories: Array<{ content: string }> }
+      // Rows are capped at 150 chars each and the whole response at the
+      // SessionStart budget, so an absurd maxTokens cannot inflate it.
+      const chars = b.memories.reduce((n, m) => n + m.content.length, 0)
+      expect(chars).toBeLessThanOrEqual(5 * 150)
+    })
+
+    it('rejects without project param', async () => {
+      const { status } = await fetch(`http://127.0.0.1:${port}/memory/prompt?q=anything`)
+      expect(status).toBe(400)
+    })
   })
 
   it('GET /memory/startup rejects without project param', async () => {

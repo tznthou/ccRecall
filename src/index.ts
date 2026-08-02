@@ -74,7 +74,7 @@ Usage:
   ccmem install-daemon             Install macOS LaunchAgent for auto-start
   ccmem install-daemon --dry-run   Print plist without installing
   ccmem uninstall-daemon           Remove LaunchAgent and stop auto-start
-  ccmem install-hooks              Register SessionStart/SessionEnd hooks in ~/.claude/settings.json
+  ccmem install-hooks              Register SessionStart/SessionEnd/UserPromptSubmit hooks in ~/.claude/settings.json
   ccmem install-hooks --dry-run    Print merged settings.json without writing
   ccmem uninstall-hooks            Remove ccRecall hook entries from ~/.claude/settings.json
   ccmem cleanup --orphans          List orphan memories (read-only dry run)

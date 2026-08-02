@@ -8,6 +8,49 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.6.0] — 2026-08-02
+
+記憶只在第 0 秒被端出來一次。session 之後跑幾小時、轉到什麼題目，都不會再
+查一次記憶庫——這就是 `recall_query` 佔全部記憶浮現不到 1% 的原因。這一版
+補上第二個觸發點，讓注入時被切掉的內容可以用 `recall_query` 撈回全文，並讓一個長期隱形的
+extraction 失敗現形。
+
+### 新增
+
+- **對話中喚起記憶** —— 新的 `UserPromptSubmit` hook
+  （`hooks/user-prompt-submit.mjs`），後端是 `GET /memory/prompt`。從 prompt
+  抽出 topic，在 session 進行中撈出相關記憶。
+
+  設計上刻意節制，因為注入的 context 會累積在對話裡而不是被替換
+  （[claude-code#40216](https://github.com/anthropics/claude-code/issues/40216)）
+  ——每次注入都是永久的重量。太短的 prompt 和斜線指令連網路請求都不發；
+  本 session 已經給過的記憶不再重複；每個 session 上限 8 則；300ms 逾時；
+  任何錯誤都靜默放行。在 742 則記憶的庫上實測端到端約 40ms。
+  設 `CCRECALL_PROMPT_RECALL=off` 可關閉。
+
+  排序用 topic 的逆文件頻率，以專案為範圍計算，並除以該則記憶自身的 topic
+  數做正規化——少了這步，長記憶會不分主題地壓過所有結果，那正是 startup
+  選擇邏輯身上同一種長度偏差。
+
+- **注入的記憶帶上 key。** startup 每列是約 150 字元的節錄，而記憶平均長得
+  多，切點通常落在結論之前。key 現在會跟著 API 一路送到注入層，渲染成可用的
+  handle，切掉的部分可以用 `recall_query` 撈回全文。footer 也改了措辭，
+  明講這些是節錄，而不是只報「還有幾則可以搜」——後者讀起來像在說眼前這些
+  是完整的。
+
+- **extraction 靜默漏抽的偵測。** extraction 模型有時會把 `recall_save(...)`
+  印成文字而不是真的呼叫工具：那次 run 會 exit 0、stderr 全空、什麼都沒寫
+  進去，在遙測裡跟「這個 session 真的沒東西好存」長得一模一樣。wrapper 現在
+  會數這種被印出來的呼叫語法，寫進新的 `recallSaveTextCount` 遙測欄位（只記
+  次數，不留任何被比對到的內容），並在乾淨結束卻出現這種情況時於終端示警。
+
+### 變更
+
+- **`ccmem install-hooks` 現在會註冊三個 hook**，在 `SessionStart`、
+  `SessionEnd` 之外多了 `UserPromptSubmit`。在既有安裝上重跑 install 會把它
+  加進去。跟另外兩個不同，這個每次送出 prompt 都會跑——節制機制與關閉開關
+  見 `hooks/README.md`。
+
 ## [0.5.6] — 2026-07-26
 
 ### 變更

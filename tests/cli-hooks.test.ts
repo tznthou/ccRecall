@@ -34,7 +34,7 @@ afterEach(async () => {
 })
 
 describe('resolveHookPaths', () => {
-  it('joins hooks dir with the two script filenames', () => {
+  it('joins hooks dir with every script filename', () => {
     const p = resolveHookPaths({ hooksDir: '/x/y' })
     expect(p.sessionStart).toBe('/x/y/session-start.mjs')
     expect(p.sessionEnd).toBe('/x/y/session-end.mjs')
@@ -71,12 +71,14 @@ describe('detectIndent', () => {
 })
 
 describe('mergeHooks', () => {
-  it('adds both events into an empty settings object', () => {
+  it('adds every event into an empty settings object', () => {
     const { settings, changed, actions } = mergeHooks({}, fakePaths, FAKE_NODE)
     expect(changed).toBe(true)
-    expect(actions.map(a => a.action)).toEqual(['added', 'added'])
+    expect(actions.map(a => a.action)).toEqual(['added', 'added', 'added'])
     expect(settings.hooks!.SessionStart![0].hooks[0].command).toContain('session-start.mjs')
     expect(settings.hooks!.SessionEnd![0].hooks[0].command).toContain('session-end.mjs')
+    // L1 mid-conversation recall — the second trigger point after SessionStart.
+    expect(settings.hooks!.UserPromptSubmit![0].hooks[0].command).toContain('user-prompt-submit.mjs')
   })
 
   it('is a no-op when the exact commands already exist', () => {
@@ -84,6 +86,7 @@ describe('mergeHooks', () => {
       hooks: {
         SessionStart: [{ hooks: [{ type: 'command', command: buildHookCommand(fakePaths.sessionStart, FAKE_NODE) }] }],
         SessionEnd: [{ hooks: [{ type: 'command', command: buildHookCommand(fakePaths.sessionEnd, FAKE_NODE) }] }],
+        UserPromptSubmit: [{ hooks: [{ type: 'command', command: buildHookCommand(fakePaths.userPromptSubmit, FAKE_NODE) }] }],
       },
     }
     const { changed, actions } = mergeHooks(pre, fakePaths, FAKE_NODE)

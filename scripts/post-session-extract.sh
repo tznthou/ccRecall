@@ -251,6 +251,29 @@ ${prompt}"
   # phrase (guaranteed to occur in this repo's own sessions).
   local stdout_marker
   stdout_marker=$(grep -m1 -oE '^Error: Reached max turns \([0-9]+\)$' "$stdout_tmp" 2>/dev/null)
+  # Second marker (#75): the model sometimes PRINTS `recall_save(...)` instead of
+  # invoking the MCP tool. That run exits 0 with empty stderr and writes nothing,
+  # which in telemetry is byte-identical to a session that genuinely had nothing
+  # worth saving — the reason this failure mode stayed invisible for months.
+  #
+  # Anchored at line start (leading indentation allowed, since the observed
+  # captures were fenced code blocks) so prose that merely mentions the tool
+  # — guaranteed to occur in this repo's own sessions — does not match. The
+  # anchoring bar is deliberately lower than the max-turns marker above: that
+  # one decides whether a run was a total loss, so a forged match would corrupt
+  # the verdict. This one only flags a row for follow-up and is meant to be read
+  # against the origin session's actual memory count (marker hit + zero writes =
+  # silent miss; marker hit + writes present = the model narrated as well as
+  # called). A false positive costs one row to check; a false negative restores
+  # the status quo of total invisibility.
+  #
+  # -c yields a bare count and never the matched line, so no session content can
+  # reach the telemetry log — the same constraint that governs the stdout capture.
+  local recall_save_text_count
+  recall_save_text_count=$(grep -cE '^[[:space:]]*recall_save[[:space:]]*\(' "$stdout_tmp" 2>/dev/null)
+  # grep exits 1 with empty output on no match (and $stdout_tmp is /dev/null when
+  # mktemp failed); --argjson would abort the whole telemetry write on a non-number.
+  [[ "$recall_save_text_count" =~ ^[0-9]+$ ]] || recall_save_text_count=0
   rm -f -- "$stdout_tmp" 2>/dev/null
   # Scrub common credential formats before stderr reaches the telemetry log.
   # claude echoes its own key (sk-ant-) in auth errors, and any MCP server
@@ -266,7 +289,14 @@ ${prompt}"
   local extract_duration=$(( extract_end - extract_start ))
 
   if [[ $extract_exit -eq 0 ]]; then
-    printf '✅ ccRecall: extraction complete (%ds).\n' "$extract_duration"
+    # A clean exit that printed call syntax is the silent-miss shape (#75): say so
+    # at the terminal, where it can still be acted on, instead of only in the log.
+    if [[ $recall_save_text_count -gt 0 ]]; then
+      printf '⚠️  ccRecall: extraction exited cleanly (%ds) but printed %d recall_save call(s) as text instead of invoking the tool — memories from this session may not have been saved.\n' \
+        "$extract_duration" "$recall_save_text_count"
+    else
+      printf '✅ ccRecall: extraction complete (%ds).\n' "$extract_duration"
+    fi
   else
     printf '⚠️  ccRecall: extraction exited with code %d (%ds)%s.\n' \
       "$extract_exit" "$extract_duration" "${stdout_marker:+ — $stdout_marker}"
@@ -275,6 +305,10 @@ ${prompt}"
   # Telemetry log (-c = one compact JSON object per line = valid JSONL).
   # stdoutMarker: "Error: Reached max turns (N)" when the turn budget was hit,
   # else "" — splits exit-1 rows into total-loss vs unclean-finish post-hoc (#56).
+  # recallSaveTextCount: how many recall_save calls the model printed as text
+  # rather than invoking — splits exit-0 zero-write rows into silent miss vs
+  # genuine no-op (#75). Absent on rows written before this marker shipped, so
+  # analysis must treat missing as unknown, not as 0.
   jq -n -c \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sid "$session_id" \
@@ -283,7 +317,8 @@ ${prompt}"
     --arg marker "$stdout_marker" \
     --argjson exit "$extract_exit" \
     --argjson dur "$extract_duration" \
-    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker}' \
+    --argjson textSaves "$recall_save_text_count" \
+    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker,recallSaveTextCount:$textSaves}' \
     >> "$CCRECALL_EXTRACT_LOG"
 
   return $claude_exit
