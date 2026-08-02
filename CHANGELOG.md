@@ -11,6 +11,56 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.6.0] — 2026-08-02
+
+Memories were only ever offered at second zero. A session could run for hours
+and turn to any subject without the store being consulted again, which is why
+`recall_query` accounted for well under 1% of all memory surfacing. This
+release adds a second trigger point, makes injected excerpts fetchable, and
+makes a long-standing extraction failure visible.
+
+### Added
+
+- **Mid-conversation recall** — a new `UserPromptSubmit` hook
+  (`hooks/user-prompt-submit.mjs`) backed by `GET /memory/prompt`. It extracts
+  topics from the prompt and surfaces related memories mid-session.
+
+  Deliberately restrained, because injected context accumulates in the
+  conversation rather than being replaced
+  ([claude-code#40216](https://github.com/anthropics/claude-code/issues/40216)) —
+  every injection is permanent weight. It skips short prompts and slash
+  commands with no network call, suppresses memories already surfaced in the
+  session, stops after 8 memories per session, times out at 300ms, and fails
+  open on any error. Measured at ~40ms end to end against a 742-memory store.
+  Set `CCRECALL_PROMPT_RECALL=off` to disable it.
+
+  Ranking is inverse document frequency over topics, scoped per project and
+  normalised by each memory's own topic count — without that normalisation
+  long memories outrank everything regardless of subject, which is the same
+  length bias that skews startup selection.
+
+- **Injected memories now carry their key.** Startup lines are ~150-character
+  excerpts of memories averaging far more, and the cut usually lands before
+  the conclusion. The key travels through the API and renders as a handle, so
+  a truncated line can be read in full with `recall_query`. The footer now
+  says the lines are excerpts instead of reporting only how many memories
+  exist, which read as though the shown ones were whole.
+
+- **Extraction silent-miss detection.** The extraction model sometimes prints
+  `recall_save(...)` as text instead of invoking the tool: the run exits 0
+  with empty stderr and writes nothing, indistinguishable in telemetry from a
+  session with nothing worth saving. The wrapper now counts printed call
+  syntax into a new `recallSaveTextCount` telemetry field (a count only — no
+  captured content reaches the log) and warns at the terminal on a clean exit
+  that produced them.
+
+### Changed
+
+- **`ccmem install-hooks` now registers three hooks**, adding
+  `UserPromptSubmit` to `SessionStart` and `SessionEnd`. Re-running install on
+  an existing setup will add it. Unlike the other two, this one runs on every
+  prompt — see `hooks/README.md` for the restraint notes and the kill switch.
+
 ## [0.5.6] — 2026-07-26
 
 ### Changed
