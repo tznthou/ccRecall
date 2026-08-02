@@ -22,15 +22,15 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
 // for two ~150-char excerpts plus their handles, and small enough that the
 // worst case below stays affordable.
 const PROMPT_RECALL_MAX_TOKENS = 120
-// 8 per session: 8 × 120 ≈ 960 tokens of permanent weight in the longest
-// sessions, comparable to three SessionStart injections. Sessions rarely change
-// subject more than a handful of times, so this bounds pathology rather than
-// normal use.
-const PROMPT_RECALL_MAX_PER_SESSION = 8
-// 12 topics: a prompt's first dozen distinct topics carry its subject; beyond
-// that the tail is incidental vocabulary that widens the IN-clause and pulls in
-// loosely related memories.
-const PROMPT_RECALL_MAX_TOPICS = 12
+// Two memories per prompt: enough for a primary match plus one near-miss,
+// while keeping a single injection small enough to skim.
+const PROMPT_RECALL_DEFAULT_LIMIT = 2
+// 8 MEMORIES — not eight injections. The ceiling is counted in delivered rows
+// because that is what injection_log records (one row per memory), so at the
+// default limit it permits four injections, ≈480 tokens of permanent weight in
+// the longest sessions. Sessions rarely change subject more than a handful of
+// times, so this bounds pathology rather than normal use.
+const PROMPT_RECALL_MAX_MEMORIES_PER_SESSION = 8
 
 function isLoopbackOrigin(origin: string | undefined): boolean {
   if (!origin) return true
@@ -271,8 +271,10 @@ export function createRequestHandler(
       }
       const q = (url.searchParams.get('q') ?? '').trim()
       const sessionId = url.searchParams.get('sessionId') || null
-      const rawLimit = parseInt(url.searchParams.get('limit') ?? '2', 10)
-      const limit = Number.isNaN(rawLimit) || rawLimit < 1 ? 2 : Math.min(rawLimit, 5)
+      const rawLimit = parseInt(url.searchParams.get('limit') ?? '', 10)
+      const limit = Number.isNaN(rawLimit) || rawLimit < 1
+        ? PROMPT_RECALL_DEFAULT_LIMIT
+        : Math.min(rawLimit, 5)
       const rawMaxTokens = parseInt(url.searchParams.get('maxTokens') ?? '', 10)
       const maxTokens = Number.isNaN(rawMaxTokens) || rawMaxTokens < 1
         ? PROMPT_RECALL_MAX_TOKENS
@@ -284,23 +286,30 @@ export function createRequestHandler(
 
       if (!q) { empty(false); return }
 
-      let alreadySeen = new Set<number>()
-      if (sessionId) {
-        const state = db.getSessionInjectionState(sessionId)
-        if (state.promptInjections >= PROMPT_RECALL_MAX_PER_SESSION) { empty(true); return }
-        alreadySeen = new Set(state.injectedIds)
-      }
-
-      const topics = extractTopicsFromContent(q).slice(0, PROMPT_RECALL_MAX_TOPICS)
+      // Topic extraction is pure CPU and frequently returns nothing (a prompt
+      // with no specific subject), so it runs before any database work — this
+      // handler sits on the user's blocking path.
+      const topics = extractTopicsFromContent(q)
       if (topics.length === 0) { empty(false); return }
 
-      // Over-fetch so suppression cannot starve the result, then trim.
+      // No session id means neither guard below can apply. Both exist because
+      // injected context accumulates permanently, so proceeding without them
+      // would allow unbounded repeat injection — refuse instead (fail closed).
+      if (!sessionId) { empty(false); return }
+
+      const state = db.getSessionInjectionState(sessionId)
+      if (state.promptMemories >= PROMPT_RECALL_MAX_MEMORIES_PER_SESSION) { empty(true); return }
+      const alreadySeen = new Set(state.injectedIds)
+
+      // Over-fetch so suppression cannot starve the result, then trim. Safe
+      // because a session's injection log is bounded (startup + this endpoint
+      // are the only writers that carry a session id), but the request is
+      // clamped inside getMemoriesByTopicRelevance regardless.
       const candidates = db.getMemoriesByTopicRelevance(project, topics, limit + alreadySeen.size + 5)
       const fresh = candidates.filter(m => !alreadySeen.has(m.id)).slice(0, limit)
       if (fresh.length === 0) { empty(false); return }
 
       const budgeted = applyRowBudget(fresh, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
-      memoryService.touch(budgeted.emitted.map(m => m.id), 'prompt', sessionId)
 
       sendJson(res, 200, {
         memories: budgeted.emitted.map(m => ({
@@ -315,6 +324,11 @@ export function createRequestHandler(
         throttled: false,
         project,
       })
+      // Recorded only after the response is handed to the socket. Marking a
+      // memory as delivered before it is sent means a client that times out
+      // burns both the dedup entry and part of the session ceiling while
+      // receiving nothing — injection_log is append-only, so there is no undo.
+      memoryService.touch(budgeted.emitted.map(m => m.id), 'prompt', sessionId)
       return
     }
 

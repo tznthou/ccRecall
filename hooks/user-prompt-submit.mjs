@@ -32,15 +32,22 @@ const DISABLED = process.env.CCRECALL_PROMPT_RECALL === 'off'
 // 50ms. This is generous headroom, and still short enough that a hung daemon is
 // imperceptible rather than a stall the user feels on every prompt.
 const TIMEOUT_MS = 300
-// 12 chars: below this a prompt is almost always a continuation ("ok", "繼續",
-// "yes do it") that introduces no new subject, so there is nothing to recall
-// against and no reason to pay for a round trip.
+// Below this a prompt is almost always a continuation that introduces no new
+// subject, so there is nothing to recall against and no reason to pay for a
+// round trip. Two thresholds because one code-point count cannot serve both
+// scripts: 「這個 bug 怎麼修」 carries a full question in 10 characters while
+// "ok go ahead now" carries none in 15. The codebase already draws this
+// distinction (MIN_TOPIC_LENGTH 3 vs MIN_TOPIC_LENGTH_CJK 2 in topic-extractor).
 const MIN_PROMPT_CHARS = 12
+const MIN_PROMPT_CHARS_CJK = 6
+const CJK_REGEX = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
 // Prompt text is only a topic-extraction seed; the opening sentences carry the
 // subject, and a pasted file would otherwise push a huge query string.
 const MAX_QUERY_CHARS = 300
-const MEMORY_LIMIT = 2
-const MAX_TOKENS = 120
+// A key longer than this is not rendered at all rather than truncated: a clipped
+// key is a handle that silently resolves to nothing. Observed keys run to 52
+// characters, while the write schema permits 100.
+const MAX_KEY_CHARS = 60
 
 async function readStdin() {
   const chunks = []
@@ -60,7 +67,11 @@ function httpGet(pathWithQuery) {
       let body = ''
       res.on('data', (c) => { body += c })
       res.on('end', () => {
-        if (res.statusCode !== 200) { resolve(null); return }
+        if (res.statusCode !== 200) {
+          console.error(`[ccRecall] prompt recall failed ${res.statusCode}`)
+          resolve(null)
+          return
+        }
         try {
           resolve(JSON.parse(body))
         } catch {
@@ -68,8 +79,18 @@ function httpGet(pathWithQuery) {
         }
       })
     })
-    req.on('error', () => resolve(null))
-    req.on('timeout', () => { req.destroy(); resolve(null) })
+    // Diagnostics go to stderr, never stdout: stdout is context. Without these
+    // a dead daemon is indistinguishable from "nothing relevant" — the same
+    // silent-failure shape this release fixes on the extraction side.
+    req.on('error', (err) => {
+      console.error(`[ccRecall] prompt recall error: ${err.message} (service on :${PORT}?)`)
+      resolve(null)
+    })
+    req.on('timeout', () => {
+      req.destroy()
+      console.error(`[ccRecall] prompt recall timeout after ${TIMEOUT_MS}ms`)
+      resolve(null)
+    })
     req.end()
   })
 }
@@ -83,7 +104,7 @@ function projectIdFromCwd(cwd) {
 function formatRecall(memories) {
   if (!Array.isArray(memories) || memories.length === 0) return ''
   const lines = memories.map((m) => {
-    const handle = m.key ? ` [key: ${m.key}]` : ''
+    const handle = m.key && m.key.length <= MAX_KEY_CHARS ? ` [key: ${m.key}]` : ''
     return `- ${m.content}${handle}`
   })
   return [
@@ -109,16 +130,18 @@ async function main() {
   if (!prompt) return
   // Slash commands address the harness, not the subject matter.
   if (prompt.startsWith('/')) return
-  if (Array.from(prompt).length < MIN_PROMPT_CHARS) return
+  const minChars = CJK_REGEX.test(prompt) ? MIN_PROMPT_CHARS_CJK : MIN_PROMPT_CHARS
+  if (Array.from(prompt).length < minChars) return
 
   const projectId = projectIdFromCwd(input.cwd)
   if (!projectId) return
 
+  // Neither limit nor maxTokens is sent: the daemon owns budget policy, and it
+  // can be changed by upgrading the service rather than by rewriting a hook
+  // file already installed in the user's settings.
   const params = new URLSearchParams({
     project: projectId,
     q: Array.from(prompt).slice(0, MAX_QUERY_CHARS).join(''),
-    limit: String(MEMORY_LIMIT),
-    maxTokens: String(MAX_TOKENS),
   })
   if (input.session_id) params.set('sessionId', input.session_id)
 

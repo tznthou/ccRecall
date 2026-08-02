@@ -145,6 +145,23 @@ describe('hooks/user-prompt-submit.mjs', () => {
     expect(ctx.urls).toHaveLength(0)
   })
 
+  it('uses a lower length threshold for CJK, which packs a question into fewer characters', async () => {
+    const ctx = await startMockServer(() => ({ memories: [] }))
+    server = ctx.server
+
+    // 8 and 10 characters — full questions in Chinese, but below the Latin
+    // threshold, so a single script-blind cutoff would silently drop them.
+    for (const prompt of ['注入率為什麼掉了', '這個 bug 怎麼修']) {
+      const { code } = await runHook(ctx.port, { ...basePrompt, prompt })
+      expect(code).toBe(0)
+    }
+    expect(ctx.urls).toHaveLength(2)
+
+    // Still short enough to be a continuation, in either script.
+    await runHook(ctx.port, { ...basePrompt, prompt: '好的' })
+    expect(ctx.urls).toHaveLength(2)
+  })
+
   it('skips slash commands without calling the daemon', async () => {
     const ctx = await startMockServer(() => ({ memories: [] }))
     server = ctx.server

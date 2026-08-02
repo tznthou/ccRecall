@@ -18,6 +18,10 @@ const HOST = '127.0.0.1'
 const TIMEOUT_MS = 2000
 const MEMORY_LIMIT = 5
 const MAX_TOKENS = 300
+// A key longer than this is not rendered at all rather than truncated: a clipped
+// key is a handle that silently resolves to nothing. Observed keys run to 52
+// characters, while the write schema permits 100.
+const MAX_KEY_CHARS = 60
 const STRATEGY = process.env.CCRECALL_SESSION_START_STRATEGY ?? 'startup-v1'
 const TELEMETRY_OFF = process.env.CCRECALL_TELEMETRY === 'off'
 const TELEMETRY_PATH = path.join(os.homedir(), '.ccrecall', 'startup-recall.log.jsonl')
@@ -132,7 +136,7 @@ function formatMemories(memories, query) {
   ].join('\n')
 }
 
-function formatStartupV1(memories, query, totalMemoryCount) {
+function formatStartupV1(memories, totalMemoryCount) {
   if (memories.length === 0 && totalMemoryCount === 0) return ''
   const lines = memories.map((m) => {
     const conf = m.confidence != null && m.confidence !== 1
@@ -143,11 +147,10 @@ function formatStartupV1(memories, query, totalMemoryCount) {
     // makes the rest reachable — without it the reader can see that a line was
     // clipped (the ellipsis) but has no way to ask for the remainder. Appended
     // rather than prefixed so the content still leads.
-    const handle = m.key ? ` [key: ${m.key}]` : ''
+    const handle = m.key && m.key.length <= MAX_KEY_CHARS ? ` [key: ${m.key}]` : ''
     return `- ${m.content}${conf}${handle}`
   })
   const parts = ['[ccRecall memory recall]', '']
-  if (lines.length > 0) parts.push(...lines, '')
   if (lines.length > 0) {
     // The old footer only reported how many rows existed, which implied the rows
     // shown were whole. Say plainly that they are excerpts, and name the way out.
@@ -155,6 +158,8 @@ function formatStartupV1(memories, query, totalMemoryCount) {
       ? ` ${totalMemoryCount} memories available.`
       : ''
     parts.push(
+      ...lines,
+      '',
       `(Each line is a ~150-char excerpt — conclusions are often past the cut.`
       + ` recall_query a [key] for the full text.${available})`,
     )
@@ -198,7 +203,7 @@ async function main() {
       emittedIds: result.emittedIds,
       droppedCount: result.droppedCount,
     })
-    text = formatStartupV1(memories, query, totalMemoryCount)
+    text = formatStartupV1(memories, totalMemoryCount)
   } else {
     const memories = await queryLegacy(query, projectId)
     text = formatMemories(memories, query)

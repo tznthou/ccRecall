@@ -377,6 +377,54 @@ describe('E2E: index → search → HTTP', () => {
       expect(b.throttled).toBe(false)
     })
 
+    it('refuses to inject without a session id', async () => {
+      // Both guards — dedup and the ceiling — key off the session. Without one
+      // they silently do not apply, which would allow the same memory to be
+      // re-injected on every prompt for the life of the session. Fail closed.
+      const id = saveWithTopics({
+        sessionId: null, messageId: null,
+        content: 'a memory that would otherwise match this query easily',
+        type: 'discovery',
+        projectId: '-nosession-project',
+        confidence: 0.9,
+        key: 'no-session-guard',
+      })
+      const { status, body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-nosession-project&q=memory%20match%20query&limit=2`,
+      )
+      expect(status).toBe(200)
+      const b = body as { memories: unknown[]; emittedIds: number[]; throttled: boolean }
+      expect(b.memories).toHaveLength(0)
+      expect(b.emittedIds).not.toContain(id)
+      expect(b.throttled).toBe(false)
+    })
+
+    it('scopes topic frequency to the project, so another project cannot blind it', async () => {
+      // One database holds every project. A topic used once here but constantly
+      // in an unrelated project must still be usable here.
+      const mine = saveWithTopics({
+        sessionId: null, messageId: null,
+        content: 'harvester atomicity constraint discovered during phase three',
+        type: 'discovery',
+        projectId: '-scoped-mine',
+        confidence: 0.9,
+        key: 'harvester-atomicity',
+      })
+      for (let i = 0; i < 40; i++) {
+        saveWithTopics({
+          sessionId: null, messageId: null,
+          content: `harvester note ${i} in an unrelated project`,
+          type: 'pattern', projectId: '-scoped-other', confidence: 0.9,
+          key: `other-harvester-${i}`,
+        })
+      }
+
+      const { body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-scoped-mine&q=harvester%20atomicity&sessionId=s-scoped&limit=2`,
+      )
+      expect((body as { emittedIds: number[] }).emittedIds).toContain(mine)
+    })
+
     it('rejects without project param', async () => {
       const { status } = await fetch(`http://127.0.0.1:${port}/memory/prompt?q=anything`)
       expect(status).toBe(400)

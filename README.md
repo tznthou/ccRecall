@@ -251,7 +251,7 @@ Daemon and hook lifecycle (macOS):
 | `ccmem` | Run the daemon in foreground |
 | `ccmem install-daemon` | Register a LaunchAgent (auto-start at login) |
 | `ccmem uninstall-daemon` | Stop and remove the LaunchAgent |
-| `ccmem install-hooks` | Merge SessionStart / SessionEnd entries into `~/.claude/settings.json` |
+| `ccmem install-hooks` | Merge SessionStart / SessionEnd / UserPromptSubmit entries into `~/.claude/settings.json` |
 | `ccmem uninstall-hooks` | Remove ccRecall's hook entries (other hooks untouched) |
 | `ccmem cleanup --orphans` | List (and with `--yes`, delete) memories whose session rows are gone |
 

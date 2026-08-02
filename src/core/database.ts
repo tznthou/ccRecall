@@ -872,13 +872,26 @@ export class Database {
   /** Subagent 排除子查詢：用於所有面向使用者的 query，只顯示主 session */
   private static readonly EXCLUDE_SUBAGENTS = 'NOT IN (SELECT id FROM subagent_sessions)'
 
-  /** A topic appearing in more than this share of all memories carries no
-   *  discriminating signal and is excluded from prompt-relevance lookup. Held
-   *  as a share rather than a count so it survives corpus growth. Calibrated
-   *  against the live distribution at 742 memories, where the topics above this
-   *  line were function words (`when` 302, `only` 166, `before` 136) and the
-   *  ones below were real subjects. See getMemoriesByTopicRelevance. */
+  /** A topic appearing in more than this share of a project's memories carries
+   *  no discriminating signal and is excluded from prompt-relevance lookup.
+   *  Held as a share rather than a count so it survives corpus growth.
+   *  Calibrated against the live distribution, where topics above this line
+   *  were function words (`when` in 302 of 742 memories, `only` 166,
+   *  `before` 136) and the ones below were real subjects.
+   *
+   *  Measured per project, not globally: one database holds every project, so a
+   *  global count lets an unrelated project's vocabulary decide what this one
+   *  can recall — a topic used once here and 300 times elsewhere would be
+   *  discarded as noise. Scoping it costs recall breadth (measured: 175 topics
+   *  filtered rather than 137) because the denominator shrinks, which is the
+   *  correct trade: those are words that carry no signal *here*. */
   private static readonly PROMPT_TOPIC_MAX_SHARE = 0.05
+
+  /** Floor under the share threshold above. A share alone collapses on small
+   *  corpora — at 20 memories the threshold is 1, so any topic appearing twice
+   *  is discarded and a new project can recall almost nothing. Three keeps
+   *  small projects usable while still dropping anything genuinely ubiquitous. */
+  private static readonly PROMPT_TOPIC_MIN_FLOOR = 3
 
   /** Effective confidence with exponential decay and access-extended half-life.
    *  Assumes `m` is the memories alias.
@@ -2113,12 +2126,22 @@ export class Database {
     const cappedLimit = Math.min(limit, 50)
     const placeholders = topicKeys.map(() => '?').join(',')
     const rows = this.db.prepare(`
-      WITH df AS (
+      WITH scoped AS (
+        SELECT m2.id
+        FROM memories m2
+        LEFT JOIN sessions s2 ON s2.id = m2.session_id
+        WHERE COALESCE(s2.project_id, m2.project_id) = ?
+      ),
+      df AS (
         SELECT mt.topic_key, COUNT(DISTINCT mt.memory_id) AS n
         FROM memory_topics mt
+        JOIN scoped ON scoped.id = mt.memory_id
         WHERE mt.topic_key IN (${placeholders})
         GROUP BY mt.topic_key
-        HAVING n <= MAX(1, (SELECT COUNT(*) FROM memories) * ${Database.PROMPT_TOPIC_MAX_SHARE})
+        HAVING n <= MAX(
+          ${Database.PROMPT_TOPIC_MIN_FLOOR},
+          (SELECT COUNT(*) FROM scoped) * ${Database.PROMPT_TOPIC_MAX_SHARE}
+        )
       )
       SELECT m.id, m.session_id, m.message_id, m.content, m.type,
              m.confidence, m.key, m.created_at,
@@ -2134,31 +2157,33 @@ export class Database {
       GROUP BY m.id
       ORDER BY relevance DESC, ${Database.EFFECTIVE_CONFIDENCE} DESC, m.id DESC
       LIMIT ?
-    `).all(...topicKeys, projectId, cappedLimit) as MemoryRow[]
+    `).all(projectId, ...topicKeys, projectId, cappedLimit) as MemoryRow[]
     return rows.map(mapMemoryRow)
   }
 
   /** What a session has already been given, for mid-conversation recall (L1).
    *
    *  Returns every memory id already surfaced in this session (any source) plus
-   *  how many prompt-triggered injections it has spent. Both are needed because
+   *  how many prompt-triggered memories it has been given. Both are needed because
    *  additionalContext accumulates rather than being request-scoped
    *  (anthropics/claude-code#40216): a repeat costs permanent context weight for
    *  zero new information, and an unbounded session would pile up indefinitely.
    *
    *  One query rather than two — a session's log is at most a few dozen rows and
    *  idx_injection_log_session covers it. */
-  getSessionInjectionState(sessionId: string): { injectedIds: number[]; promptInjections: number } {
+  getSessionInjectionState(sessionId: string): { injectedIds: number[]; promptMemories: number } {
     const rows = this.db.prepare(
       'SELECT memory_id, source FROM injection_log WHERE session_id = ?',
     ).all(sessionId) as Array<{ memory_id: number; source: string }>
     const injectedIds: number[] = []
-    let promptInjections = 0
+    let promptMemories = 0
     for (const r of rows) {
       injectedIds.push(r.memory_id)
-      if (r.source === 'prompt') promptInjections++
+      // Counted per memory, matching what the table stores — the caller's
+      // ceiling is expressed in memories for the same reason.
+      if (r.source === 'prompt') promptMemories++
     }
-    return { injectedIds, promptInjections }
+    return { injectedIds, promptMemories }
   }
 
   /** Phase 4b: Delete a memory by id. memories_ad trigger syncs memories_fts. */

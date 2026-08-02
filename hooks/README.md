@@ -23,6 +23,7 @@ If the daemon is not running, hooks log a warning to stderr and exit cleanly —
 |--------|------------------|--------|
 | `session-start.mjs` | `SessionStart` | GET `/memory/startup` with the project name (3-tier: cold + recent-confidence + FTS fallback), write matching memories to stdout (Claude prepends them to context) |
 | `session-end.mjs` | `SessionEnd` | POST `/session/end` to harvest the just-ended session into a memory |
+| `user-prompt-submit.mjs` | `UserPromptSubmit` | GET `/memory/prompt` with the prompt's topics, write related memories to stdout. Runs on **every** prompt — see the restraint notes below |
 
 ## Finding the Hook Scripts
 
@@ -70,10 +71,23 @@ Add to `~/.claude/settings.json` (or a project-scoped `.claude/settings.json`). 
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node {HOOKS_DIR}/user-prompt-submit.mjs"
+          }
+        ]
+      }
     ]
   }
 }
 ```
+
+Omit the `UserPromptSubmit` block if you only want memories at session start —
+it is the one hook that runs on every prompt.
 
 Restart any running Claude Code sessions — settings changes don't hot-reload.
 
@@ -124,4 +138,5 @@ Check the daemon side: `~/Library/Logs/ccrecall/ccrecall.err.log` (macOS) or the
   - SessionStart: `source === 'resume'` means the context is already loaded
 - **SessionStart query strategy**: uses the last path segment of `cwd` as a keyword. Default strategy `startup-v1` calls `/memory/startup` (3-tier: cold + recent-confidence + FTS fallback); legacy strategy calls `/memory/query` (project-name FTS only). Controlled by `CCRECALL_SESSION_START_STRATEGY` env var
 - **SessionStart stdout = context injection**: only memories are written to stdout; all errors and diagnostics go to stderr to avoid polluting Claude's context
-- **Timeouts**: SessionEnd 5s, SessionStart 2s (tighter because it sits on the pre-prompt critical path)
+- **Timeouts**: SessionEnd 5s, SessionStart 2s (tighter because it sits on the pre-prompt critical path), UserPromptSubmit 300ms (tightest — it blocks every prompt)
+- **UserPromptSubmit restraint**: this hook fires on every prompt, and injected context accumulates in the conversation rather than being replaced ([claude-code#40216](https://github.com/anthropics/claude-code/issues/40216)), so each injection is permanent weight. It therefore skips short prompts and slash commands without any network call, suppresses memories already surfaced in the session, and stops entirely after 8 memories per session. Set `CCRECALL_PROMPT_RECALL=off` to disable it without editing `settings.json`
