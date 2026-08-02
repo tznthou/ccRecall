@@ -276,9 +276,14 @@ export function createRequestHandler(
         ? PROMPT_RECALL_DEFAULT_LIMIT
         : Math.min(rawLimit, 5)
       const rawMaxTokens = parseInt(url.searchParams.get('maxTokens') ?? '', 10)
+      // Clamped at both ends, unlike /memory/startup: every budget in this
+      // handler exists to bound a cost that persists for the rest of the
+      // session, so a caller must not be able to opt out of one by asking for
+      // more. The ceiling is the whole SessionStart budget — a single
+      // mid-conversation nudge should never outweigh the session's opening.
       const maxTokens = Number.isNaN(rawMaxTokens) || rawMaxTokens < 1
         ? PROMPT_RECALL_MAX_TOKENS
-        : rawMaxTokens
+        : Math.min(rawMaxTokens, DEFAULT_MAX_TOKENS)
 
       const empty = (throttled: boolean) => sendJson(res, 200, {
         memories: [], emittedIds: [], droppedCount: 0, throttled, project,

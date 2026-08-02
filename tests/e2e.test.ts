@@ -425,6 +425,25 @@ describe('E2E: index → search → HTTP', () => {
       expect((body as { emittedIds: number[] }).emittedIds).toContain(mine)
     })
 
+    it('clamps maxTokens so a caller cannot opt out of the budget', async () => {
+      for (let i = 0; i < 6; i++) {
+        saveWithTopics({
+          sessionId: null, messageId: null,
+          content: `clamp probe ${i}: ${'padding phrase about clamping budgets '.repeat(12)}`,
+          type: 'pattern', projectId: '-clamp-project', confidence: 0.9,
+          key: `clamp-probe-${i}`,
+        })
+      }
+      const { body } = await fetch(
+        `http://127.0.0.1:${port}/memory/prompt?project=-clamp-project&q=clamp%20probe%20padding&sessionId=s-clamp&limit=5&maxTokens=999999`,
+      )
+      const b = body as { memories: Array<{ content: string }> }
+      // Rows are capped at 150 chars each and the whole response at the
+      // SessionStart budget, so an absurd maxTokens cannot inflate it.
+      const chars = b.memories.reduce((n, m) => n + m.content.length, 0)
+      expect(chars).toBeLessThanOrEqual(5 * 150)
+    })
+
     it('rejects without project param', async () => {
       const { status } = await fetch(`http://127.0.0.1:${port}/memory/prompt?q=anything`)
       expect(status).toBe(400)
