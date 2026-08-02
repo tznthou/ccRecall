@@ -879,6 +879,11 @@ export class Database {
    *  were function words (`when` in 302 of 742 memories, `only` 166,
    *  `before` 136) and the ones below were real subjects.
    *
+   *  The corpus is the same set the query can actually return — project-scoped
+   *  and subagent-free. Counting memories that are never candidates would
+   *  inflate both the denominator and each topic's frequency, pushing genuinely
+   *  rare topics over the threshold and silently dropping them.
+   *
    *  Measured per project, not globally: one database holds every project, so a
    *  global count lets an unrelated project's vocabulary decide what this one
    *  can recall — a topic used once here and 300 times elsewhere would be
@@ -2131,6 +2136,7 @@ export class Database {
         FROM memories m2
         LEFT JOIN sessions s2 ON s2.id = m2.session_id
         WHERE COALESCE(s2.project_id, m2.project_id) = ?
+          AND (s2.id IS NULL OR s2.id ${Database.EXCLUDE_SUBAGENTS})
       ),
       df AS (
         SELECT mt.topic_key, COUNT(DISTINCT mt.memory_id) AS n
