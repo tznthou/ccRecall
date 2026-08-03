@@ -19,6 +19,40 @@ const STOPWORDS = new Set([
   'node_modules', 'tmp', 'temp', 'mock', 'mocks', 'fixture', 'fixtures',
   'config', 'constants', 'const', 'let', 'var', 'function', 'return', 'error',
   'data', 'value', 'result',
+  // #84 — the English half of the list was ~21 words while the CJK half had 56,
+  // so English function words dominated the index: `when` was the single most
+  // frequent key in the whole table (244 memories). 133 distinct stopwords
+  // covered 2,224 of 24,047 topic rows (9.2%). Every topic-driven path matches
+  // on this table — Tier 0 startup selection, recall_context, and L1 recall —
+  // so a key this frequent creates spurious matches everywhere.
+  //
+  // Same discipline as the CJK pass: pure function words only. Terms that carry
+  // meaning in this domain stay out even when they read as generic — `code`,
+  // `session`, `memory`, `files`, `state`, `pattern`, `check`, `run` and `zero`
+  // are all high-frequency here and all deliberately absent.
+  //
+  // Verified before landing: adding these leaves **zero** memories without any
+  // topic (567 lose some but none go empty), so nothing drops out of
+  // knowledge_map or becomes unreachable by topic-driven selection.
+  'about', 'above', 'across', 'after', 'again', 'against', 'also', 'always', 'among',
+  'another', 'because', 'been', 'before', 'being', 'below', 'beside', 'best', 'better',
+  'both', 'cannot', 'could', 'did', 'does', 'doing', 'done', 'down', 'during',
+  'each', 'either', 'else', 'enough', 'even', 'ever', 'every', 'few', 'first',
+  'further', 'get', 'gets', 'getting', 'give', 'given', 'goes', 'going', 'gone',
+  'got', 'have', 'having', 'here', 'hers', 'him', 'his', 'how', 'however',
+  'into', 'itself', 'just', 'keep', 'kept', 'last', 'least', 'less', 'let',
+  'like', 'likely', 'made', 'make', 'makes', 'making', 'many', 'may', 'maybe',
+  'mean', 'means', 'might', 'more', 'most', 'much', 'must', 'need', 'needs',
+  'neither', 'never', 'next', 'non', 'nor', 'now', 'off', 'often', 'once',
+  'one', 'only', 'onto', 'other', 'others', 'ought', 'ours', 'out', 'over',
+  'own', 'per', 'perhaps', 'put', 'quite', 'rather', 'really', 'said', 'same',
+  'say', 'says', 'see', 'seen', 'shall', 'she', 'should', 'since', 'some',
+  'soon', 'still', 'such', 'take', 'taken', 'than', 'their', 'them', 'then',
+  'there', 'these', 'they', 'thing', 'things', 'those', 'though', 'three', 'through',
+  'thus', 'too', 'two', 'under', 'until', 'upon', 'use', 'used', 'uses',
+  'using', 'very', 'via', 'want', 'way', 'well', 'were', 'what', 'when',
+  'where', 'whether', 'which', 'while', 'who', 'whom', 'whose', 'why', 'within',
+  'without', 'would', 'yet', 'your',
 ])
 
 const CJK_STOPWORDS = new Set([
