@@ -31,6 +31,16 @@ const dbPath = argv.includes('--db')
 const rebuild = argv.includes('--rebuild')
 const dryRun = argv.includes('--dry-run')
 
+// backfillMemoryTopics has no dry-run path, so the flag cannot be honoured in
+// default mode. Refuse rather than write while the user believes nothing is
+// being written.
+if (dryRun && !rebuild) {
+  console.error('--dry-run is only supported with --rebuild.')
+  console.error('Backfill mode has no preview path; re-run with --rebuild --dry-run,')
+  console.error('or drop --dry-run to backfill topic-less memories for real.')
+  process.exit(1)
+}
+
 console.log(`DB: ${dbPath}`)
 console.log(`Mode: ${rebuild ? 'rebuild (all memories)' : 'backfill (topic-less only)'}${dryRun ? ' [dry run]' : ''}`)
 
