@@ -2426,12 +2426,18 @@ export class Database {
 
     const topicsBefore = countTopics()
     let changed = 0
+    // Tracks the net row delta so a dry run can report the real projected
+    // total. Returning topicsBefore unchanged would print "40478 → 40478"
+    // next to "521 changed", which reads as a no-op.
+    let rowDelta = 0
     const pending: Array<{ id: number; projectId: string; topics: string[] }> = []
 
     for (const row of rows) {
-      const topics = extractTopics(row.content)
+      // Deduped because memory_topics is PRIMARY KEY (memory_id, topic_key):
+      // a repeated key would abort saveMemoryTopics on a UNIQUE violation, and
+      // would make the dry-run projection report a total that can never happen.
+      const next = [...new Set(extractTopics(row.content))].sort()
       const existing = (existingStmt.all(row.id) as Array<{ topic_key: string }>).map(r => r.topic_key)
-      const next = [...topics].sort()
       if (existing.length === next.length && existing.every((t, i) => t === next[i])) continue
 
       let projectId: string
@@ -2443,11 +2449,14 @@ export class Database {
       }
 
       changed++
-      pending.push({ id: row.id, projectId, topics })
+      // saveMemoryTopics deletes then reinserts, so this memory's row count
+      // becomes exactly next.length.
+      rowDelta += next.length - existing.length
+      pending.push({ id: row.id, projectId, topics: next })
     }
 
     if (opts.dryRun) {
-      return { scanned: rows.length, changed, topicsBefore, topicsAfter: topicsBefore }
+      return { scanned: rows.length, changed, topicsBefore, topicsAfter: topicsBefore + rowDelta }
     }
 
     const run = this.db.transaction(() => {

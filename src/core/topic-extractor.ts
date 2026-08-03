@@ -40,14 +40,32 @@ const HAN_ONLY_RE = /^\p{Script=Han}+$/u
 
 /** #80 — ICU word segmentation for Han runs. Latin is deliberately NOT routed
     through the segmenter: it splits `better-sqlite3` into `better`/`sqlite3`,
-    which would invalidate the ~97% of the index that is Latin. */
-const hanSegmenter = new Intl.Segmenter('zh-TW', { granularity: 'word' })
+    which would invalidate the ~97% of the index that is Latin.
 
-/** Probes whether the runtime's ICU actually does dictionary-based CJK
-    segmentation. small-icu builds degrade word granularity, in which case we
-    fall back to the pre-#80 character-run behaviour rather than silently
-    emitting worse topics. */
+    Constructed lazily behind hasIcuData() because calling segment() on a
+    small-icu build without runtime ICU data is a SIGSEGV, not an exception —
+    see nodejs/node#51752 (still open). A try/catch cannot save us there, and
+    this module is imported by the daemon and the MCP server, so the crash
+    would take down the whole process at import time. Fedora's `nodejs`
+    package without `nodejs-full-i18n` is exactly this build. */
+function hasIcuData(): boolean {
+  // icu_small === true means the build ships only the English locale stub.
+  // Bail out even when NODE_ICU_DATA might supply real data: degrading to the
+  // legacy splitter is safe, probing to find out is not.
+  const vars = process.config?.variables as { icu_small?: boolean } | undefined
+  if (vars?.icu_small === true) return false
+  return typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+}
+
+const hanSegmenter = hasIcuData()
+  ? new Intl.Segmenter('zh-TW', { granularity: 'word' })
+  : null
+
+/** Confirms the runtime does dictionary-based CJK segmentation rather than
+    falling back to per-character breaks. Only ever runs once hasIcuData() has
+    ruled out the build that would crash. */
 function probeSegmenter(): boolean {
+  if (!hanSegmenter) return false
   try {
     const out = [...hanSegmenter.segment('確認更新')]
       .filter(s => s.isWordLike)
@@ -70,7 +88,7 @@ export function isSegmenterAvailable(): boolean {
 /** Splits one all-Han run into words. Returns the run unchanged when the
     runtime cannot segment, preserving the legacy MAX_HAN_RUN discard upstream. */
 function segmentHanRun(run: string): string[] {
-  if (!SEGMENTER_OK) return [run]
+  if (!SEGMENTER_OK || !hanSegmenter) return [run]
   return [...hanSegmenter.segment(run)]
     .filter(s => s.isWordLike)
     .map(s => s.segment)

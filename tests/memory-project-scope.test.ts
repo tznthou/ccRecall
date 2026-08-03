@@ -227,6 +227,51 @@ describe('rebuildMemoryTopics', () => {
     expect(after).toEqual(before)
   })
 
+  it('dry run projects the real row total, not the unchanged one', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'alpha beta gamma' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+    const startingRows = db.rawAll<{ topic_key: string }>('SELECT topic_key FROM memory_topics').length
+    expect(startingRows).toBe(3)
+
+    // 3 existing rows collapse to 1 — reporting topicsAfter === topicsBefore
+    // here would read as a no-op next to changed: 1.
+    const shrink = db.rebuildMemoryTopics(() => ['only-one'], { dryRun: true })
+    expect(shrink.topicsBefore).toBe(3)
+    expect(shrink.topicsAfter).toBe(1)
+
+    const grow = db.rebuildMemoryTopics(() => ['a1', 'b2', 'c3', 'd4', 'e5'], { dryRun: true })
+    expect(grow.topicsAfter).toBe(5)
+
+    // Still a dry run: nothing on disk moved.
+    expect(db.rawAll('SELECT topic_key FROM memory_topics').length).toBe(3)
+  })
+
+  it('dry run projection matches what the real run produces', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'alpha beta gamma' })
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'delta epsilon' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+
+    const extractor = (c: string) => (c.startsWith('alpha') ? ['x1', 'x2'] : ['y1'])
+    const predicted = db.rebuildMemoryTopics(extractor, { dryRun: true })
+    const actual = db.rebuildMemoryTopics(extractor)
+
+    expect(actual.topicsAfter).toBe(predicted.topicsAfter)
+    expect(actual.changed).toBe(predicted.changed)
+  })
+
+  it('dedupes extractor output rather than hitting the composite primary key', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'alpha beta gamma' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+
+    // memory_topics is PRIMARY KEY (memory_id, topic_key) — a repeated key
+    // would abort the write on a UNIQUE violation.
+    const result = db.rebuildMemoryTopics(() => ['same', 'same', 'other'])
+    expect(result.topicsAfter).toBe(2)
+
+    const keys = db.rawAll<{ topic_key: string }>('SELECT topic_key FROM memory_topics ORDER BY topic_key')
+    expect(keys.map(k => k.topic_key)).toEqual(['other', 'same'])
+  })
+
   it('reports before/after topic totals', () => {
     db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'alpha beta gamma' })
     db.backfillMemoryTopics(extractTopicsFromContent)
