@@ -11,6 +11,38 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [0.7.0] — 2026-08-03
+
+91.5% of CJK topics were singletons (Latin: 52.1%) because the extractor could
+only split Han runs on punctuation: an unpunctuated run over the length cap
+was dropped outright, and a punctuated one produced glued clause fragments
+(`否開始作用`) that no other text would ever reproduce. Both the write side
+and the query side were minting keys nothing could match.
+
+### Added
+
+- **Dictionary-based CJK word segmentation** (#80) — pure-Han tokens now pass
+  through `Intl.Segmenter('zh-TW')`. Latin is deliberately NOT routed through
+  the segmenter: ICU splits `better-sqlite3` into `better`/`sqlite3`, which
+  would invalidate the ~97% of the index that is Latin.
+- **small-icu guard** — on builds without full ICU data (e.g. Fedora's
+  `nodejs` without `nodejs-full-i18n`), constructing a segmenter is a SIGSEGV,
+  not a catchable exception ([nodejs/node#51752](https://github.com/nodejs/node/issues/51752)),
+  and this module loads at daemon import time. `process.config.variables.icu_small`
+  is checked before the segmenter is ever constructed; such builds degrade to
+  the legacy splitter. `SEGMENTER_OK` is exported so CI can assert the runtime
+  really does dictionary segmentation instead of silently falling back.
+- **`rebuildMemoryTopics()`** — recomputes `memory_topics` for every memory,
+  including ones that already have rows. `backfillMemoryTopics()` filters on
+  `NOT IN memory_topics`, so once the corpus is backfilled it processes
+  nothing — useless as a migration path when the extractor itself changes.
+  `scripts/backfill-memory-topics.ts` gains `--rebuild` with a dry-run
+  projection of the before/after topic counts.
+- **Expanded CJK stopword list** — the segmenter now emits particles and
+  function words as their own tokens, so pure function words (`是否`, `因此`,
+  `目前`, …) are filtered. Deliberately conservative: terms that carry project
+  meaning stay even when they look generic.
+
 ## [0.6.0] — 2026-08-02
 
 Memories were only ever offered at second zero. A session could run for hours

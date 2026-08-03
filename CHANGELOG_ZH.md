@@ -8,6 +8,33 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [0.7.0] — 2026-08-03
+
+CJK topic 有 91.5% 是 singleton（Latin 是 52.1%），因為舊 extractor 只能拿
+標點切漢字串：沒標點的長串直接整條丟掉，有標點的切出黏連子句碎片
+（`否開始作用`）——這種 key 不會有任何其他文字再產生一次。寫入側和查詢側
+都在鑄造沒人對得上的鑰匙。
+
+### 新增
+
+- **CJK 字典分詞**（#80）— 純漢字 token 改走 `Intl.Segmenter('zh-TW')`。
+  Latin 刻意不進分詞器：ICU 會把 `better-sqlite3` 切成 `better`/`sqlite3`，
+  等於毀掉索引裡佔約 97% 的 Latin 部分。
+- **small-icu 防護** — 沒帶完整 ICU 資料的 build（如 Fedora 的 `nodejs`
+  沒裝 `nodejs-full-i18n`）建構 segmenter 是 SIGSEGV 不是可攔的例外
+  （[nodejs/node#51752](https://github.com/nodejs/node/issues/51752)），而本模組
+  在 daemon import 時就載入。改在建構前檢查
+  `process.config.variables.icu_small`，這類 build 降級回舊切法。並導出
+  `SEGMENTER_OK` 讓 CI 驗證 runtime 真的在做字典分詞而不是靜默降級。
+- **`rebuildMemoryTopics()`** — 對每一則記憶重算 `memory_topics`，包含已有
+  topic 者。`backfillMemoryTopics()` 的過濾條件是 `NOT IN memory_topics`，
+  語料補完後它就處理零筆——extractor 本身換版時完全派不上用場。
+  `scripts/backfill-memory-topics.ts` 新增 `--rebuild`，附前後 topic 數的
+  dry-run 投影。
+- **CJK stopword 擴充** — 分詞後虛詞會以獨立 token 出現，故過濾純虛詞
+  （`是否`、`因此`、`目前`…）。刻意保守：帶專案語義的詞即使看起來泛用
+  也保留。
+
 ## [0.6.0] — 2026-08-02
 
 記憶只在第 0 秒被端出來一次。session 之後跑幾小時、轉到什麼題目，都不會再
