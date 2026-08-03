@@ -8,6 +8,20 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [未發布]
+
+### 修正
+
+- **`scripts/usefulness-report.sql` 把兩種注入來源算成同一種**（#82）—
+  COVERAGE 段直接 `FROM injection_log` 沒有 source 條件，`COUNT(DISTINCT
+  memory_id)` 因此把 startup 注入和 v0.6.0 對話中喚起寫進同一張表的 `prompt`
+  列混為一談。同一段還報 lifetime 跨度，但這個數字只有放在近期窗口看才有
+  意義。現在拆成兩張依 source 分組的表——lifetime 一張，rolling 7 天一張
+  （用滾動窗口而非寫死日期）。各 source 的列不能相加：同一則記憶被兩種來源
+  注入時，在各自的列裡都算 distinct。
+
+---
+
 ## [0.7.0] — 2026-08-03
 
 CJK topic 有 91.5% 是 singleton（Latin 是 52.1%），因為舊 extractor 只能拿
