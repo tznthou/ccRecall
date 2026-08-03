@@ -4,3 +4,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Actions are SHA-pinned, which stops a tag being repointed at different
+    # code — but not an upstream release that is malicious from the start.
+    # A pin to a poisoned commit verifies as correct, because the tag really
+    # does point there. publish.yml mints an npm OIDC token, so an action
+    # running in it has a credential worth stealing.
+    #
+    # These PRs are not reviewed (CodeRabbit skips bot authors by default),
+    # so the delay is what stands in for review: let a bad release be found
+    # by someone else before it is proposed here. Security updates are
+    # exempt from cooldown by design and still arrive immediately.
+    cooldown:
+      default-days: 7
