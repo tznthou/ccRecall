@@ -28,16 +28,41 @@ SELECT
 FROM injection_log;
 
 -- ── Coverage ───────────────────────────────────────────────────────
+-- Broken out per source. The done-criteria count *startup* injections, and
+-- v0.6.0 added a second writer to this table (`prompt` — mid-conversation
+-- recall), so an unfiltered COUNT(DISTINCT memory_id) mixes the two. Read the
+-- startup row. The rows do not sum: a memory injected by two sources is
+-- distinct within each.
 
-SELECT '── COVERAGE ──' AS '';
+SELECT '── COVERAGE BY SOURCE (lifetime) ──' AS '';
 
 SELECT
+  source,
   MIN(injected_at)              AS first,
   MAX(injected_at)              AS last,
   CAST(julianday(MAX(injected_at)) - julianday(MIN(injected_at)) AS INTEGER) AS span_days,
+  COUNT(*)                      AS injections,
   COUNT(DISTINCT memory_id)     AS distinct_memories,
   COUNT(DISTINCT session_id)    AS distinct_sessions
-FROM injection_log;
+FROM injection_log
+GROUP BY source
+ORDER BY injections DESC;
+
+-- Criterion 2 is scoped to a 7-day window; the lifetime figures above span the
+-- whole table and read far higher. Rolling window rather than hardcoded dates,
+-- so the report stays usable past the verdict.
+
+SELECT '── COVERAGE BY SOURCE (last 7 days) ──' AS '';
+
+SELECT
+  source,
+  COUNT(*)                      AS injections,
+  COUNT(DISTINCT memory_id)     AS distinct_memories,
+  COUNT(DISTINCT session_id)    AS distinct_sessions
+FROM injection_log
+WHERE injected_at >= datetime('now', '-7 days')
+GROUP BY source
+ORDER BY injections DESC;
 
 -- ── Overlap distribution ───────────────────────────────────────────
 
