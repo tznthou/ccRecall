@@ -11,6 +11,21 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **`scripts/usefulness-report.sql` counted two injection sources as one**
+  (#82) — the COVERAGE block read `FROM injection_log` with no source filter,
+  so `COUNT(DISTINCT memory_id)` merged startup injections with the `prompt`
+  rows that v0.6.0's mid-conversation recall began writing to the same table.
+  The same block reported lifetime span for a figure that only means something
+  over a recent window. It is now two tables grouped by source — one lifetime,
+  one rolling 7-day window rather than hardcoded dates. Per-source rows do not
+  sum: a memory injected by two sources is distinct within each.
+
+---
+
 ## [0.7.0] — 2026-08-03
 
 91.5% of CJK topics were singletons (Latin: 52.1%) because the extractor could
