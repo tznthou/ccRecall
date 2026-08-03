@@ -2401,6 +2401,63 @@ export class Database {
     return count
   }
 
+  /** #80 — recompute memory_topics for EVERY memory, including ones that
+      already have rows. backfillMemoryTopics() filters on
+      `NOT IN memory_topics`, so once the corpus is fully backfilled it
+      processes nothing — which makes it useless as a migration path when the
+      extractor itself changes. Without this, the query side emits segmented
+      words while the index still holds the old clause fragments, and recall
+      stays at zero (the failure mode #80 Risk 1 warns about). */
+  rebuildMemoryTopics(
+    extractTopics: (content: string) => string[],
+    opts: { dryRun?: boolean } = {},
+  ): { scanned: number; changed: number; topicsBefore: number; topicsAfter: number } {
+    const rows = this.db.prepare(`
+      SELECT m.id, m.content, m.session_id, m.project_id
+      FROM memories m
+    `).all() as Array<{ id: number; content: string; session_id: string | null; project_id: string | null }>
+
+    const sessStmt = this.db.prepare('SELECT project_id FROM sessions WHERE id = ?')
+    const existingStmt = this.db.prepare(
+      'SELECT topic_key FROM memory_topics WHERE memory_id = ? ORDER BY topic_key',
+    )
+    const countTopics = () =>
+      (this.db.prepare('SELECT COUNT(*) AS c FROM memory_topics').get() as { c: number }).c
+
+    const topicsBefore = countTopics()
+    let changed = 0
+    const pending: Array<{ id: number; projectId: string; topics: string[] }> = []
+
+    for (const row of rows) {
+      const topics = extractTopics(row.content)
+      const existing = (existingStmt.all(row.id) as Array<{ topic_key: string }>).map(r => r.topic_key)
+      const next = [...topics].sort()
+      if (existing.length === next.length && existing.every((t, i) => t === next[i])) continue
+
+      let projectId: string
+      if (row.session_id) {
+        const sess = sessStmt.get(row.session_id) as { project_id: string } | undefined
+        projectId = sess?.project_id ?? row.project_id ?? ''
+      } else {
+        projectId = row.project_id ?? ''
+      }
+
+      changed++
+      pending.push({ id: row.id, projectId, topics })
+    }
+
+    if (opts.dryRun) {
+      return { scanned: rows.length, changed, topicsBefore, topicsAfter: topicsBefore }
+    }
+
+    const run = this.db.transaction(() => {
+      for (const p of pending) this.saveMemoryTopics(p.id, p.projectId, p.topics)
+    })
+    run()
+
+    return { scanned: rows.length, changed, topicsBefore, topicsAfter: countTopics() }
+  }
+
   /** Full rebuild of knowledge_map for a project. Uses LEFT JOIN for the
       memory_topics branch so session-less memories (e.g. recall_save) are included
       — their project_id comes from the denormalized column on memories. */

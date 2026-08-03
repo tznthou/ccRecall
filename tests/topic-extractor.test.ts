@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, it, expect } from 'vitest'
-import { extractFromSession, extractTopicsFromContent, normalizeTopicKey } from '../src/core/topic-extractor'
+import { extractFromSession, extractTopicsFromContent, isSegmenterAvailable, normalizeTopicKey } from '../src/core/topic-extractor'
 import type { SessionMeta } from '../src/core/types'
 
 function session(overrides: Partial<SessionMeta>): SessionMeta {
@@ -98,30 +98,69 @@ describe('normalizeTopicKey', () => {
   })
 })
 
+// #80 — runs on every leg of the CI matrix (Node 20 and 22). The issue flagged
+// Node 20 as unverified; this asserts the floor instead of assuming it.
+// Guards against a small-icu build degrading word granularity silently: without
+// it, the CJK cases below would fail with no indication of why.
+describe('Intl.Segmenter availability', () => {
+  it('the runtime performs dictionary-based CJK segmentation', () => {
+    // Fails on a small-icu build, where word granularity degrades for CJK.
+    // Every CJK expectation below depends on this; assert it first so the
+    // cause is readable instead of showing up as a wall of content failures.
+    expect(isSegmenterAvailable()).toBe(true)
+  })
+})
+
+// #80 — the assertions below were rewritten when Intl.Segmenter replaced the
+// character-run splitter. The previous expectations (版本已發布 / 設計價值 /
+// 驗證設計 / 獨特設計) asserted clause fragments as correct output — they were
+// the bug from #79 written down as a spec, not behaviour worth preserving.
+// Every expected value here is taken from measured segmenter output, not guessed.
 describe('extractTopicsFromContent — CJK', () => {
   it('extracts Han terms from mixed content', () => {
     const topics = extractTopicsFromContent('v0.5.0 砍刀場 release shipped')
-    expect(topics).toContain('砍刀場')
+    expect(topics).toContain('砍刀')
     expect(topics).toContain('release')
     expect(topics).toContain('shipped')
   })
 
-  it('splits on Chinese punctuation', () => {
+  it('segments a clause into words instead of one glued fragment', () => {
     const topics = extractTopicsFromContent('觀察期，版本已發布')
-    expect(topics).toContain('觀察期')
-    expect(topics).toContain('版本已發布')
+    expect(topics).toContain('版本')
+    expect(topics).toContain('發布')
+    expect(topics).not.toContain('版本已發布')
   })
 
-  it('inserts boundary between Han and non-Han', () => {
+  it('separates Han from adjacent Latin', () => {
     const topics = extractTopicsFromContent('patch驗證設計ok')
     expect(topics).toContain('patch')
-    expect(topics).toContain('驗證設計')
+    expect(topics).toContain('驗證')
+    expect(topics).toContain('設計')
   })
 
-  it('skips long Han-only runs but extracts segments split by particles', () => {
+  it('segments a long Han run that the old splitter discarded entirely', () => {
     const topics = extractTopicsFromContent('在本地單人多專案場景是獨特設計')
-    expect(topics).toContain('獨特設計')
+    expect(topics).toContain('本地')
+    expect(topics).toContain('專案')
+    expect(topics).toContain('場景')
+    expect(topics).toContain('設計')
     expect(topics).not.toContain('本地單人多專案場景')
+  })
+
+  it('extracts topics from an all-Han prompt with no punctuation (#79 shape A)', () => {
+    const topics = extractTopicsFromContent('注入率為什麼掉了')
+    expect(topics.length).toBeGreaterThan(0)
+    expect(topics).toContain('注入')
+  })
+
+  it('yields real words, not glued fragments, for a punctuated prompt (#79 shape B)', () => {
+    const topics = extractTopicsFromContent('確認更新後，新的記憶機制是否開始作用？')
+    expect(topics).toContain('確認')
+    expect(topics).toContain('記憶')
+    expect(topics).toContain('機制')
+    expect(topics).not.toContain('否開始作用')
+    expect(topics).not.toContain('確認更新後')
+    expect(topics).not.toContain('記憶機制')
   })
 
   it('filters CJK stopwords from content', () => {
@@ -131,10 +170,16 @@ describe('extractTopicsFromContent — CJK', () => {
     expect(topics).toContain('確認')
   })
 
-  it('splits on common particles (的/了/是/在)', () => {
+  it('drops particles as tokens rather than deleting them mid-word', () => {
     const topics = extractTopicsFromContent('流水線的設計價值')
-    expect(topics).toContain('流水線')
-    expect(topics).toContain('設計價值')
+    expect(topics).toContain('設計')
+    expect(topics).toContain('價值')
+    expect(topics).not.toContain('的')
+  })
+
+  it('does not emit single Han characters', () => {
+    const topics = extractTopicsFromContent('觀察期，版本已發布')
+    expect(topics.filter(t => /^\p{Script=Han}$/u.test(t))).toEqual([])
   })
 
   it('handles pure English content unchanged', () => {

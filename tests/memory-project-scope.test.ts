@@ -195,6 +195,77 @@ describe('backfillMemoryTopics', () => {
   })
 })
 
+// #80 — backfillMemoryTopics only touches memories with zero topics, so once
+// the corpus is fully backfilled it is a no-op. Changing the extractor needs a
+// path that re-derives rows that already exist.
+describe('rebuildMemoryTopics', () => {
+  it('recomputes memories that already have topics (backfill cannot reach these)', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'vitest concurrency' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+    const before = db.rawAll<{ topic_key: string }>('SELECT topic_key FROM memory_topics')
+    expect(before.length).toBeGreaterThan(0)
+    expect(db.backfillMemoryTopics(extractTopicsFromContent)).toBe(0)
+
+    // A different extractor stands in for "the extractor changed".
+    const result = db.rebuildMemoryTopics(() => ['rebuilt-topic'])
+    expect(result.scanned).toBe(1)
+    expect(result.changed).toBe(1)
+
+    const after = db.rawAll<{ topic_key: string }>('SELECT topic_key FROM memory_topics')
+    expect(after.map(r => r.topic_key)).toEqual(['rebuilt-topic'])
+  })
+
+  it('dry run reports what would change without writing', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'alpha beta gamma' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+    const before = db.rawAll<{ topic_key: string }>('SELECT topic_key FROM memory_topics ORDER BY topic_key')
+
+    const result = db.rebuildMemoryTopics(() => ['would-change'], { dryRun: true })
+    expect(result.changed).toBe(1)
+
+    const after = db.rawAll<{ topic_key: string }>('SELECT topic_key FROM memory_topics ORDER BY topic_key')
+    expect(after).toEqual(before)
+  })
+
+  it('reports before/after topic totals', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'alpha beta gamma' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+    const result = db.rebuildMemoryTopics(() => ['one', 'two'])
+    expect(result.topicsAfter).toBe(2)
+    expect(result.topicsBefore).toBeGreaterThan(0)
+  })
+
+  it('does not count memories whose topics are unchanged', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'alpha beta gamma' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+    const result = db.rebuildMemoryTopics(extractTopicsFromContent)
+    expect(result.scanned).toBe(1)
+    expect(result.changed).toBe(0)
+  })
+
+  it('resolves projectId from session, matching backfill behaviour', () => {
+    db.upsertProject('proj-R', 'R')
+    db.rawExec(`
+      INSERT INTO sessions (id, project_id, file_path, started_at, ended_at)
+      VALUES ('sr', 'proj-R', '/tmp/sr.jsonl', '2026-06-01T00:00:00Z', '2026-06-01T01:00:00Z')
+    `)
+    db.saveMemory({ sessionId: 'sr', messageId: null, type: 'decision', content: 'strict mode enabled' })
+    db.rebuildMemoryTopics(() => ['scoped'])
+
+    const rows = db.rawAll<{ project_id: string }>('SELECT project_id FROM memory_topics')
+    expect(rows[0].project_id).toBe('proj-R')
+  })
+
+  it('clears topics when the extractor now yields none', () => {
+    db.saveMemory({ sessionId: null, messageId: null, type: 'discovery', content: 'alpha beta gamma' })
+    db.backfillMemoryTopics(extractTopicsFromContent)
+    const result = db.rebuildMemoryTopics(() => [])
+    expect(result.changed).toBe(1)
+    expect(result.topicsAfter).toBe(0)
+    expect(db.rawAll('SELECT topic_key FROM memory_topics')).toEqual([])
+  })
+})
+
 describe('cleanOrphanedMemoryTopics', () => {
   it('removes memory_topics entries referencing deleted memories', () => {
     // Insert orphan directly (bypasses FK check) to simulate leftover from bulk cleanup
