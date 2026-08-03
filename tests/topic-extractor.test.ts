@@ -47,6 +47,33 @@ describe('normalizeTopicKey', () => {
     expect(normalizeTopicKey('index')).toBeNull()
   })
 
+  it('filters English function words (#84)', () => {
+    // The most frequent stopword keys in the corpus before this landed. `when`
+    // was the single most frequent key in the entire table — 244 memories.
+    expect(normalizeTopicKey('when')).toBeNull()
+    expect(normalizeTopicKey('only')).toBeNull()
+    expect(normalizeTopicKey('before')).toBeNull()
+    expect(normalizeTopicKey('without')).toBeNull()
+    expect(normalizeTopicKey('via')).toBeNull()
+    expect(normalizeTopicKey('across')).toBeNull()
+    expect(normalizeTopicKey('which')).toBeNull()
+    expect(normalizeTopicKey('must')).toBeNull()
+  })
+
+  it('keeps domain terms that read as generic (#84)', () => {
+    // All high-frequency in this corpus and deliberately NOT stopwords: removing
+    // them would strip meaning rather than noise. This guards the conservative
+    // rule against a future "just add more common English words" pass.
+    expect(normalizeTopicKey('code')).toBe('code')
+    expect(normalizeTopicKey('session')).toBe('session')
+    expect(normalizeTopicKey('memory')).toBe('memory')
+    expect(normalizeTopicKey('pattern')).toBe('pattern')
+    expect(normalizeTopicKey('state')).toBe('state')
+    expect(normalizeTopicKey('zero')).toBe('zero')
+    expect(normalizeTopicKey('check')).toBe('check')
+    expect(normalizeTopicKey('run')).toBe('run')
+  })
+
   it('enforces min length', () => {
     expect(normalizeTopicKey('a')).toBeNull()
     expect(normalizeTopicKey('ab')).toBeNull()
