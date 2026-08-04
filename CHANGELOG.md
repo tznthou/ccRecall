@@ -15,6 +15,28 @@ more like an iteration counter than a strict SemVer major).
 
 ### Fixed
 
+- **English function words ran the topic index** (#84, direction 3) — the
+  English half of `STOPWORDS` held ~21 words while the CJK half held 56, so
+  `when` was the single most frequent key in the entire table at 244 memories,
+  and six of the top twelve keys were stopwords. Measured against a common
+  stopword set: 133 distinct stopwords covering 2,224 of 24,047 topic rows
+  (9.2%). This is not tidiness — every topic-driven path matches on this table
+  (Tier 0 startup selection, `recall_context`, L1 mid-conversation recall), so a
+  key held by 244 memories produces spurious matches in all three.
+
+  Same discipline as the CJK pass in #80: pure function words only. Terms that
+  read as generic but carry meaning in this domain are deliberately excluded —
+  `code`, `session`, `memory`, `files`, `pattern`, `state`, `check`, `run` and
+  `zero` all stay. A regression test pins both directions so a later "just add
+  more common words" pass cannot quietly strip meaning. Verified before landing:
+  567 memories lose at least one topic, **none go empty**, so nothing drops out
+  of `knowledge_map` or becomes unreachable by topic-driven selection.
+
+  **Existing databases need `rebuildMemoryTopics()`.** `backfillMemoryTopics()`
+  filters on `NOT IN memory_topics` and will process nothing here — the same
+  trap recorded in #80. Directions 1 and 2 of #84 (the `session_topics` /
+  `memory_topics` vocabulary mismatch) are a design decision and remain open.
+
 - **`scripts/usefulness-report.sql` counted two injection sources as one**
   (#82) — the COVERAGE block read `FROM injection_log` with no source filter,
   so `COUNT(DISTINCT memory_id)` merged startup injections with the `prompt`
