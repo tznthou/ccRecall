@@ -12,6 +12,25 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ### 修正
 
+- **英文虛詞把持了 topic 索引**（#84，direction 3）— `STOPWORDS` 的英文半邊
+  只有約 21 個詞，CJK 半邊卻有 56 個，於是 `when` 成了整張表最高頻的 key
+  （244 則記憶），前十二名裡有六個是停用詞。對照常見停用詞集實測：133 個
+  相異停用詞佔掉 24,047 列中的 2,224 列（9.2%）。這不只是整潔問題——所有
+  topic 驅動的路徑都查這張表（Tier 0 startup 選擇、`recall_context`、L1
+  對話中喚起），一個掛著 244 則記憶的 key 會在三條路徑上同時製造假匹配。
+
+  紀律沿用 #80 的 CJK 那輪：只清純虛詞。讀起來很通用但在這個領域帶意義的
+  詞刻意不收——`code`、`session`、`memory`、`files`、`pattern`、`state`、
+  `check`、`run`、`zero` 全部留著。回歸測試把兩個方向都釘住，之後想「順手
+  多加幾個常見字」不會悄悄削掉語意。落地前已驗證：567 則記憶少掉至少一個
+  topic，**沒有任何一則變成零 topic**，所以不會有記憶掉出 `knowledge_map`
+  或變成 topic 選不到。
+
+  **既有資料庫要跑 `rebuildMemoryTopics()`。** `backfillMemoryTopics()` 的
+  條件是 `NOT IN memory_topics`，在這裡會一筆都不處理——#80 記過的同一個
+  坑。#84 的 direction 1 和 2（`session_topics` 與 `memory_topics` 的詞彙
+  錯配）屬設計取捨，仍未處理。
+
 - **`scripts/usefulness-report.sql` 把兩種注入來源算成同一種**（#82）—
   COVERAGE 段直接 `FROM injection_log` 沒有 source 條件，`COUNT(DISTINCT
   memory_id)` 因此把 startup 注入和 v0.6.0 對話中喚起寫進同一張表的 `prompt`
