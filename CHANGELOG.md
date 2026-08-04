@@ -13,6 +13,24 @@ more like an iteration counter than a strict SemVer major).
 
 ## [Unreleased]
 
+### Changed
+
+- **`recall_query` tool description misstated its own scope** — it claimed
+  "project-aware ranking" and coverage "across sessions and projects", but the
+  filter is a hard project scope: memories from other projects are not in the
+  result set at all. A model reading the old description had no way to tell
+  "no memories found" (nothing here) from "no memories reachable" (blocked by
+  the filter), so an empty result read as evidence that the knowledge did not
+  exist. The description now states the scope plainly, adds trigger conditions
+  for cases where nobody brings up the past (before committing to an
+  architectural pattern or a dependency), and documents query phrasing: give
+  more terms rather than fewer (the index is trigram + BM25, which
+  discriminates by matched term count), avoid `AND`, translate concepts to
+  English (CJK queries return nothing), and search a pattern's general name
+  rather than this project's own nouns. Measured on 180 cross-project pairs
+  built from repeat-discovery records; local recall telemetry shows 66% of
+  real `recall_query` calls returned zero hits.
+
 ### Fixed
 
 - **English function words ran the topic index** (#84, direction 3) — the
