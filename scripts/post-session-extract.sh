@@ -29,10 +29,19 @@ CCRECALL_SCRIPT_DIR="$(cd "$(dirname "$_ccrecall_src")" && pwd)"
 unset _ccrecall_src
 
 ccrecall-extract() {
-  local project_id
-  # printf for the same reason as session_id below: zsh's echo mangles
-  # backslash sequences, and $PWD is arbitrary user input.
-  project_id=$(printf '%s' "$PWD" | sed 's|/|-|g')
+  # #89: this used to derive project_id here with `sed 's|/|-|g'`, which
+  # diverged from Claude Code's char-wise [^A-Za-z0-9] encoding for any cwd
+  # holding a space, dot, underscore or CJK — and every such session then
+  # skipped extraction forever with no error surfaced.
+  #
+  # We do NOT reimplement the encoding in shell. BSD sed/tr are byte-wise and
+  # emit three dashes per CJK character; getting it right here would mean a
+  # second implementation to keep in sync. Instead /session/last returns the
+  # id the daemon read off disk (see routes.ts) and we use that verbatim.
+  # It stays empty until that call lands, which is fine: every consumer of
+  # project_id below sits behind a valid session_id, which implies the call
+  # succeeded.
+  local project_id=""
 
   # ── Trust pre-flight ──
   # ccrecall-extract always launches claude with --dangerously-skip-permissions, which
@@ -83,6 +92,9 @@ ccrecall-extract() {
     # skipping extraction for ~1 in 5 sessions (any title with a newline,
     # e.g. every cmux "/model" opener). Root-caused 2026-07-16.
     session_id=$(printf '%s' "$session_meta" | jq -r '.sessionId // empty' 2>/dev/null)
+    # #89: authoritative project id, read off the ~/.claude/projects/ directory
+    # name by the indexer rather than re-derived from $PWD here.
+    project_id=$(printf '%s' "$session_meta" | jq -r '.projectId // empty' 2>/dev/null)
   fi
 
   # Load the structured prompt
@@ -171,12 +183,17 @@ ${prompt}"
   if [[ "$transcript_mode" != "jsonl" ]]; then
     printf '\n⚠️  ccRecall: no text transcript (%s) — skipping extraction.\n' "$skip_reason"
     mkdir -p "$(dirname "$CCRECALL_EXTRACT_LOG")"
+    # cwd, not just projectId: on a skip the daemon lookup may never have
+    # landed, leaving projectId empty. The raw cwd is the one fact always
+    # available, and #89 was diagnosed precisely by comparing it against the
+    # directory names under ~/.claude/projects/.
     jq -n -c \
       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       --arg sid "$session_id" \
       --arg pid "$project_id" \
+      --arg cwd "$PWD" \
       --arg reason "$skip_reason" \
-      '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"skip",reason:$reason,exitCode:null,durationSec:0}' \
+      '{ts:$ts,sessionId:$sid,projectId:$pid,cwd:$cwd,mode:"skip",reason:$reason,exitCode:null,durationSec:0}' \
       >> "$CCRECALL_EXTRACT_LOG"
     return $claude_exit
   fi

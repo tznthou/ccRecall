@@ -12,6 +12,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { resolveProjectId } from './lib/project-id.mjs'
 
 const PORT = Number(process.env.CCRECALL_PORT ?? 7749)
 const HOST = '127.0.0.1'
@@ -114,10 +115,11 @@ function projectNameFromCwd(cwd) {
 }
 
 // Matches Claude Code's project-directory encoding under ~/.claude/projects/
-function projectIdFromCwd(cwd) {
-  if (!cwd || typeof cwd !== 'string') return ''
-  return cwd.replace(/\//g, '-')
-}
+// — see hooks/lib/project-id.mjs. Until #89 this claimed to match but only
+// replaced '/', so any cwd with a space, dot, underscore or CJK addressed a
+// project that does not exist. Every hook firing under such a cwd failed
+// silently: no error, no counter, just an empty recall.
+const projectIdFromCwd = resolveProjectId
 
 function formatMemories(memories, query) {
   if (memories.length === 0) return ''

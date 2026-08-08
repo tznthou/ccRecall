@@ -8,6 +8,7 @@ import { scrubErrorMessage } from '../core/log-safe.js'
 import { applyRowBudget, DEFAULT_MAX_TOKENS, DEFAULT_PER_ROW_CHAR_CAP } from '../core/token-budget.js'
 import { appendRecallTelemetry } from '../core/recall-telemetry.js'
 import { extractTopicsFromContent } from '../core/topic-extractor.js'
+import { resolveProjectId } from '../core/project-id.js'
 import type { HealthResult, Memory } from '../core/types.js'
 import type { IntegrityCheckRecord } from '../core/integrity-monitor.js'
 
@@ -139,7 +140,10 @@ export function createRequestHandler(
         sendJson(res, 400, { error: 'cwd query parameter required' })
         return
       }
-      const projectId = cwd.replace(/\//g, '-')
+      // #89: char-wise, matching Claude Code's own directory encoding. The
+      // old slash-only rule missed every cwd holding a space, dot, underscore
+      // or CJK — silently, since a miss here just looks like "no session yet".
+      const projectId = resolveProjectId(cwd)
       // Staleness gate (#55): the wrapper passes notBefore=<its launch time>.
       // A session whose endedAt predates the launch cannot be the one that
       // just closed — returning it would extract the WRONG session. endedAt,

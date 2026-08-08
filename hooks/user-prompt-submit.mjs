@@ -22,6 +22,7 @@
 // both for this event, and the JSON form errors on the first message of a new
 // session (anthropics/claude-code#17550).
 import http from 'node:http'
+import { resolveProjectId } from './lib/project-id.mjs'
 
 const PORT = Number(process.env.CCRECALL_PORT ?? 7749)
 const HOST = '127.0.0.1'
@@ -96,10 +97,11 @@ function httpGet(pathWithQuery) {
 }
 
 // Matches Claude Code's project-directory encoding under ~/.claude/projects/
-function projectIdFromCwd(cwd) {
-  if (!cwd || typeof cwd !== 'string') return ''
-  return cwd.replace(/\//g, '-')
-}
+// — see hooks/lib/project-id.mjs. Until #89 this claimed to match but only
+// replaced '/', so any cwd with a space, dot, underscore or CJK addressed a
+// project that does not exist. Every hook firing under such a cwd failed
+// silently: no error, no counter, just an empty recall.
+const projectIdFromCwd = resolveProjectId
 
 function formatRecall(memories) {
   if (!Array.isArray(memories) || memories.length === 0) return ''
