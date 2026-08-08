@@ -64,6 +64,12 @@ more like an iteration counter than a strict SemVer major).
   `extract.log.jsonl` now also carry `cwd`, the one fact that survives when
   the lookup never lands — it is what made this diagnosable.
 
+  The fifth entry point is the MCP `projectId` argument, which a model derives
+  itself — no code change reaches it. Its description previously illustrated
+  only a slash-separated path, so a model following it produced the same wrong
+  id for any cwd with a space. It now states the character rule and uses an
+  example that contains a space.
+
 - **English function words ran the topic index** (#84, direction 3) — the
   English half of `STOPWORDS` held ~21 words while the CJK half held 56, so
   `when` was the single most frequent key in the entire table at 244 memories,

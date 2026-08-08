@@ -36,7 +36,13 @@ function textError(prefix: string, err: unknown): McpTextResult {
 
 const recallQueryInput = {
   query: z.string().min(1).describe('FTS5 search query (keywords or phrase)'),
-  projectId: z.string().min(1).describe('Project ID (derived from cwd, e.g. "-Users-foo-my-project")'),
+  projectId: z.string().min(1).describe(
+    'Project ID: the cwd with EVERY character outside [A-Za-z0-9] replaced by "-", ' +
+    'one dash per character. Spaces, dots, underscores and CJK all become dashes, ' +
+    'not just slashes: "/Users/foo/my project" -> "-Users-foo-my-project". ' +
+    'This is how Claude Code names the folders under ~/.claude/projects/; ' +
+    'an id derived any other way silently matches nothing.',
+  ),
   limit: z.number().int().positive().max(50).optional().describe('Max results (default 10, max 50)'),
   maxTokens: z.number().int().positive().max(2000).optional().describe(
     `Approximate total output token budget (default ${DEFAULT_MAX_TOKENS}). Results are truncated with per-row ellipsis and a trailer so clipping is always visible.`,
@@ -194,7 +200,13 @@ export function formatContextResult(
 }
 
 const recallContextInput = {
-  projectId: z.string().min(1).describe('Project ID (derived from cwd, e.g. "-Users-foo-my-project")'),
+  projectId: z.string().min(1).describe(
+    'Project ID: the cwd with EVERY character outside [A-Za-z0-9] replaced by "-", ' +
+    'one dash per character. Spaces, dots, underscores and CJK all become dashes, ' +
+    'not just slashes: "/Users/foo/my project" -> "-Users-foo-my-project". ' +
+    'This is how Claude Code names the folders under ~/.claude/projects/; ' +
+    'an id derived any other way silently matches nothing.',
+  ),
   keywords: z.array(z.string().min(1)).min(1).describe('Candidate topic keywords (e.g. ["typescript", "mcp"])'),
   memoryLimit: z.number().int().positive().max(20).optional().describe('Max memories per topic (default 5)'),
   maxTokens: z.number().int().positive().max(2000).optional().describe(
