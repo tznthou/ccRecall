@@ -62,7 +62,14 @@ more like an iteration counter than a strict SemVer major).
   the indexer read off disk and the wrapper uses it verbatim, which removes a
   shell-side implementation rather than adding a correct one. Skip rows in
   `extract.log.jsonl` now also carry `cwd`, the one fact that survives when
-  the lookup never lands — it is what made this diagnosable.
+  the lookup never lands — it is what made this diagnosable. That log is now
+  created `0600` and an existing one is repaired before each append: it
+  discloses the account name and every project name worked on, and a log first
+  created under a permissive umask lands at `0644`. Both write paths go through
+  the same guard, since the mode belongs to the file rather than to the call
+  site — securing one path would have secured neither, as whichever runs first
+  decides the mode. If the log cannot be secured the row is dropped; losing
+  telemetry is cheaper than leaking paths.
 
   The fifth entry point is the MCP `projectId` argument, which a model derives
   itself — no code change reaches it. Its description previously illustrated
