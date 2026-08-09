@@ -78,7 +78,41 @@ function runShell(body: string, args: string[], home: string, shell = 'bash'): S
     encoding: 'utf8',
     env: cleanEnv(home),
   })
-  return { code: r.status ?? -1, stderr: r.stderr ?? '' }
+  return { code: r.status ?? -1, stderr: r.stderr ?? '', stdout: r.stdout ?? '' }
+}
+
+/**
+ * The wrapper's functions as the shell itself parses them, whitespace
+ * collapsed so each command reads as the single unit the shell runs.
+ *
+ * Structural assertions used to scan the file as text, which meant
+ * reimplementing shell lexing in TypeScript: whole-line comments, trailing
+ * comments, `#` inside quotes, `#` after a metacharacter, backslash
+ * continuations, backslashes inside comments. Four rounds of adversarial
+ * review found four different ways that approximation disagreed with the
+ * shell, each one a test that stayed green over a wrapper that was already
+ * broken. `declare -f` ends the category: comments are gone because bash
+ * discarded them, continuations are joined because bash joined them, and
+ * what is left is bash's own reading of the code that actually ships.
+ *
+ * The collapse matters because `declare -f` breaks a subshell across lines —
+ * `( umask 077;\n mkdir -p … )` — and the umask must be asserted together
+ * with the command it protects, not merely somewhere in the same function.
+ */
+function parsedShell(home: string, fn = ''): string {
+  const r = runShell(`declare -f ${fn}`.trimEnd(), [], home)
+  if (r.code !== 0) throw new Error(`sourcing the wrapper failed: ${r.stderr}`)
+  const out = (r.stdout ?? '').replace(/\s+/g, ' ')
+  // An empty result would make every `not.toMatch` below pass vacuously.
+  if (!out.trim()) throw new Error(`declare -f ${fn} returned nothing`)
+  return out
+}
+
+/** Names of every function the wrapper defines, sorted. */
+function definedFunctions(home: string): string[] {
+  const r = runShell('declare -F | sed "s/^declare -f //"', [], home)
+  if (r.code !== 0) throw new Error(`sourcing the wrapper failed: ${r.stderr}`)
+  return (r.stdout ?? '').split('\n').filter(Boolean).sort()
 }
 
 /** `_ccrecall_secure_log <target>` */
@@ -90,136 +124,6 @@ async function mode(p: string): Promise<string> {
   return ((await stat(p)).mode & 0o777).toString(8)
 }
 
-/**
- * Shell source with comment lines blanked — emptied in place, never removed.
- *
- * Every structural assertion below scans the shipped script for a shape that
- * must — or must not — appear. A comment naming one of those shapes is not an
- * instance of it, and this wrapper's comments run long: both mkdir sites carry
- * a paragraph explaining the umask, and the guard's own comments already quote
- * the patterns being matched. Scanning raw lines would fail the suite against
- * a correct wrapper the day someone writes `mkdir -p` or
- * `>> "$CCRECALL_EXTRACT_LOG"` inside a comment — a red test with nothing
- * wrong in the code, which costs whoever hits it far more than it costs here.
- *
- * Blanking rather than dropping is load-bearing, and the difference is not
- * cosmetic. A comment planted inside a backslash continuation ends the logical
- * command there: `_ccrecall_log_append "$LOG" \` followed by a comment calls
- * the helper with one argument and then runs `--arg ts …` as a command,
- * losing the telemetry row and aborting the wrapper under errexit. Dropping
- * the comment line splices the continuation back together, so the call-site
- * scan reconstructs a well-formed call and the suite stays green over a
- * genuinely broken wrapper. Blanking keeps the line boundary, the
- * continuation stays broken, and the scan sees it. Verified both ways —
- * see the unit test directly below.
- */
-/**
- * One line with its comment removed — inline or whole-line alike.
- *
- * A trailing comment is the same hazard as a whole-line one, and a nastier
- * shape because refactors produce it naturally:
- *
- *   (umask 022; mkdir -p "$log_dir")  # was: (umask 077; …) 2>/dev/null || :
- *
- * What runs is 0755, unsilenced, and fatal under errexit; every token the
- * assertions look for sits in the comment. Keeping the old line beside the
- * new one is ordinary practice, so this needs no bad actor to happen.
- *
- * Quote tracking is what makes it safe to cut at `#`: the wrapper's jq
- * programs and message strings may contain one, and cutting there would
- * truncate a line the assertions must still see in full. Single quotes,
- * double quotes and backslash escapes inside double quotes are honoured.
- * `$'…'`, heredocs and backticks are not — the wrapper uses none, and the
- * probes below fail loudly if that ever stops being true.
- */
-function stripComment(line: string): string {
-  let quote: "'" | '"' | null = null
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i]
-    if (quote === '"' && c === '\\') { i++; continue }
-    if (quote) { if (c === quote) quote = null; continue }
-    if (c === "'" || c === '"') { quote = c; continue }
-    // A `#` only opens a comment at a word boundary; `a#b` is one word.
-    if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i).trimEnd()
-  }
-  return line
-}
-
-function codeLines(src: string): string[] {
-  return src.split('\n').map(stripComment)
-}
-
-/**
- * Whether a physical line continues onto the next one.
- *
- * Must be asked of the **raw** line. A continuation is a backslash immediately
- * before the newline, so anything after that backslash — including a comment —
- * means there is no continuation at all: `cmd a \  # note` escapes the space,
- * runs `cmd a ' '` right there, and leaves the next line to run as its own
- * command. Judging from the stripped line instead re-forms a trailing
- * backslash that the shell never saw, and the call-site scan then reassembles
- * a call the shell had already cut short.
- *
- * The odd count is not pedantry either: `\\` at end of line is an escaped
- * backslash, an argument, not a continuation.
- */
-function continuesLine(raw: string): boolean {
-  const trailing = raw.match(/\\+$/)
-  return !!trailing && trailing[0].length % 2 === 1
-}
-
-describe('codeLines', () => {
-  it('blanks comment lines in place rather than dropping them', () => {
-    // The line count is the assertion that matters. Dropping instead of
-    // blanking rejoins a continuation the shell considers broken, and every
-    // scan below that walks forward across trailing backslashes would then
-    // reconstruct a well-formed call out of a wrapper that has stopped
-    // passing its arguments — green suite, broken telemetry, aborted session.
-    const src = 'f a \\\n# planted mid-continuation\n  b \\\n  c\n'
-    expect(codeLines(src)).toEqual(['f a \\', '', '  b \\', '  c', ''])
-    expect(codeLines(src)).toHaveLength(src.split('\n').length)
-  })
-
-  it('blanks indented comments, and leaves code that merely contains # alone', () => {
-    expect(codeLines('  # indented\ncode "a#b"')).toEqual(['', 'code "a#b"'])
-  })
-
-  it('cuts a trailing comment off the line it trails', () => {
-    // The refactor shape: old line parked in a comment beside the new one.
-    // Without this the assertions read their required tokens straight out of
-    // the comment and pass over a command that runs 0755 and unsilenced.
-    const line = '  (umask 022; mkdir -p "$d")  # was: (umask 077; mkdir -p "$d") 2>/dev/null || :'
-    expect(stripComment(line)).toBe('  (umask 022; mkdir -p "$d")')
-  })
-
-  it('reads continuation from the raw line, where the shell reads it', () => {
-    expect(continuesLine('cmd a \\')).toBe(true)
-    // Anything past the backslash means the shell never saw a continuation,
-    // even though stripping the comment re-forms one.
-    expect(continuesLine('cmd a \\  # note')).toBe(false)
-    expect(stripComment('cmd a \\  # note')).toBe('cmd a \\')
-    // An escaped backslash is an argument, not a continuation.
-    expect(continuesLine('cmd a \\\\')).toBe(false)
-    expect(continuesLine('cmd a \\\\\\')).toBe(true)
-    // Trailing whitespace after the backslash also ends the command.
-    expect(continuesLine('cmd a \\ ')).toBe(false)
-  })
-
-  it('does not cut at a # that lives inside quotes', () => {
-    // Cutting here would truncate a line the assertions must see in full.
-    expect(stripComment(`jq '{a:"#1"}' "$f"`)).toBe(`jq '{a:"#1"}' "$f"`)
-    expect(stripComment('echo "a # b" # tail')).toBe('echo "a # b"')
-    expect(stripComment('echo "esc \\" # still in" # tail')).toBe('echo "esc \\" # still in"')
-  })
-})
-
-/** The guard's source text, for the one property no behaviour can expose. */
-async function guardSource(): Promise<string> {
-  const src = await readFile(WRAPPER, 'utf8')
-  const m = src.match(/_ccrecall_secure_log\(\)\s*\{[\s\S]*?\n\}/)
-  if (!m) throw new Error('_ccrecall_secure_log not found in wrapper')
-  return m[0]
-}
 
 describe('extract wrapper: telemetry log permission guard', () => {
   let dir: string
@@ -485,97 +389,121 @@ describe('extract wrapper: a dropped row must not take the session with it', () 
     expect(r.code).toBe(0)
   })
 
-  it('pairs every call site with a failure-tolerant suffix', async () => {
+  it('pairs every call site with a failure-tolerant suffix', () => {
     // The `|| :` lives at the call sites, so the behavioural pair above can
     // only prove the shape works — not that both sites actually carry it.
-    // Two views of the same file: match against the stripped text, but decide
-    // where a call ends from the raw text. Only the raw line knows whether the
-    // shell continued onto the next one.
-    const raw = (await readFile(WRAPPER, 'utf8')).split('\n')
-    const lines = raw.map(stripComment)
-    const calls: string[] = []
-    lines.forEach((line, i) => {
-      if (!/_ccrecall_log_append "\$CCRECALL_EXTRACT_LOG"/.test(line)) return
-      // Both call sites span several lines via trailing backslashes; the
-      // suffix sits on the last of them.
-      let acc = ''
-      for (let j = i; j < lines.length; j++) {
-        acc += lines[j]
-        if (!continuesLine(raw[j])) break
-      }
-      calls.push(acc)
-    })
-
+    // bash has already joined each multi-line call into one command here, so
+    // there is no continuation to reassemble and no chance of reassembling
+    // one the shell had cut short.
+    const calls = parsedShell(dir).match(/_ccrecall_log_append "\$CCRECALL_EXTRACT_LOG".*?(?=;|$)/g) ?? []
     expect(calls.length).toBeGreaterThanOrEqual(2)
     for (const c of calls) expect(c).toMatch(/\|\|\s*:\s*$/)
   })
 
-  it('creates the log directory the same way on both paths through the wrapper', async () => {
+  it('creates the log directory the same way on both paths through the wrapper', () => {
     // The extraction path creates this directory ~95 lines before the
     // telemetry append, and `mkdir -p` does not touch an existing one — so
     // an unguarded mkdir there leaves the same function producing 0700 when
     // a skip returns early and 0755 otherwise. Both must carry the umask.
-    const mkdirs = codeLines(await readFile(WRAPPER, 'utf8')).filter(l => /mkdir\s+-p/.test(l))
-    expect(mkdirs.length).toBeGreaterThanOrEqual(2)
-    for (const m of mkdirs) {
-      expect(m).toMatch(/umask\s+077;\s*mkdir\s+-p/)
-      // Silenced too — a failure prints the directory path, which is the
-      // disclosure the mode exists to prevent. Asserting only the umask
-      // prefix let a bare `(umask 077; mkdir -p "$log_dir")` through.
-      expect(m).toMatch(/2>\/dev\/null/)
-      // And non-fatal in its own way: the guard must propagate so the caller
-      // drops the row, the extraction path must not abort under errexit.
-      expect(m).toMatch(/\|\|\s*(return 1|:)/)
-    }
+    const fns = parsedShell(dir)
+    // Counting rather than iterating: every mkdir must be a secured one, so
+    // the two counts have to agree. Asserting only that secured ones exist
+    // would let an unguarded third mkdir in beside them.
+    const all = fns.match(/mkdir\s+-p/g) ?? []
+    // Silenced because a failure prints the directory path, which is the
+    // disclosure the mode exists to prevent; and non-fatal in its own way —
+    // the guard propagates so the caller drops the row, while the extraction
+    // path must not abort under errexit.
+    // The inner group allows exactly one level of nesting so `$(dirname "$f")`
+    // does not close the subshell early, while still refusing to run past the
+    // subshell's own `)` — an unguarded mkdir must not be able to borrow the
+    // `2>/dev/null || :` belonging to the next one.
+    const secured = fns.match(
+      /\(\s*umask\s+077;\s*mkdir\s+-p[^()]*(?:\([^()]*\)[^()]*)*\)\s*2>\s*\/dev\/null\s*\|\|\s*(?:return 1|:)/g,
+    ) ?? []
+    expect(all.length).toBeGreaterThanOrEqual(2)
+    expect(secured).toHaveLength(all.length)
   })
 })
 
 describe('extract wrapper: the guard cannot be bypassed or removed', () => {
-  it('creates the file already private rather than repairing it afterwards', async () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-structure-'))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it('defines exactly the three functions these assertions cover', () => {
+    // `declare -f` sees functions and nothing else, so a fourth one is a
+    // blind spot rather than a neutral addition. This fails until whoever
+    // adds it decides whether the scans below need to cover it.
+    expect(definedFunctions(dir)).toEqual([
+      '_ccrecall_log_append',
+      '_ccrecall_secure_log',
+      'ccrecall-extract',
+    ])
+  })
+
+  it('writes nothing at the moment it is sourced', async () => {
+    // The other half of what `declare -f` cannot see: top-level code, which
+    // runs on source. Today that is nine lines of variable assignment. An
+    // append that ever drifted out of a function would land here instead,
+    // with no guard in front of it and no structural scan looking.
+    const r = runShell('true', [], dir)
+    expect(r.code).toBe(0)
+    expect(r.stderr).toBe('')
+    expect(await readdir(dir)).toEqual([])
+  })
+
+  it('creates the file already private rather than repairing it afterwards', () => {
     // chmod alone would leave a window between creation and repair in which
     // the log is world-readable; `umask 077` closes it. A window that narrow
     // leaves nothing a later stat() could observe — both paths end at 600 —
     // so this is the one property asserted structurally. Every failure mode
     // above is exercised for real.
     //
-    // Anchored to the creation line specifically: the guard now carries a
-    // second `umask 077` for mkdir, and a function-wide match would let
-    // either one cover for the other going missing.
-    const creation = codeLines(await guardSource()).find(l => /:\s*>>\s*"\$f"/.test(l))
-    expect(creation).toBeDefined()
-    expect(creation).toMatch(/umask\s+077/)
+    // Anchored to the creation itself: the guard also carries a `umask 077`
+    // for its mkdir, and a function-wide match would let either one cover
+    // for the other going missing.
+    const fns = parsedShell(dir)
+    const creations = fns.match(/:\s*>>\s*"\$f"/g) ?? []
+    const secured = fns.match(/\(\s*umask\s+077;\s*:\s*>>\s*"\$f"\s*\)/g) ?? []
+    expect(creations).toHaveLength(1)
+    expect(secured).toHaveLength(creations.length)
   })
 
-  it('routes every append to the log through the helper', async () => {
+  it('routes every append to the log through the helper', () => {
     // Permissions belong to the file, not to the call site: one append that
     // skips the guard re-creates the log 0644 under a permissive umask and
     // every other writer inherits it. Rather than tracing shell control flow
     // to prove each write site is guarded — which needs a real parser, and a
     // line scan gets both `else` branches and nested `if` wrong — there is
     // exactly one write site, and this pins that.
-    const src = await readFile(WRAPPER, 'utf8')
-    const lines = codeLines(src)
+    const fns = parsedShell(dir)
 
     // No caller may redirect into the log itself; that is the helper's job.
-    expect(lines.filter(l => />>\s*"\$CCRECALL_EXTRACT_LOG"/.test(l))).toEqual([])
+    expect(fns).not.toMatch(/>>\s*"\$CCRECALL_EXTRACT_LOG"/)
 
-    const helper = src.match(/_ccrecall_log_append\(\)\s*\{[\s\S]*?\n\}/)?.[0]
-    expect(helper).toBeDefined()
-
-    // Exactly one row-writing redirect, and it secures before it writes.
-    const writes = codeLines(helper!).filter(l => /jq\b.*>>\s*"\$f"/.test(l))
+    // Exactly one row-writing redirect, and it is silenced. Asserted
+    // structurally because the guard now rejects every target whose open
+    // would fail, so the behavioural tests above can no longer reach this
+    // line while failing — the remaining route to it is the target being
+    // swapped after the guard returns.
+    const writes = fns.match(/\{\s*jq\b[^}]*>>\s*"\$f"\s*\}\s*2>\s*\/dev\/null/g) ?? []
     expect(writes).toHaveLength(1)
-    expect(helper!.indexOf('_ccrecall_secure_log')).toBeLessThan(helper!.indexOf('>> "$f"'))
 
-    // That redirect is silenced too. Asserted structurally because the guard
-    // now rejects every target whose open would fail, so the behavioural
-    // tests above can no longer reach this line while failing — the remaining
-    // route to it is the target being swapped after the guard returns.
-    expect(writes[0]).toMatch(/2>\/dev\/null/)
+    // Ordering, read from the helper alone so the call sites cannot supply
+    // the guard reference on its behalf.
+    const helper = parsedShell(dir, '_ccrecall_log_append')
+    expect(helper.indexOf('_ccrecall_secure_log')).toBeLessThan(helper.indexOf('>> "$f"'))
 
     // Without this the checks above pass vacuously the day the helper is
     // renamed and every pattern here matches nothing at all.
-    const callers = lines.filter(l => /_ccrecall_log_append\s+"\$CCRECALL_EXTRACT_LOG"/.test(l))
+    const callers = fns.match(/_ccrecall_log_append "\$CCRECALL_EXTRACT_LOG"/g) ?? []
     expect(callers.length).toBeGreaterThanOrEqual(2)
   })
 })
