@@ -149,6 +149,25 @@ function codeLines(src: string): string[] {
   return src.split('\n').map(stripComment)
 }
 
+/**
+ * Whether a physical line continues onto the next one.
+ *
+ * Must be asked of the **raw** line. A continuation is a backslash immediately
+ * before the newline, so anything after that backslash — including a comment —
+ * means there is no continuation at all: `cmd a \  # note` escapes the space,
+ * runs `cmd a ' '` right there, and leaves the next line to run as its own
+ * command. Judging from the stripped line instead re-forms a trailing
+ * backslash that the shell never saw, and the call-site scan then reassembles
+ * a call the shell had already cut short.
+ *
+ * The odd count is not pedantry either: `\\` at end of line is an escaped
+ * backslash, an argument, not a continuation.
+ */
+function continuesLine(raw: string): boolean {
+  const trailing = raw.match(/\\+$/)
+  return !!trailing && trailing[0].length % 2 === 1
+}
+
 describe('codeLines', () => {
   it('blanks comment lines in place rather than dropping them', () => {
     // The line count is the assertion that matters. Dropping instead of
@@ -171,6 +190,19 @@ describe('codeLines', () => {
     // the comment and pass over a command that runs 0755 and unsilenced.
     const line = '  (umask 022; mkdir -p "$d")  # was: (umask 077; mkdir -p "$d") 2>/dev/null || :'
     expect(stripComment(line)).toBe('  (umask 022; mkdir -p "$d")')
+  })
+
+  it('reads continuation from the raw line, where the shell reads it', () => {
+    expect(continuesLine('cmd a \\')).toBe(true)
+    // Anything past the backslash means the shell never saw a continuation,
+    // even though stripping the comment re-forms one.
+    expect(continuesLine('cmd a \\  # note')).toBe(false)
+    expect(stripComment('cmd a \\  # note')).toBe('cmd a \\')
+    // An escaped backslash is an argument, not a continuation.
+    expect(continuesLine('cmd a \\\\')).toBe(false)
+    expect(continuesLine('cmd a \\\\\\')).toBe(true)
+    // Trailing whitespace after the backslash also ends the command.
+    expect(continuesLine('cmd a \\ ')).toBe(false)
   })
 
   it('does not cut at a # that lives inside quotes', () => {
@@ -456,7 +488,11 @@ describe('extract wrapper: a dropped row must not take the session with it', () 
   it('pairs every call site with a failure-tolerant suffix', async () => {
     // The `|| :` lives at the call sites, so the behavioural pair above can
     // only prove the shape works — not that both sites actually carry it.
-    const lines = codeLines(await readFile(WRAPPER, 'utf8'))
+    // Two views of the same file: match against the stripped text, but decide
+    // where a call ends from the raw text. Only the raw line knows whether the
+    // shell continued onto the next one.
+    const raw = (await readFile(WRAPPER, 'utf8')).split('\n')
+    const lines = raw.map(stripComment)
     const calls: string[] = []
     lines.forEach((line, i) => {
       if (!/_ccrecall_log_append "\$CCRECALL_EXTRACT_LOG"/.test(line)) return
@@ -465,7 +501,7 @@ describe('extract wrapper: a dropped row must not take the session with it', () 
       let acc = ''
       for (let j = i; j < lines.length; j++) {
         acc += lines[j]
-        if (!lines[j].trimEnd().endsWith('\\')) break
+        if (!continuesLine(raw[j])) break
       }
       calls.push(acc)
     })
