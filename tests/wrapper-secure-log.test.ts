@@ -91,7 +91,7 @@ async function mode(p: string): Promise<string> {
 }
 
 /**
- * Shell source with comment lines dropped.
+ * Shell source with comment lines blanked — emptied in place, never removed.
  *
  * Every structural assertion below scans the shipped script for a shape that
  * must — or must not — appear. A comment naming one of those shapes is not an
@@ -101,10 +101,38 @@ async function mode(p: string): Promise<string> {
  * a correct wrapper the day someone writes `mkdir -p` or
  * `>> "$CCRECALL_EXTRACT_LOG"` inside a comment — a red test with nothing
  * wrong in the code, which costs whoever hits it far more than it costs here.
+ *
+ * Blanking rather than dropping is load-bearing, and the difference is not
+ * cosmetic. A comment planted inside a backslash continuation ends the logical
+ * command there: `_ccrecall_log_append "$LOG" \` followed by a comment calls
+ * the helper with one argument and then runs `--arg ts …` as a command,
+ * losing the telemetry row and aborting the wrapper under errexit. Dropping
+ * the comment line splices the continuation back together, so the call-site
+ * scan reconstructs a well-formed call and the suite stays green over a
+ * genuinely broken wrapper. Blanking keeps the line boundary, the
+ * continuation stays broken, and the scan sees it. Verified both ways —
+ * see the unit test directly below.
  */
 function codeLines(src: string): string[] {
-  return src.split('\n').filter(l => !l.trimStart().startsWith('#'))
+  return src.split('\n').map(l => (l.trimStart().startsWith('#') ? '' : l))
 }
+
+describe('codeLines', () => {
+  it('blanks comment lines in place rather than dropping them', () => {
+    // The line count is the assertion that matters. Dropping instead of
+    // blanking rejoins a continuation the shell considers broken, and every
+    // scan below that walks forward across trailing backslashes would then
+    // reconstruct a well-formed call out of a wrapper that has stopped
+    // passing its arguments — green suite, broken telemetry, aborted session.
+    const src = 'f a \\\n# planted mid-continuation\n  b \\\n  c\n'
+    expect(codeLines(src)).toEqual(['f a \\', '', '  b \\', '  c', ''])
+    expect(codeLines(src)).toHaveLength(src.split('\n').length)
+  })
+
+  it('blanks indented comments, and leaves code that merely contains # alone', () => {
+    expect(codeLines('  # indented\ncode "a#b"')).toEqual(['', 'code "a#b"'])
+  })
+})
 
 /** The guard's source text, for the one property no behaviour can expose. */
 async function guardSource(): Promise<string> {
