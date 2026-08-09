@@ -33,6 +33,50 @@ more like an iteration counter than a strict SemVer major).
 
 ### Fixed
 
+- **`cwd` → `project_id` encoding drift silenced whole projects** (#89) —
+  Claude Code names each folder under `~/.claude/projects/` by replacing every
+  character outside `[A-Za-z0-9]` with `-`. ccRecall replaced only `/`, so any
+  working directory containing a space, a dot, an underscore or CJK addressed
+  a directory that does not exist. Nothing errored: `/session/last` returned
+  404, which is indistinguishable from "no session indexed yet", so the
+  extraction wrapper read an empty `sessionId` and skipped with reason
+  `no-session-id` — the same string four unrelated causes already produce.
+  An affected project accumulated zero memories indefinitely while its hooks
+  fired normally on every prompt.
+
+  Measured against every project directory on a dogfood machine that carried a
+  recoverable `cwd`: char-wise reproduced 24/24 directory names, the old
+  slash-only rule 21/24. The three misses were a space, a dot and CJK. On that
+  machine one actively used project had 26 indexed sessions, 16 consecutive
+  extraction skips and zero memories.
+
+  Two consequences worth naming. The database held **no** malformed
+  `project_id` values, which looked like health and was the opposite — the
+  bad keys could never be written in the first place. And the encoding is
+  Claude Code's, not ours, so it is now pinned by regression tests
+  (space / CJK / `.` / `_`) that assert char-wise explicitly: a byte-wise
+  implementation, which is what BSD `sed` and `tr` give you, emits three
+  dashes per CJK character.
+
+  The wrapper no longer derives the id at all. `/session/last` returns the id
+  the indexer read off disk and the wrapper uses it verbatim, which removes a
+  shell-side implementation rather than adding a correct one. Skip rows in
+  `extract.log.jsonl` now also carry `cwd`, the one fact that survives when
+  the lookup never lands — it is what made this diagnosable. That log is now
+  created `0600` and an existing one is repaired before each append: it
+  discloses the account name and every project name worked on, and a log first
+  created under a permissive umask lands at `0644`. Both write paths go through
+  the same guard, since the mode belongs to the file rather than to the call
+  site — securing one path would have secured neither, as whichever runs first
+  decides the mode. If the log cannot be secured the row is dropped; losing
+  telemetry is cheaper than leaking paths.
+
+  The fifth entry point is the MCP `projectId` argument, which a model derives
+  itself — no code change reaches it. Its description previously illustrated
+  only a slash-separated path, so a model following it produced the same wrong
+  id for any cwd with a space. It now states the character rule and uses an
+  example that contains a space.
+
 - **English function words ran the topic index** (#84, direction 3) — the
   English half of `STOPWORDS` held ~21 words while the CJK half held 56, so
   `when` was the single most frequent key in the entire table at 244 memories,

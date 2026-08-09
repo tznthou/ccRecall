@@ -15,6 +15,22 @@
 CCRECALL_PORT="${CCRECALL_PORT:-7749}"
 CCRECALL_EXTRACT_LOG="${CCRECALL_EXTRACT_LOG:-$HOME/.ccrecall/extract.log.jsonl}"
 
+# Telemetry rows carry $PWD (added with #89), which discloses the account name
+# and every project name the user works on. A log first created under a
+# permissive umask lands at 0644 — world-readable on a shared machine. Both
+# write paths below go through here: file permissions belong to the file, not
+# to the call site, so securing only one of them secures neither — whichever
+# path runs first decides the mode.
+#
+# Returns non-zero if the log cannot be secured, and callers then skip the
+# write: losing a telemetry row is cheaper than leaking paths.
+_ccrecall_secure_log() {
+  local f="$1"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
+  [ -e "$f" ] || (umask 077; : >> "$f") || return 1
+  chmod 600 "$f" 2>/dev/null || return 1
+}
+
 # Resolve the directory containing this script (for prompt file).
 # zsh leaves BASH_SOURCE empty (the user's shell is zsh), so detect zsh and
 # use its %x prompt path; eval isolates the zsh-only ${(%):-%x} syntax from
@@ -29,10 +45,19 @@ CCRECALL_SCRIPT_DIR="$(cd "$(dirname "$_ccrecall_src")" && pwd)"
 unset _ccrecall_src
 
 ccrecall-extract() {
-  local project_id
-  # printf for the same reason as session_id below: zsh's echo mangles
-  # backslash sequences, and $PWD is arbitrary user input.
-  project_id=$(printf '%s' "$PWD" | sed 's|/|-|g')
+  # #89: this used to derive project_id here with `sed 's|/|-|g'`, which
+  # diverged from Claude Code's char-wise [^A-Za-z0-9] encoding for any cwd
+  # holding a space, dot, underscore or CJK — and every such session then
+  # skipped extraction forever with no error surfaced.
+  #
+  # We do NOT reimplement the encoding in shell. BSD sed/tr are byte-wise and
+  # emit three dashes per CJK character; getting it right here would mean a
+  # second implementation to keep in sync. Instead /session/last returns the
+  # id the daemon read off disk (see routes.ts) and we use that verbatim.
+  # It stays empty until that call lands, which is fine: every consumer of
+  # project_id below sits behind a valid session_id, which implies the call
+  # succeeded.
+  local project_id=""
 
   # ── Trust pre-flight ──
   # ccrecall-extract always launches claude with --dangerously-skip-permissions, which
@@ -83,6 +108,9 @@ ccrecall-extract() {
     # skipping extraction for ~1 in 5 sessions (any title with a newline,
     # e.g. every cmux "/model" opener). Root-caused 2026-07-16.
     session_id=$(printf '%s' "$session_meta" | jq -r '.sessionId // empty' 2>/dev/null)
+    # #89: authoritative project id, read off the ~/.claude/projects/ directory
+    # name by the indexer rather than re-derived from $PWD here.
+    project_id=$(printf '%s' "$session_meta" | jq -r '.projectId // empty' 2>/dev/null)
   fi
 
   # Load the structured prompt
@@ -170,14 +198,20 @@ ${prompt}"
   # more and usually saved nothing). A missed session is cheaper than that.
   if [[ "$transcript_mode" != "jsonl" ]]; then
     printf '\n⚠️  ccRecall: no text transcript (%s) — skipping extraction.\n' "$skip_reason"
-    mkdir -p "$(dirname "$CCRECALL_EXTRACT_LOG")"
-    jq -n -c \
-      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      --arg sid "$session_id" \
-      --arg pid "$project_id" \
-      --arg reason "$skip_reason" \
-      '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"skip",reason:$reason,exitCode:null,durationSec:0}' \
-      >> "$CCRECALL_EXTRACT_LOG"
+    # cwd, not just projectId: on a skip the daemon lookup may never have
+    # landed, leaving projectId empty. The raw cwd is the one fact always
+    # available, and #89 was diagnosed precisely by comparing it against the
+    # directory names under ~/.claude/projects/.
+    if _ccrecall_secure_log "$CCRECALL_EXTRACT_LOG"; then
+      jq -n -c \
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg sid "$session_id" \
+        --arg pid "$project_id" \
+        --arg cwd "$PWD" \
+        --arg reason "$skip_reason" \
+        '{ts:$ts,sessionId:$sid,projectId:$pid,cwd:$cwd,mode:"skip",reason:$reason,exitCode:null,durationSec:0}' \
+        >> "$CCRECALL_EXTRACT_LOG"
+    fi
     return $claude_exit
   fi
 
@@ -309,17 +343,21 @@ ${prompt}"
   # rather than invoking — splits exit-0 zero-write rows into silent miss vs
   # genuine no-op (#75). Absent on rows written before this marker shipped, so
   # analysis must treat missing as unknown, not as 0.
-  jq -n -c \
-    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg sid "$session_id" \
-    --arg pid "$project_id" \
-    --arg stderr "$extract_stderr" \
-    --arg marker "$stdout_marker" \
-    --argjson exit "$extract_exit" \
-    --argjson dur "$extract_duration" \
-    --argjson textSaves "$recall_save_text_count" \
-    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker,recallSaveTextCount:$textSaves}' \
-    >> "$CCRECALL_EXTRACT_LOG"
+  # Secured even though this row carries no cwd: the mode belongs to the file,
+  # and this path can be the one that creates it.
+  if _ccrecall_secure_log "$CCRECALL_EXTRACT_LOG"; then
+    jq -n -c \
+      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg sid "$session_id" \
+      --arg pid "$project_id" \
+      --arg stderr "$extract_stderr" \
+      --arg marker "$stdout_marker" \
+      --argjson exit "$extract_exit" \
+      --argjson dur "$extract_duration" \
+      --argjson textSaves "$recall_save_text_count" \
+      '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker,recallSaveTextCount:$textSaves}' \
+      >> "$CCRECALL_EXTRACT_LOG"
+  fi
 
   return $claude_exit
 }
