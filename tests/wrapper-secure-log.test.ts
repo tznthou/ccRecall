@@ -59,6 +59,7 @@ function cleanEnv(home: string): NodeJS.ProcessEnv {
 interface ShellResult {
   code: number
   stderr: string
+  stdout?: string
 }
 
 /**
@@ -87,6 +88,22 @@ const guard = (target: string, home: string, shell = 'bash'): ShellResult =>
 /** Permission bits, read through Node so the assertion is identical on macOS and Linux. */
 async function mode(p: string): Promise<string> {
   return ((await stat(p)).mode & 0o777).toString(8)
+}
+
+/**
+ * Shell source with comment lines dropped.
+ *
+ * Every structural assertion below scans the shipped script for a shape that
+ * must — or must not — appear. A comment naming one of those shapes is not an
+ * instance of it, and this wrapper's comments run long: both mkdir sites carry
+ * a paragraph explaining the umask, and the guard's own comments already quote
+ * the patterns being matched. Scanning raw lines would fail the suite against
+ * a correct wrapper the day someone writes `mkdir -p` or
+ * `>> "$CCRECALL_EXTRACT_LOG"` inside a comment — a red test with nothing
+ * wrong in the code, which costs whoever hits it far more than it costs here.
+ */
+function codeLines(src: string): string[] {
+  return src.split('\n').filter(l => !l.trimStart().startsWith('#'))
 }
 
 /** The guard's source text, for the one property no behaviour can expose. */
@@ -343,25 +360,28 @@ describe('extract wrapper: a dropped row must not take the session with it', () 
       encoding: 'utf8',
       env: cleanEnv(dir),
     })
-    return { code: r.status ?? -1, stderr: (r.stdout ?? '') }
+    // `printf REACHED` writes to stdout; the marker is asserted from the
+    // stream it actually lands on. Both are returned so a failure here shows
+    // what the shell complained about instead of only that REACHED is missing.
+    return { code: r.status ?? -1, stderr: r.stderr ?? '', stdout: r.stdout ?? '' }
   }
 
   it('keeps going under bash set -e when the row cannot be written', () => {
     const r = underErrexit('bash')
-    expect(r.stderr).toBe('REACHED')
+    expect(r.stdout).toBe('REACHED')
     expect(r.code).toBe(0)
   })
 
   it.skipIf(!HAS_ZSH)('keeps going under zsh err_exit when the row cannot be written', () => {
     const r = underErrexit('zsh')
-    expect(r.stderr).toBe('REACHED')
+    expect(r.stdout).toBe('REACHED')
     expect(r.code).toBe(0)
   })
 
   it('pairs every call site with a failure-tolerant suffix', async () => {
     // The `|| :` lives at the call sites, so the behavioural pair above can
     // only prove the shape works — not that both sites actually carry it.
-    const lines = (await readFile(WRAPPER, 'utf8')).split('\n')
+    const lines = codeLines(await readFile(WRAPPER, 'utf8'))
     const calls: string[] = []
     lines.forEach((line, i) => {
       if (!/_ccrecall_log_append "\$CCRECALL_EXTRACT_LOG"/.test(line)) return
@@ -384,8 +404,7 @@ describe('extract wrapper: a dropped row must not take the session with it', () 
     // telemetry append, and `mkdir -p` does not touch an existing one — so
     // an unguarded mkdir there leaves the same function producing 0700 when
     // a skip returns early and 0755 otherwise. Both must carry the umask.
-    const lines = (await readFile(WRAPPER, 'utf8')).split('\n')
-    const mkdirs = lines.filter(l => /mkdir\s+-p/.test(l))
+    const mkdirs = codeLines(await readFile(WRAPPER, 'utf8')).filter(l => /mkdir\s+-p/.test(l))
     expect(mkdirs.length).toBeGreaterThanOrEqual(2)
     for (const m of mkdirs) {
       expect(m).toMatch(/umask\s+077;\s*mkdir\s+-p/)
@@ -411,7 +430,7 @@ describe('extract wrapper: the guard cannot be bypassed or removed', () => {
     // Anchored to the creation line specifically: the guard now carries a
     // second `umask 077` for mkdir, and a function-wide match would let
     // either one cover for the other going missing.
-    const creation = (await guardSource()).split('\n').find(l => /:\s*>>\s*"\$f"/.test(l))
+    const creation = codeLines(await guardSource()).find(l => /:\s*>>\s*"\$f"/.test(l))
     expect(creation).toBeDefined()
     expect(creation).toMatch(/umask\s+077/)
   })
@@ -424,7 +443,7 @@ describe('extract wrapper: the guard cannot be bypassed or removed', () => {
     // line scan gets both `else` branches and nested `if` wrong — there is
     // exactly one write site, and this pins that.
     const src = await readFile(WRAPPER, 'utf8')
-    const lines = src.split('\n')
+    const lines = codeLines(src)
 
     // No caller may redirect into the log itself; that is the helper's job.
     expect(lines.filter(l => />>\s*"\$CCRECALL_EXTRACT_LOG"/.test(l))).toEqual([])
@@ -433,7 +452,7 @@ describe('extract wrapper: the guard cannot be bypassed or removed', () => {
     expect(helper).toBeDefined()
 
     // Exactly one row-writing redirect, and it secures before it writes.
-    const writes = helper!.split('\n').filter(l => /jq\b.*>>\s*"\$f"/.test(l))
+    const writes = codeLines(helper!).filter(l => /jq\b.*>>\s*"\$f"/.test(l))
     expect(writes).toHaveLength(1)
     expect(helper!.indexOf('_ccrecall_secure_log')).toBeLessThan(helper!.indexOf('>> "$f"'))
 
