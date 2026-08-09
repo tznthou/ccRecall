@@ -113,8 +113,40 @@ async function mode(p: string): Promise<string> {
  * continuation stays broken, and the scan sees it. Verified both ways —
  * see the unit test directly below.
  */
+/**
+ * One line with its comment removed — inline or whole-line alike.
+ *
+ * A trailing comment is the same hazard as a whole-line one, and a nastier
+ * shape because refactors produce it naturally:
+ *
+ *   (umask 022; mkdir -p "$log_dir")  # was: (umask 077; …) 2>/dev/null || :
+ *
+ * What runs is 0755, unsilenced, and fatal under errexit; every token the
+ * assertions look for sits in the comment. Keeping the old line beside the
+ * new one is ordinary practice, so this needs no bad actor to happen.
+ *
+ * Quote tracking is what makes it safe to cut at `#`: the wrapper's jq
+ * programs and message strings may contain one, and cutting there would
+ * truncate a line the assertions must still see in full. Single quotes,
+ * double quotes and backslash escapes inside double quotes are honoured.
+ * `$'…'`, heredocs and backticks are not — the wrapper uses none, and the
+ * probes below fail loudly if that ever stops being true.
+ */
+function stripComment(line: string): string {
+  let quote: "'" | '"' | null = null
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (quote === '"' && c === '\\') { i++; continue }
+    if (quote) { if (c === quote) quote = null; continue }
+    if (c === "'" || c === '"') { quote = c; continue }
+    // A `#` only opens a comment at a word boundary; `a#b` is one word.
+    if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i).trimEnd()
+  }
+  return line
+}
+
 function codeLines(src: string): string[] {
-  return src.split('\n').map(l => (l.trimStart().startsWith('#') ? '' : l))
+  return src.split('\n').map(stripComment)
 }
 
 describe('codeLines', () => {
@@ -131,6 +163,21 @@ describe('codeLines', () => {
 
   it('blanks indented comments, and leaves code that merely contains # alone', () => {
     expect(codeLines('  # indented\ncode "a#b"')).toEqual(['', 'code "a#b"'])
+  })
+
+  it('cuts a trailing comment off the line it trails', () => {
+    // The refactor shape: old line parked in a comment beside the new one.
+    // Without this the assertions read their required tokens straight out of
+    // the comment and pass over a command that runs 0755 and unsilenced.
+    const line = '  (umask 022; mkdir -p "$d")  # was: (umask 077; mkdir -p "$d") 2>/dev/null || :'
+    expect(stripComment(line)).toBe('  (umask 022; mkdir -p "$d")')
+  })
+
+  it('does not cut at a # that lives inside quotes', () => {
+    // Cutting here would truncate a line the assertions must see in full.
+    expect(stripComment(`jq '{a:"#1"}' "$f"`)).toBe(`jq '{a:"#1"}' "$f"`)
+    expect(stripComment('echo "a # b" # tail')).toBe('echo "a # b"')
+    expect(stripComment('echo "esc \\" # still in" # tail')).toBe('echo "esc \\" # still in"')
   })
 })
 
