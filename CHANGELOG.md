@@ -11,7 +11,7 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
-## [Unreleased]
+## [0.7.1] — 2026-08-10
 
 ### Changed
 
