@@ -24,11 +24,60 @@ CCRECALL_EXTRACT_LOG="${CCRECALL_EXTRACT_LOG:-$HOME/.ccrecall/extract.log.jsonl}
 #
 # Returns non-zero if the log cannot be secured, and callers then skip the
 # write: losing a telemetry row is cheaper than leaking paths.
+#
+# Every step is silenced, the creation included: a shell redirection error
+# names the full path on stderr, which is the account and project name this
+# function exists to withhold. Failing quietly is the contract — the caller
+# decides what, if anything, to say.
 _ccrecall_secure_log() {
   local f="$1"
-  mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
-  [ -e "$f" ] || (umask 077; : >> "$f") || return 1
+  # Created under the restrictive umask so a directory this line brings into
+  # existence starts at 0700. It deliberately does not touch the mode of a
+  # directory that is already there: CCRECALL_EXTRACT_LOG is user-configurable,
+  # so that directory can be one the user picked — a project root, or the
+  # current directory for a relative setting — and neither tightening it nor
+  # refusing to use it is this script's call to make. Both were tried and both
+  # were worse: chmod turned a project directory 0755 into 0700, and refusing
+  # dropped every row forever on a `umask 002` machine, silently.
+  #
+  # Existing installs therefore keep whatever mode they have. ~/.ccrecall is
+  # also created on the TypeScript side without a mode (src/core/database.ts,
+  # src/core/integrity-monitor.ts; only recall-telemetry.ts passes 0o700), and
+  # whichever creator runs first wins. Fixing that belongs there, not here.
+  (umask 077; mkdir -p "$(dirname "$f")") 2>/dev/null || return 1
+  # Reject a symlink. This narrows the window rather than closing it: the test
+  # here, the chmod below and the append that follows are separate pathname
+  # resolutions, and both chmod(2) and >> follow links, so an attacker who can
+  # write this directory can still win the race by planting between them.
+  # Closing it properly needs open(O_NOFOLLOW|O_APPEND) + fchmod on the one
+  # descriptor, which shell cannot express; the real remedy is the directory
+  # not being writable by anyone else in the first place.
+  if [ -L "$f" ]; then return 1; fi
+  [ -e "$f" ] || (umask 077; : >> "$f") 2>/dev/null || return 1
+  # And refuse anything that is not a regular file: chmod on a directory
+  # succeeds and leaves it non-traversable, and the append then fails open.
+  [ -f "$f" ] || return 1
   chmod 600 "$f" 2>/dev/null || return 1
+}
+
+# The only place that appends to the telemetry log. Both callers go through
+# here rather than each pairing a write with its own guard: a guard the caller
+# has to remember is one a later caller forgets, and permissions belong to the
+# file — a single unguarded append under a permissive umask re-creates the log
+# 0644 and every other writer inherits it. Securing is not the caller's job to
+# get right, so it is not the caller's job at all.
+#
+# Arguments after the path are forwarded verbatim to `jq -n -c`.
+# Silenced like every step of the guard: the redirection is set up by the
+# shell, so an open that fails here — the target replaced between the guard
+# and this line, a full disk — prints the full path, the same disclosure the
+# mode exists to prevent. jq's own diagnostics go with it; its arguments are
+# fixed in this file rather than user input, so a jq error is a bug this
+# repo's tests catch, not a condition to report at runtime.
+_ccrecall_log_append() {
+  local f="$1"; shift
+  _ccrecall_secure_log "$f" || return 1
+  { jq -n -c "$@" >> "$f"; } 2>/dev/null
 }
 
 # Resolve the directory containing this script (for prompt file).
@@ -202,16 +251,13 @@ ${prompt}"
     # landed, leaving projectId empty. The raw cwd is the one fact always
     # available, and #89 was diagnosed precisely by comparing it against the
     # directory names under ~/.claude/projects/.
-    if _ccrecall_secure_log "$CCRECALL_EXTRACT_LOG"; then
-      jq -n -c \
-        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        --arg sid "$session_id" \
-        --arg pid "$project_id" \
-        --arg cwd "$PWD" \
-        --arg reason "$skip_reason" \
-        '{ts:$ts,sessionId:$sid,projectId:$pid,cwd:$cwd,mode:"skip",reason:$reason,exitCode:null,durationSec:0}' \
-        >> "$CCRECALL_EXTRACT_LOG"
-    fi
+    _ccrecall_log_append "$CCRECALL_EXTRACT_LOG" \
+      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg sid "$session_id" \
+      --arg pid "$project_id" \
+      --arg cwd "$PWD" \
+      --arg reason "$skip_reason" \
+      '{ts:$ts,sessionId:$sid,projectId:$pid,cwd:$cwd,mode:"skip",reason:$reason,exitCode:null,durationSec:0}' || :
     return $claude_exit
   fi
 
@@ -257,7 +303,18 @@ ${prompt}"
   # command before it).
   local log_dir
   log_dir=$(dirname "$CCRECALL_EXTRACT_LOG")
-  mkdir -p "$log_dir"
+  # Same umask as the log guard uses. This line runs ~95 lines before the
+  # telemetry append and creates the directory on every non-skip session, so
+  # without it the guard's own mkdir is a no-op here and the two paths through
+  # this function would leave the directory at different modes — 0700 when a
+  # skip returns early, 0755 otherwise.
+  #
+  # Silenced and non-fatal for the same reasons as everything else that
+  # touches this path: a failure prints $log_dir, and a bare command is not
+  # exempt from errexit. Ignoring the failure is safe — mktemp below degrades
+  # to /dev/null on its own, and the log guard re-creates the directory when
+  # the telemetry row is written.
+  (umask 077; mkdir -p "$log_dir") 2>/dev/null || :
   find "$log_dir" -maxdepth 1 -name 'extract-stdout.*' -mmin +60 -delete 2>/dev/null
   # Trailing Xs are mandatory: BSD/macOS mktemp only substitutes Xs at the END
   # of the template — an inner XXXXXX (e.g. a .tmp suffix after it) is taken
@@ -345,19 +402,23 @@ ${prompt}"
   # analysis must treat missing as unknown, not as 0.
   # Secured even though this row carries no cwd: the mode belongs to the file,
   # and this path can be the one that creates it.
-  if _ccrecall_secure_log "$CCRECALL_EXTRACT_LOG"; then
-    jq -n -c \
-      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      --arg sid "$session_id" \
-      --arg pid "$project_id" \
-      --arg stderr "$extract_stderr" \
-      --arg marker "$stdout_marker" \
-      --argjson exit "$extract_exit" \
-      --argjson dur "$extract_duration" \
-      --argjson textSaves "$recall_save_text_count" \
-      '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker,recallSaveTextCount:$textSaves}' \
-      >> "$CCRECALL_EXTRACT_LOG"
-  fi
+  #
+  # `|| :` on both call sites is load-bearing under `set -e` / `setopt
+  # err_exit`. The previous shape put the guard in an `if` condition, which
+  # errexit exempts; a bare command is not exempt, so a dropped telemetry row
+  # would abort the function before `return $claude_exit` and hand the caller
+  # 1 instead of Claude's real exit status — in an interactive shell with
+  # errexit set, it would close the shell.
+  _ccrecall_log_append "$CCRECALL_EXTRACT_LOG" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg sid "$session_id" \
+    --arg pid "$project_id" \
+    --arg stderr "$extract_stderr" \
+    --arg marker "$stdout_marker" \
+    --argjson exit "$extract_exit" \
+    --argjson dur "$extract_duration" \
+    --argjson textSaves "$recall_save_text_count" \
+    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker,recallSaveTextCount:$textSaves}' || :
 
   return $claude_exit
 }

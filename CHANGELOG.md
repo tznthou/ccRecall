@@ -33,6 +33,65 @@ more like an iteration counter than a strict SemVer major).
 
 ### Fixed
 
+- **The telemetry log guard leaked, and could be bypassed, in three ways** —
+  the guard shipped with #89 creates `extract.log.jsonl` `0600` and repairs an
+  existing one. Three holes in it are closed here.
+
+  Its creation step was the single line without `2>/dev/null`, so when the log
+  could not be secured, the shell's redirection error named the full path on
+  stderr: exactly the account and project names the mode withholds. Failing
+  quietly is the contract — the caller decides what, if anything, to say.
+
+  A directory another local user can write into lets them pre-plant a symlink
+  at the log's path, which both the `chmod` and the append then follow — the
+  guard would report success while changing a victim file's mode and appending
+  the user's `cwd` into it. The guard now rejects a log that is a symlink, and
+  one that is not a regular file. This **narrows** that window rather than
+  closing it: the test, the `chmod` and the append are separate pathname
+  resolutions, so an attacker who can write the directory can still win the
+  race by planting between them. Closing it properly needs
+  `open(O_NOFOLLOW|O_APPEND)` plus `fchmod` on the one descriptor, which shell
+  cannot express — the real remedy is the directory not being writable by
+  anyone else.
+
+  Every directory this file creates now starts at `0700`, on both paths
+  through the wrapper: the extraction path creates it around ninety lines
+  before the telemetry append, and `mkdir -p` does not touch an existing
+  directory, so guarding only the later one left the same function producing
+  `0700` on an early skip and `0755` otherwise.
+
+  A directory that already exists is **not** re-moded, which leaves the
+  underlying exposure open on installs that already have one. `~/.ccrecall` is
+  also created on the TypeScript side without an explicit mode
+  (`src/core/database.ts`, `src/core/integrity-monitor.ts`; only
+  `src/core/recall-telemetry.ts` passes `0o700`), and whichever creator runs
+  first sets it — typically `0755`, or `0775` where `umask 002` is configured.
+  Both ways of repairing it were implemented here and reverted during review.
+  Re-moding silently changed directories ccRecall does not own: with a
+  relative `CCRECALL_EXTRACT_LOG` the parent is the working directory, and a
+  project directory went from `0755` to `0700`. Refusing to use a
+  group-writable directory dropped every telemetry row, permanently and with
+  no message, on any machine whose umask is `002` — the user-private-group
+  default on several distributions. Repairing an existing directory belongs
+  with the creators listed above; that fix is tracked separately.
+
+  Both call sites end in `|| :`. They previously sat in an `if` condition,
+  which `errexit` exempts; a bare command is not exempt, so under `set -e` a
+  dropped telemetry row would have replaced Claude's exit status — and closed
+  an interactive shell that had `errexit` set.
+
+  Each of the two write sites paired its own guard with its own redirect, so
+  staying secure depended on every future caller remembering to. They now go
+  through a single `_ccrecall_log_append`, because permissions belong to the
+  file rather than to the call site: one unguarded append under a permissive
+  umask re-creates the log `0644` and every other writer inherits it.
+
+  All of this is now pinned by tests, since a log that drifts back to `0644`
+  raises no error and looks identical in every telemetry query. Each of the
+  guard's three steps has its failure exercised for real rather than asserted
+  structurally, and the silence contract is checked under zsh as well — the
+  shell that actually sources this wrapper.
+
 - **`cwd` → `project_id` encoding drift silenced whole projects** (#89) —
   Claude Code names each folder under `~/.claude/projects/` by replacing every
   character outside `[A-Za-z0-9]` with `-`. ccRecall replaced only `/`, so any
