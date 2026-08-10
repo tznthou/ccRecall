@@ -488,17 +488,33 @@ describe('extract wrapper: the guard cannot be bypassed or removed', () => {
     // No caller may redirect into the log itself; that is the helper's job.
     expect(fns).not.toMatch(/>>\s*"\$CCRECALL_EXTRACT_LOG"/)
 
+    // Read from the helper alone so the call sites cannot supply either the
+    // guard reference or the silencing on its behalf.
+    const helper = parsedShell(dir, '_ccrecall_log_append')
+
+    // Appending to the log happens in exactly two functions — the guard
+    // creates the file, the helper writes the rows — so a third `>> "$f"`
+    // anywhere else is an append the scan below never looks at. Ruled out
+    // rather than assumed.
+    const appends = (s: string) => s.match(/>>\s*"\$f"/g) ?? []
+    const guardFn = parsedShell(dir, '_ccrecall_secure_log')
+    expect(appends(helper).length + appends(guardFn).length).toBe(appends(fns).length)
+
     // Exactly one row-writing redirect, and it is silenced. Asserted
     // structurally because the guard now rejects every target whose open
     // would fail, so the behavioural tests above can no longer reach this
     // line while failing — the remaining route to it is the target being
     // swapped after the guard returns.
-    const writes = fns.match(/\{\s*jq\b[^}]*>>\s*"\$f"\s*\}\s*2>\s*\/dev\/null/g) ?? []
+    //
+    // Both counts are taken, not just the silenced one: counting only the
+    // silenced writes and asserting there is one lets an unguarded live
+    // append sit beside a guarded dead branch and still read as green.
+    const writes = appends(helper)
+    const silenced = helper.match(/\{\s*jq\b[^}]*>>\s*"\$f"\s*\}\s*2>\s*\/dev\/null/g) ?? []
     expect(writes).toHaveLength(1)
+    expect(silenced).toHaveLength(writes.length)
 
-    // Ordering, read from the helper alone so the call sites cannot supply
-    // the guard reference on its behalf.
-    const helper = parsedShell(dir, '_ccrecall_log_append')
+    // Ordering: the guard has to run before the write it protects.
     expect(helper.indexOf('_ccrecall_secure_log')).toBeLessThan(helper.indexOf('>> "$f"'))
 
     // Without this the checks above pass vacuously the day the helper is
