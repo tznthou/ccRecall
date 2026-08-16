@@ -48,6 +48,11 @@ jobs:
 
       - run: pnpm build
 
+      # The #99 regression tests need a real zsh (see ci.yml) and this job
+      # gates the npm publish — a silent skip here would ship on less than
+      # the full suite. ubuntu-latest does not preinstall zsh.
+      - run: sudo apt-get update && sudo apt-get install -y zsh
+
       # Full test suite must pass before anything reaches npm.
       - run: pnpm vitest run
 
