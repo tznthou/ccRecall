@@ -325,9 +325,13 @@ ${prompt}"
   # discard behavior rather than losing the extraction run.
   [[ -n "$stdout_tmp" ]] || stdout_tmp=/dev/null
   local extract_stderr extract_exit
+  # Every rm in this function is `command rm`: the file is sourced into the
+  # user's interactive shell, so a bare rm resolves through their aliases —
+  # a trash-style wrapper that rejects `--` intercepts it and the capture is
+  # stranded (#99). Same hazard `command claude` below already guards.
   extract_stderr=$(
-    trap 'rm -f -- "$stdout_tmp" 2>/dev/null; exit 130' INT
-    trap 'rm -f -- "$stdout_tmp" 2>/dev/null; exit 143' TERM
+    trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 130' INT
+    trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 143' TERM
     command claude -p \
       --no-session-persistence \
       --model haiku \
@@ -365,7 +369,7 @@ ${prompt}"
   # grep exits 1 with empty output on no match (and $stdout_tmp is /dev/null when
   # mktemp failed); --argjson would abort the whole telemetry write on a non-number.
   [[ "$recall_save_text_count" =~ ^[0-9]+$ ]] || recall_save_text_count=0
-  rm -f -- "$stdout_tmp" 2>/dev/null
+  command rm -f -- "$stdout_tmp" 2>/dev/null
   # Scrub common credential formats before stderr reaches the telemetry log.
   # claude echoes its own key (sk-ant-) in auth errors, and any MCP server
   # loaded for extraction (this runs with --dangerously-skip-permissions) can
