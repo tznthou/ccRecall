@@ -11,6 +11,21 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Extraction stdout capture was never deleted when `rm` is aliased** — the
+  wrapper is sourced into the user's interactive shell, so its three bare
+  `rm -f --` calls resolved through the user's aliases; a trash-style alias
+  that rejects `--` had been failing all three silently since #66, leaving
+  the raw model stdout on disk until the 60-minute age sweep instead of the
+  intended one second. All three sites now use `command rm`, matching the
+  existing `command claude` guard. Regression tests run the shipped lines
+  under a real interactive zsh with a hostile alias in scope, exercising
+  both expansion paths separately — parse-time on source, and alias
+  expansion at the moment a trap fires. (#99)
+
 ## [0.7.1] — 2026-08-10
 
 ### Changed

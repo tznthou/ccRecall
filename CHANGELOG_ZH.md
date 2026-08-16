@@ -8,6 +8,18 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [未發布]
+
+### 修復
+
+- **`rm` 被 alias 攔截時，extraction stdout capture 從未被刪除** — wrapper 被
+  source 進使用者的互動 shell，三處裸 `rm -f --` 都會經過使用者的 alias 解析；
+  垃圾桶式 alias 不接受 `--`，自 #66 起三處全數靜默失敗，原始模型 stdout 留在
+  磁碟上直到 60 分鐘的年齡清掃才消失（設計意圖是一秒內刪除）。三處一律改為
+  `command rm`，對齊既有的 `command claude` 防護；regression test 在真實互動
+  zsh 加敵意 alias 下執行 shipped 的那幾行，兩條展開路徑（source 時的
+  parse-time 展開、trap 觸發時的 alias 展開）分開驗證。（#99）
+
 ## [0.7.1] — 2026-08-10
 
 ### 變更
