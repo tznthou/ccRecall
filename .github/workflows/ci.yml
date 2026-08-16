@@ -50,4 +50,11 @@ jobs:
       # modify source. Fail on any lint error instead.
       - run: pnpm exec eslint .
 
+      # The #99 regression tests run the wrapper's deletion lines in a real
+      # interactive zsh and skip when it is absent. macOS ships zsh;
+      # ubuntu-latest does not, and without this step the Linux legs report
+      # green while silently skipping that suite.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - run: pnpm vitest run
