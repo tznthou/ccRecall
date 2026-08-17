@@ -243,8 +243,11 @@ export function recallContextHandler(
       })
     }
 
-    // FTS fallback if no topic matched — per-keyword union (queryMemories quotes every
-    // token into a phrase, so "foo OR bar" collapses to a phrase query, not a boolean OR)
+    // FTS fallback if no topic matched — per-keyword union. queryMemories now
+    // OR-joins its own terms, so one combined call would also return matches;
+    // the union is kept deliberately because it gives every keyword its own
+    // top-N slice, whereas a single OR query ranks globally and can let one
+    // dominant keyword crowd the others out entirely.
     let fallback: Memory[] | null = null
     if (clusters.length === 0 && args.keywords.length > 0) {
       const seen = new Set<number>()
@@ -367,13 +370,19 @@ export function registerTools(server: McpServer, db: Database): void {
         '- Before concluding "X does not work" or "we should do Y instead"',
         '',
         'HOW TO PHRASE THE QUERY:',
-        '- Give MORE terms rather than fewer. The index is trigram-based and',
-        '  ranked by BM25, which discriminates by how many query terms a',
-        '  document matches — a broad OR query ranks better than a narrow one.',
-        '  Do not use AND; it collapses the result set.',
-        '- Use English technical terms. Memory content is predominantly',
-        '  English and the tokenizer is trigram, so CJK queries return nothing.',
-        '  Translate the concept before searching.',
+        '- Give MORE terms rather than fewer. Terms are OR-joined, so extra',
+        '  terms widen recall rather than narrowing it, and BM25 ranks by how',
+        '  many terms a document matches — a broad query beats a narrow one.',
+        '- Do not type AND / OR / NEAR yourself. Every term is quoted as a',
+        '  literal to block operator injection, so an operator you type is',
+        '  just one more meaningless search word.',
+        '- Each term needs 3+ characters. The trigram tokenizer cannot index',
+        '  anything shorter, in ANY language — `UI` and `DB` fail exactly as',
+        '  `記憶` does. CJK is not excluded: 3-character terms match fine.',
+        '  (An all-short query falls back to a substring scan that ANDs the',
+        '  terms, so keep those queries to one or two terms.)',
+        '- Prefer English technical terms — memory content is predominantly',
+        '  English, so an English query simply has more to match.',
         '- Search the GENERAL name of a pattern, not this project\'s own names.',
         '  Project nouns pull local results to the top and bury the rest.',
         '',

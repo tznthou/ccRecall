@@ -19,6 +19,17 @@ ccRecall 的重要版本變更記錄在這裡。
   `command rm`，對齊既有的 `command claude` 防護；regression test 在真實互動
   zsh 加敵意 alias 下執行 shipped 的那幾行，兩條展開路徑（source 時的
   parse-time 展開、trap 觸發時的 alias 展開）分開驗證。（#99）
+- **`recall_query` 要呼叫端把查詢放寬，實作卻在收窄** — 工具描述要求「給更多詞
+  而不是更少」，前提是詞會 OR 連接、BM25 依文件命中幾個詞來區辨。但
+  `queryMemories` 把每個詞包上引號後用空白連接，FTS5 讀成隱含 AND，於是多給詞
+  是縮小而不是放寬結果集：七個詞的查詢回零筆，同一組詞改成 OR 連接則正確的那筆
+  記憶排第一。失敗長相是 `No memories found`——與「這筆記憶不存在」無從區分，
+  所以會被讀成沒有，而不是壞了。`queryMemories` 改為 OR 連接；`searchSessions`
+  刻意保持 AND：session 搜尋是在已知語料裡收窄，記憶檢索是在未知語料裡放寬，
+  兩者共用同一個連接語意正是問題根源。逐詞引號包裹沒有動，operator injection
+  仍然擋住，短 token 的 LIKE fallback 也維持 AND。描述裡「CJK 查詢不會有任何
+  命中」同樣有誤，一併更正——trigram tokenizer 索引不了任何少於三字元的詞，
+  與語言無關。
 
 ## [0.7.1] — 2026-08-10
 

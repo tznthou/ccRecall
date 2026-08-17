@@ -1536,11 +1536,26 @@ export class Database {
     return v && Database.VALID_OUTCOMES.has(v) ? v as OutcomeStatus : null
   }
 
-  /** FTS5 安全引號包裹：所有 token 無條件包引號，防止 operator injection */
-  private static fts5QuoteIfNeeded(query: string): string {
+  /** FTS5 安全引號包裹：所有 token 無條件包引號，防止 operator injection。
+   *  `joiner` 只決定 token 之間的連接語意，不影響引號保護。 */
+  private static fts5Quote(query: string, joiner: string): string {
     return query.split(/\s+/).filter(Boolean).map(token =>
       `"${token.replace(/"/g, '""')}"`,
-    ).join(' ')
+    ).join(joiner)
+  }
+
+  /** AND 語意（FTS5 以空白為隱含 AND）。用於 session 搜尋：使用者在已知的
+   *  語料裡用關鍵字**收窄**範圍，多打一個詞是為了濾掉雜訊。 */
+  private static fts5QuoteIfNeeded(query: string): string {
+    return Database.fts5Quote(query, ' ')
+  }
+
+  /** OR 語意。用於記憶檢索：呼叫端被明確要求「give MORE terms rather than
+   *  fewer」，前提是多給的詞會**放寬**召回、再由 BM25 依命中詞數排序。掛回
+   *  隱含 AND 會讓詞越多結果越少，一路收斂到零命中——而且失敗長相是
+   *  `No memories found`，與「真的沒有這筆記憶」無法區分。 */
+  private static fts5QuoteOrJoin(query: string): string {
+    return Database.fts5Quote(query, ' OR ')
   }
 
   /** LIKE pattern builder for fallback. Escapes SQL LIKE wildcards so user
@@ -1871,7 +1886,7 @@ export class Database {
 
   queryMemories(query: string, limit: number, projectId?: string | null): Memory[] {
     const rawQuery = query
-    const q = Database.fts5QuoteIfNeeded(query)
+    const q = Database.fts5QuoteOrJoin(query)
     if (!q) return []
     try {
       const cappedLimit = Math.min(limit, 100)
