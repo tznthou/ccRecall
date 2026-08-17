@@ -181,6 +181,53 @@ describe('queryMemories', () => {
   })
 })
 
+describe('queryMemories multi-term recall (OR across terms)', () => {
+  // recall_query's tool description tells callers to give MORE terms rather
+  // than fewer, because BM25 discriminates by how many terms a document
+  // matches. That only holds if extra terms widen the set. FTS5 reads
+  // space-separated phrases as implicit AND, which does the opposite — it
+  // narrows to documents containing every term. Regression for 2026-08-17:
+  // a 7-term query returned 0 rows while the same terms OR-joined returned
+  // the correct answer at rank 1.
+  //
+  // The LIKE fallback below deliberately keeps AND; it only runs when a query
+  // has sub-trigram tokens FTS5 cannot index at all, which is a different job.
+  beforeEach(() => {
+    db.saveMemory(mem({ content: 'shell alias pollution in sourced functions, use command rm to bypass', confidence: 0.8 }))
+    db.saveMemory(mem({ content: 'interactive shell functions can pass CI even when broken', confidence: 0.8 }))
+    db.saveMemory(mem({ content: 'goreleaser snapshot validation before pushing release tags', confidence: 0.8 }))
+  })
+
+  it('adding terms widens recall instead of collapsing it', () => {
+    const narrow = db.queryMemories('shell alias', 10)
+    const wide = db.queryMemories('shell alias pollution sourced interactive command bypass', 10)
+    expect(narrow.length).toBeGreaterThan(0)
+    expect(wide.length).toBeGreaterThanOrEqual(narrow.length)
+  })
+
+  it('returns a document matching only some of the terms', () => {
+    const results = db.queryMemories('goreleaser unrelatedtermone unrelatedtermtwo', 10)
+    expect(results.map(r => r.content)).toContain(
+      'goreleaser snapshot validation before pushing release tags',
+    )
+  })
+
+  it('ranks a document matching more terms above one matching fewer', () => {
+    // Both seeded rows carry the same confidence, so ordering here is BM25
+    // alone — otherwise the confidence factor would confound the assertion.
+    const results = db.queryMemories('shell alias pollution bypass', 10)
+    expect(results.length).toBeGreaterThanOrEqual(2)
+    expect(results[0].content).toContain('alias pollution')
+  })
+
+  it('still treats FTS5 operators as literal terms, not syntax', () => {
+    expect(() => db.queryMemories('shell AND NOT alias', 10)).not.toThrow()
+    expect(() => db.queryMemories('shell OR (alias', 10)).not.toThrow()
+    // `NEAR` as a bare word must not become a NEAR() query
+    expect(() => db.queryMemories('NEAR shell alias', 10)).not.toThrow()
+  })
+})
+
 describe('queryMemories LIKE fallback (short tokens)', () => {
   // Trigram tokenizer cannot index tokens shorter than 3 chars. The fallback
   // path runs LIKE on raw memory content. Single-token queries keep the simple

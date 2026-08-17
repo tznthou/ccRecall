@@ -25,6 +25,22 @@ more like an iteration counter than a strict SemVer major).
   under a real interactive zsh with a hostile alias in scope, exercising
   both expansion paths separately — parse-time on source, and alias
   expansion at the moment a trap fires. (#99)
+- **`recall_query` told callers to widen the query while the implementation
+  narrowed it** — the tool description asks for "MORE terms rather than
+  fewer", on the premise that terms are OR-joined and BM25 discriminates by
+  how many of them a document matches. `queryMemories` quoted each term and
+  joined them with spaces, which FTS5 reads as implicit AND, so extra terms
+  shrank the result set instead of widening it: a seven-term query returned
+  zero rows while the same terms OR-joined returned the correct memory at
+  rank 1. The failure surfaced as `No memories found` — indistinguishable
+  from the memory not existing, so it read as absence rather than breakage.
+  `queryMemories` now OR-joins its terms. `searchSessions` keeps AND on
+  purpose: a session search narrows a known corpus, while recall widens an
+  unknown one, and sharing one joiner between them was the original mistake.
+  Per-term quoting is untouched, so operator injection stays blocked, and the
+  short-token LIKE fallback still ANDs. The description's claim that "CJK
+  queries return nothing" was also wrong and is corrected — the trigram
+  tokenizer cannot index any term under three characters, in any language.
 
 ## [0.7.1] — 2026-08-10
 
