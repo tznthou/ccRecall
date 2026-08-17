@@ -29,7 +29,7 @@ ccRecall 的重要版本變更記錄在這裡。
   兩者共用同一個連接語意正是問題根源。逐詞引號包裹沒有動，operator injection
   仍然擋住，短 token 的 LIKE fallback 也維持 AND。描述裡「CJK 查詢不會有任何
   命中」同樣有誤，一併更正——trigram tokenizer 索引不了任何少於三字元的詞，
-  與語言無關。
+  與語言無關。（#101）
 
 ## [0.7.1] — 2026-08-10
 
