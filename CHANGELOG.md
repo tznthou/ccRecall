@@ -41,6 +41,7 @@ more like an iteration counter than a strict SemVer major).
   short-token LIKE fallback still ANDs. The description's claim that "CJK
   queries return nothing" was also wrong and is corrected — the trigram
   tokenizer cannot index any term under three characters, in any language.
+  (#101)
 
 ## [0.7.1] — 2026-08-10
 
