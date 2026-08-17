@@ -33,16 +33,20 @@ jobs:
         with:
           version: 10
 
+      # Build and test on a version inside the package's engines range
+      # (>=20 <23), matching ci.yml. The publish step needs a newer Node for
+      # OIDC and switches to it further down — an earlier revision of this
+      # file ran the whole job on 24, and its comment claimed that "only
+      # affects the publish step", which was never true: vitest ran there
+      # too. On 24 the run dies before reporting any test result —
+      # better-sqlite3's cleanup hook fires against a torn-down environment
+      # as tinypool recycles workers (node::RemoveEnvironmentCleanupHook,
+      # hooks.cc:142, "Assertion failed: (env) != nullptr"), taking the
+      # worker with it. Reproduced on two consecutive runs of v0.7.2.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # Node 24 ships npm >= 11.5.1, required for the current OIDC
-          # handshake — Node 22 / npm 10 silently falls back to anonymous
-          # and npm responds with a misleading 404 on the PUT. This only
-          # affects the publish step; CI still tests across 20/22 per the
-          # package's engines range.
-          node-version: '24'
+          node-version: '22'
           cache: 'pnpm'
-          registry-url: 'https://registry.npmjs.org'
 
       - run: pnpm install --frozen-lockfile
 
@@ -55,6 +59,19 @@ jobs:
 
       # Full test suite must pass before anything reaches npm.
       - run: pnpm vitest run
+
+      # Everything below this line runs on Node 24, which ships npm >= 11.5.1
+      # — required for the current OIDC handshake. On Node 22 / npm 10 the
+      # exchange silently falls back to anonymous and npm answers the PUT
+      # with a misleading 404. Nothing after this point loads a native addon:
+      # the version check is plain JS plus `npm view`, and `pnpm publish`
+      # packs dist/ and package.json with no prepublishOnly / prepack /
+      # prepare hook to run, so the better-sqlite3 binding compiled against
+      # Node 22 above is never opened and needs no rebuild.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       # Idempotency guard for tag re-pushes (e.g. converting a lightweight
       # tag to an annotated one). Without this, a re-trigger dies with
