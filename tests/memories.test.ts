@@ -199,10 +199,13 @@ describe('queryMemories multi-term recall (OR across terms)', () => {
   })
 
   it('adding terms widens recall instead of collapsing it', () => {
-    const narrow = db.queryMemories('shell alias', 10)
-    const wide = db.queryMemories('shell alias pollution sourced interactive command bypass', 10)
+    // `alias` hits only the first row; `interactive` only the second. Requiring
+    // a strict increase is what proves widening — a >= assertion would also
+    // pass if the added term contributed nothing.
+    const narrow = db.queryMemories('alias', 10)
+    const wide = db.queryMemories('alias interactive', 10)
     expect(narrow.length).toBeGreaterThan(0)
-    expect(wide.length).toBeGreaterThanOrEqual(narrow.length)
+    expect(wide.length).toBeGreaterThan(narrow.length)
   })
 
   it('returns a document matching only some of the terms', () => {
@@ -221,10 +224,19 @@ describe('queryMemories multi-term recall (OR across terms)', () => {
   })
 
   it('still treats FTS5 operators as literal terms, not syntax', () => {
-    expect(() => db.queryMemories('shell AND NOT alias', 10)).not.toThrow()
+    const doc = 'the AND OR NOT NEAR tokens appear literally in this memory'
+    db.saveMemory(mem({ content: doc, confidence: 0.8 }))
+
+    // queryMemories catches FTS5 errors and returns [], so `not.toThrow()`
+    // alone would also pass when an operator IS parsed as syntax or the query
+    // is rejected outright. Assert the document actually comes back.
+    for (const op of ['AND', 'OR', 'NOT', 'NEAR']) {
+      expect(db.queryMemories(op, 10).map(r => r.content)).toContain(doc)
+    }
+    // An operator-only combination must not become a boolean expression either.
+    expect(db.queryMemories('AND NOT NEAR', 10).map(r => r.content)).toContain(doc)
+    // Unbalanced syntax stays inert rather than throwing.
     expect(() => db.queryMemories('shell OR (alias', 10)).not.toThrow()
-    // `NEAR` as a bare word must not become a NEAR() query
-    expect(() => db.queryMemories('NEAR shell alias', 10)).not.toThrow()
   })
 })
 

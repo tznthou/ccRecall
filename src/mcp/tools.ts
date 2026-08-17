@@ -243,11 +243,12 @@ export function recallContextHandler(
       })
     }
 
-    // FTS fallback if no topic matched — per-keyword union. queryMemories now
-    // OR-joins its own terms, so one combined call would also return matches;
-    // the union is kept deliberately because it gives every keyword its own
-    // top-N slice, whereas a single OR query ranks globally and can let one
-    // dominant keyword crowd the others out entirely.
+    // FTS fallback if no topic matched — per-keyword union in caller order.
+    // queryMemories now OR-joins its own terms, so a single combined call would
+    // also return matches; the loop is kept because it preserves each keyword's
+    // own ranking instead of letting one global BM25 sort reorder everything.
+    // This is keyword *priority*, not fair coverage: the aggregate limit can be
+    // exhausted by the first keyword alone, leaving later keywords unqueried.
     let fallback: Memory[] | null = null
     if (clusters.length === 0 && args.keywords.length > 0) {
       const seen = new Set<number>()
