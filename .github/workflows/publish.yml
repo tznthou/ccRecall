@@ -65,9 +65,11 @@ jobs:
       # exchange silently falls back to anonymous and npm answers the PUT
       # with a misleading 404. Nothing after this point loads a native addon:
       # the version check is plain JS plus `npm view`, and `pnpm publish`
-      # packs dist/ and package.json with no prepublishOnly / prepack /
-      # prepare hook to run, so the better-sqlite3 binding compiled against
-      # Node 22 above is never opened and needs no rebuild.
+      # only copies the paths listed in package.json's `files` field (dist,
+      # hooks, scripts, both READMEs, LICENSE) into a tarball, with no
+      # prepublishOnly / prepack / prepare hook to run — so the
+      # better-sqlite3 binding compiled against Node 22 above is never
+      # opened and needs no rebuild.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
