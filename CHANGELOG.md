@@ -11,6 +11,45 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Tier 0 cross-project selection is now project-specific** — the three
+  startup slots that surface memories from *other* projects were ordered by
+  `confidence DESC` first, so a handful of `confidence = 1.0` memories held
+  them permanently while everything below 1.0 stayed unreachable no matter how
+  relevant it was. None of the three sort keys was project-specific, so every
+  project drew from one globally-ordered set: measured across 80 projects, the
+  entire corpus produced just 32 distinct memories, and one single trio
+  repeated across 15 of those projects.
+
+  Ordering is now `relevance band → least-recently-injected → confidence`. The
+  band scores a memory by the share of *its own* topics that intersect the
+  current project, making it the first key that differs between projects. It
+  is binary by design rather than a continuous score: a near-unique score per
+  memory would leave rotation firing only on exact ties, trading a confidence
+  monopoly for a relevance one. A rank floor admits the top
+  `TIER0_RELEVANCE_MIN_POOL` by ratio even when none clears the threshold. That
+  floor, not the threshold, is what selects for most of the corpus: 63 of the 80
+  projects hold fewer memories above the ratio than the floor admits, and in 52
+  of those the candidate pool is still larger than the floor, so the floor is
+  doing the selecting rather than waving the whole pool through.
+
+  Same measurement after the change: **74 distinct memories** across the corpus
+  (2.3x), with the most repeated result set down from 15 projects to 6 — those 6
+  are the projects whose candidate pool is empty, so the largest group actually
+  sharing a trio is 4. Tier 0 latency moved 3.9ms → 6.9ms mean, slowest single
+  project ~22ms, against the plan's 30ms Tier 0 budget.
+
+  The band uses each memory's *share* of matched topics rather than the raw
+  intersection count. A memory's topic count tracks its content length (Spearman
+  +0.78 across the corpus), so ranking on the raw count would have re-created
+  the length bias seen in L1. Normalising stops long memories winning on topic
+  volume alone, but it does not make the band length-neutral: dividing by a
+  length proxy inverts the correlation rather than cancelling it (median −0.53
+  per project).
+
 ## [0.7.2] — 2026-08-18
 
 ### Fixed

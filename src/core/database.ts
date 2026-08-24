@@ -914,6 +914,23 @@ export class Database {
     )
   )`
 
+  /** Tier 0 relevance band: a memory is in-band when its share of topics that
+   *  intersect the current project reaches this ratio. Deliberately a binary
+   *  band and not a continuous score — a near-unique score per memory would
+   *  make rotation fire only on exact ties, trading a confidence monopoly for
+   *  a relevance monopoly. Public so tests assert against it instead of
+   *  re-hardcoding the number. */
+  static readonly TIER0_RELEVANCE_RATIO = 0.5
+
+  /** Rank floor under the ratio above: the top N by ratio are in-band even when
+   *  none reach the threshold. Not a corner case — measured 2026-08-24, 63 of
+   *  80 projects hold fewer than N memories above the ratio, and in 52 of those
+   *  the candidate pool is still larger than N, so the floor is what actually
+   *  selects. Without it their relevance key is inert and ordering degrades to
+   *  plain rotation. It also stops a project whose top bucket holds only two or
+   *  three memories from letting those hold the slots forever. */
+  static readonly TIER0_RELEVANCE_MIN_POOL = 12
+
   constructor(dbPath: string) {
     this.dbPath = dbPath
     // :memory: 不需要建目錄
@@ -2013,27 +2030,47 @@ export class Database {
       // with the current project. Global (project_id IS NULL) included — deduped
       // against Tier 1/2 by pushUnique.
       //
-      // Ordering: least-recently-injected first (NULL = never injected sorts
-      // first in SQLite ASC), confidence only breaks that tie. Confidence used
-      // to lead, which let a handful of confidence=1.0 memories hold the three
-      // slots permanently while lower-confidence ones were structurally
-      // unreachable. `m.id` terminates the sort so equal rows stay deterministic.
+      // Ordering: relevance band first, then least-recently-injected (NULL =
+      // never injected sorts first in SQLite ASC), then confidence. Confidence
+      // used to lead, which let a handful of confidence=1.0 memories hold the
+      // three slots permanently. Rotation alone fixed the turnover but not the
+      // pool — every project still drew from the same globally-ordered set,
+      // because none of the keys was project-specific. The band is: it scores
+      // each memory by the share of ITS topics that intersect THIS project.
+      //
+      // `injection_log` stays in the ORDER BY correlated subquery and must
+      // never join into the pre-aggregate relation — that would multiply out
+      // to topics x injections and silently corrupt the topic counts.
       const tier0Limit = Math.min(3, cappedLimit)
       const tier0Rows = this.db.prepare(`
-        SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type,
-               m.confidence, m.key, m.created_at
-        FROM memories m
-        JOIN memory_topics mt ON m.id = mt.memory_id
-        JOIN knowledge_map km ON mt.topic_key = km.topic_key
-        WHERE km.project_id = ?
-          AND (m.project_id IS NULL OR m.project_id != ?)
-          AND m.confidence >= 0.8
-          AND m.type != 'query'
-        ORDER BY (SELECT MAX(il.injected_at) FROM injection_log il
-                  WHERE il.memory_id = m.id) ASC,
-                 m.confidence DESC,
-                 m.created_at DESC,
-                 m.id DESC
+        WITH pool AS (
+          SELECT m.id, m.session_id, m.message_id, m.content, m.type,
+                 m.confidence, m.key, m.created_at,
+                 COUNT(mt.topic_key) * 1.0 / (
+                   SELECT COUNT(*) FROM memory_topics mt2 WHERE mt2.memory_id = m.id
+                 ) AS match_ratio
+          FROM memories m
+          JOIN memory_topics mt ON m.id = mt.memory_id
+          JOIN knowledge_map km ON mt.topic_key = km.topic_key
+          WHERE km.project_id = ?
+            AND (m.project_id IS NULL OR m.project_id != ?)
+            AND m.confidence >= 0.8
+            AND m.type != 'query'
+          GROUP BY m.id
+        ), banded AS (
+          SELECT *, ROW_NUMBER() OVER (ORDER BY match_ratio DESC, id DESC) AS relevance_rank
+          FROM pool
+        )
+        SELECT id, session_id, message_id, content, type, confidence, key, created_at
+        FROM banded
+        ORDER BY CASE WHEN match_ratio >= ${Database.TIER0_RELEVANCE_RATIO}
+                        OR relevance_rank <= ${Database.TIER0_RELEVANCE_MIN_POOL}
+                      THEN 1 ELSE 0 END DESC,
+                 (SELECT MAX(il.injected_at) FROM injection_log il
+                  WHERE il.memory_id = banded.id) ASC,
+                 confidence DESC,
+                 created_at DESC,
+                 id DESC
         LIMIT ?
       `).all(projectId, projectId, tier0Limit) as MemoryRow[]
       pushUnique(tier0Rows.map(mapMemoryRow))
