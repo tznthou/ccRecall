@@ -2012,6 +2012,12 @@ export class Database {
       // Surfaces memories from OTHER projects that share knowledge_map topics
       // with the current project. Global (project_id IS NULL) included — deduped
       // against Tier 1/2 by pushUnique.
+      //
+      // Ordering: least-recently-injected first (NULL = never injected sorts
+      // first in SQLite ASC), confidence only breaks that tie. Confidence used
+      // to lead, which let a handful of confidence=1.0 memories hold the three
+      // slots permanently while lower-confidence ones were structurally
+      // unreachable. `m.id` terminates the sort so equal rows stay deterministic.
       const tier0Limit = Math.min(3, cappedLimit)
       const tier0Rows = this.db.prepare(`
         SELECT DISTINCT m.id, m.session_id, m.message_id, m.content, m.type,
@@ -2023,10 +2029,11 @@ export class Database {
           AND (m.project_id IS NULL OR m.project_id != ?)
           AND m.confidence >= 0.8
           AND m.type != 'query'
-        ORDER BY m.confidence DESC,
-                 (SELECT MAX(il.injected_at) FROM injection_log il
+        ORDER BY (SELECT MAX(il.injected_at) FROM injection_log il
                   WHERE il.memory_id = m.id) ASC,
-                 m.created_at DESC
+                 m.confidence DESC,
+                 m.created_at DESC,
+                 m.id DESC
         LIMIT ?
       `).all(projectId, projectId, tier0Limit) as MemoryRow[]
       pushUnique(tier0Rows.map(mapMemoryRow))

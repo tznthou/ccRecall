@@ -428,6 +428,11 @@ describe('getStartupMemories — Tier 0 cross-project', () => {
     expect(local.length).toBe(1)
   })
 
+  // NOTE: all three fixtures below carry the default confidence (0.8), so
+  // "same confidence group" is vacuously true — this assertion holds under BOTH
+  // `confidence DESC` first and `injected_at ASC` first. It therefore proves
+  // rotation works *within* a tie, not that rotation outranks confidence.
+  // The `ranks a never-injected memory above` test below covers that gap.
   it('Tier 0 rotates within same confidence group by injection recency', () => {
     const ids: number[] = []
     for (let i = 0; i < 3; i++) {
@@ -452,6 +457,33 @@ describe('getStartupMemories — Tier 0 cross-project', () => {
     expect(rotated.length).toBe(3)
     // NULL injected_at (memories 0,1) sort before non-NULL (memory 2) in ASC
     expect(rotated[2].content).toContain('memory 2')
+  })
+
+  it('Tier 0 ranks a never-injected memory above a higher-confidence recently-injected one', () => {
+    // Pins rotation as the FIRST sort key. Under `confidence DESC` first the
+    // 1.0 memory wins the single slot; under `MAX(injected_at) ASC` first the
+    // never-injected 0.8 memory does. Both sit above the >= 0.8 Tier 0 gate,
+    // and created_at never breaks the tie because the keys above it differ.
+    const injectedId = db.saveMemory({
+      sessionId: 'sa', messageId: null, type: 'decision',
+      content: 'SQLite high confidence memory already injected',
+      confidence: 1.0,
+    })
+    db.saveMemoryTopics(injectedId, 'proj-A', ['sqlite'])
+
+    const freshId = db.saveMemory({
+      sessionId: 'sa', messageId: null, type: 'decision',
+      content: 'SQLite lower confidence memory never injected',
+      confidence: 0.8,
+    })
+    db.saveMemoryTopics(freshId, 'proj-A', ['sqlite'])
+
+    db.logInjection([{ memoryId: injectedId, source: 'startup', sessionId: 'sb' }])
+
+    // limit=1 → Tier 0 gets exactly one slot, so the winner is unambiguous.
+    const results = db.getStartupMemories('proj-B', 1)
+    expect(results.length).toBe(1)
+    expect(results[0].id).toBe(freshId)
   })
 
   it('dedupes between Tier 0 and Tier 1 (global memory appears once)', () => {
