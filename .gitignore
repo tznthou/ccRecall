@@ -14,3 +14,8 @@ coverage/
 *.key
 *.pem
 .claude/RESUME.md
+
+# Python bytecode — never belongs in the repo, and .pyc embeds the
+# absolute source path of the machine that produced it.
+__pycache__/
+*.py[cod]
