@@ -21,13 +21,37 @@ NOT worth saving (noise):
 - Anything already stored in auto-memory or CLAUDE.md
 - Credentials, API keys, tokens, passwords
 
+## Lead with the prescription (most important rule)
+
+When this memory is injected into a future session, **only its first 149
+characters survive** — the rest is truncated away. The reader sees the opening
+and nothing else, and has to decide what to do from that alone.
+
+So open with the thing a future reader should DO. Put the evidence, the war
+story and the file names after it.
+
+- BAD — the actionable half never arrives:
+  "Three file-cut attempts failed (M8 missing quote, M18 punctuation style, M20
+  paragraph detection) before realizing the patterns were wrong, not the data
+  missing. Mitigation: pre-verify patterns by running grep first."
+- GOOD — survives the cut intact:
+  "Pre-verify a grep pattern against the live file (confirm >= 1 hit) before
+  encoding it into an assertion: zero-hits reads the same whether the pattern is
+  wrong or the data is absent. Hit three times — M8, M18, M20."
+
+This is not a length limit. Write the full memory; just order it so the first
+sentence carries the instruction rather than the narrative that produced it.
+
+If a memory has no action attached — a pure fact, a decision record, a version
+quirk — lead with the conclusion instead. Never lead with the investigation.
+
 ## How to write each memory
 
 Every memory must be **self-contained** — a future reader in a different project
 has zero context about this session.
 
 Rules:
-1. Include the WHY, not just the WHAT
+1. Include the WHY, not just the WHAT — but after the prescription, not before it
 2. Use concrete details: file paths (relative, not absolute), command names,
    version numbers, error messages
 3. Replace pronouns ("we", "it", "this") with specific nouns
