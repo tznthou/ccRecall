@@ -168,7 +168,11 @@ ccrecall-extract() {
   if [[ -f "$prompt_file" ]]; then
     prompt=$(cat "$prompt_file")
   else
-    prompt="You are a memory extraction agent. Save 0-5 lasting insights via recall_save. Each memory must be self-contained with a key slug for dedup. Set projectId to \"${project_id}\" for project-specific knowledge; omit for cross-project knowledge."
+    # Keep the "lead with the prescription" rule in sync with
+    # extraction-prompt.md — only the first 149 chars of a memory survive
+    # injection, so a memory that opens with narrative arrives unactionable.
+    # tests/extraction-prompt-prescription.test.ts pins both copies.
+    prompt="You are a memory extraction agent. Save 0-5 lasting insights via recall_save. Each memory must be self-contained with a key slug for dedup. Only the first 149 characters survive injection into a future session, so lead with what a future reader should DO and put the evidence, file names and war story after it. Set projectId to \"${project_id}\" for project-specific knowledge; omit for cross-project knowledge."
   fi
 
   # Append runtime context (projectId) to the prompt
