@@ -37,15 +37,18 @@ ccRecall 是 [ccRewind](https://github.com/tznthou/ccRewind)（對話回放 GUI�
 
 ## Dogfood 基準線
 
-單人日用實測數據，不是對照實驗。更新於 2026-07-23。
+單人日用實測數據，不是對照實驗。更新於 2026-09-11。
 
 | 指標 | 數值 |
 |------|------|
-| 持續運行 | 97 天 |
-| 已索引 session | 2,298 筆，橫跨 46 個專案 |
-| 記憶總數 | 532 筆（93% 帶 key 去重） |
-| Knowledge map topics | 18,495 |
-| 磁碟佔用 | 50 MB |
+| 持續運行 | 147 天 |
+| 已索引 session | 1,538 筆主 session，橫跨 106 個專案 |
+| 記憶總數 | 1,639 筆（98% 帶 key 去重） |
+| Knowledge map topics | 35,887 |
+| 磁碟佔用 | 102 MB |
+
+口徑同 `/health`：`mainSessionCount` 不含 subagent session，後者另外索引（再 1,648 筆）。
+本表先前的版本沒有標明用哪個口徑，所以 session 那列跨版本不可比較。
 
 n = 1。這些數字說明系統有在跑、有在累積資料——不代表每條記憶都有用。「這條記憶到底有沒有幫到 session」目前沒有好的量測方式，這是個[開放問題](https://github.com/tznthou/ccRecall/issues/71)。
 
@@ -64,6 +67,7 @@ n = 1。這些數字說明系統有在跑、有在累積資料——不代表每
 | **元認知** | `knowledge_map` 聚合 session + memory 的主題提及。由 mention count 衍生深度（shallow / medium / deep）。透過 MCP `recall_context` 暴露 |
 | **遺忘曲線** | 記憶隨時間壓縮：原始→摘要→一行結論→刪除。未使用的記憶信心衰減。背景維護 tick 每 5 分鐘跑一次 |
 | **跨專案記憶**（v0.4.1） | 記憶透過 topic intersection 跨專案浮出——若兩個專案的 `knowledge_map` 有共同 topic，高信心記憶會出現在另一個專案的 startup injection（最多 3 條，confidence ≥ 0.8 gate） |
+| **對話中檢索** | SessionStart 只在開場觸發一次；`UserPromptSubmit` hook 是第二個觸發點。用 prompt 抽出的 topic 做 inverse-document-frequency 排序查詢，per-session 去重、單場上限 8 條。300ms timeout，失敗就安靜跳過 |
 | **Watch mode** | 基於 chokidar 的 JSONL watcher 在 2 秒內偵測新 session；每 10 分鐘 full-resync 補救 FS 事件漏接 |
 | **Rescue reindex** | `/session/end` 和 `/session/last` 都會在 miss 時重 index 再試一次，`/session/last` 另有 `notBefore` staleness gate——hook、wrapper、daemon 三方不會有 fresh-session race |
 | **macOS 自動啟動** | `ccmem install-daemon` 安裝 LaunchAgent，重開機自動復原服務 |
@@ -85,11 +89,11 @@ flowchart TB
         Parser["Parser<br/>解析對話"]
         Summarizer["Summarizer<br/>規則式萃取"]
         DB[("SQLite + FTS5<br/>索引與搜尋")]
-        API["HTTP API<br/>5 個端點"]
+        API["HTTP API<br/>6 個端點"]
     end
 
     subgraph Consumers["使用端"]
-        Hook["Claude Code Hooks<br/>SessionStart / SessionEnd"]
+        Hook["Claude Code Hooks<br/>SessionStart / UserPromptSubmit / SessionEnd"]
         Wrapper["Extraction wrapper<br/>session 結束後的 Haiku 抽取"]
         MCP["MCP Server<br/>recall_query / recall_save"]
     end
@@ -105,7 +109,7 @@ flowchart TB
 
 ### Session 生命週期
 
-一個 session 頭尾兩端（都是跟時間賽跑的環節）實際怎麼跑：
+三個注入點、加上頭尾兩端（都是跟時間賽跑的環節）實際怎麼跑：
 
 ```mermaid
 sequenceDiagram
@@ -123,7 +127,15 @@ sequenceDiagram
     H-->>CC: 注入 context
     end
 
-    Note over CC,R: Session 進行中，watcher 持續<br/>增量索引 JSONL（2 秒 debounce）
+    rect rgb(240, 240, 235)
+    Note over CC,R: 每一則 prompt（L1）
+    CC->>H: UserPromptSubmit
+    H->>R: GET /memory/prompt（300ms timeout）
+    R-->>H: topic 命中的記憶，per-session 去重
+    H-->>CC: 注入，或安靜不出聲
+    end
+
+    Note over CC,R: 同時 watcher 持續<br/>增量索引 JSONL（2 秒 debounce）
 
     rect rgb(255, 244, 235)
     Note over CC,X: Session 結束
@@ -149,7 +161,7 @@ sequenceDiagram
 | FTS5 | 全文搜尋 | SQLite 內建、trigram tokenizer，短 token / 中英混合查詢透過 LIKE fallback 補齊 |
 | 原生 `http` | HTTP 伺服器 | 不用 Express——最小表面積、僅 localhost |
 | chokidar | 檔案系統 watcher | 跨平台 JSONL 變動偵測，2 秒 debounce + single-flight |
-| vitest | 測試 | 542 個測試（34 檔案）、整合式風格 |
+| vitest | 測試 | 651 個測試（40 檔案）、整合式風格 |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport，透過 WAL 共用 SQLite |
 
 ---
@@ -191,7 +203,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 
 ## API 端點
 
-五個端點，每個都有活的 caller——v0.5.0 移除了其餘八個
+六個端點，每個都有活的 caller——v0.5.0 移除了其餘八個
 （`/journal/*`、`/memory/save`、`/memory/context`、`/metacognition/check`、
 `/session/checkpoint`、`/lint/warnings`），現在一律回 404。
 
@@ -200,6 +212,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 | `/health` | GET | 服務健康 + DB 統計 + integrity 檢查狀態 | CLI、extraction wrapper |
 | `/memory/startup?project=...` | GET | SessionStart 級檢索：cold + recent-confidence + FTS fallback，帶 token 預算 | SessionStart hook |
 | `/memory/query?q=...&limit=...&project=...` | GET | FTS5 跨記憶搜尋，可選 project 過濾 | SessionStart hook（keyword 層） |
+| `/memory/prompt?project=...&q=...` | GET | 對話中檢索：用當前 prompt 的 topic 查詢，含 per-session 去重與上限 | UserPromptSubmit hook |
 | `/session/end` | POST | 確認剛結束的 session 已被索引（miss 時 rescue reindex） | SessionEnd hook |
 | `/session/last?cwd=...` | GET | 回傳專案路徑的最新 session metadata（`notBefore` staleness gate） | Extraction wrapper |
 
@@ -231,7 +244,7 @@ claude mcp add ccrecall --scope user -- /absolute/path/to/ccRecall/node_modules/
 
 可直接複製的範本：[.mcp.json.example](.mcp.json.example)。
 
-SessionStart / SessionEnd hook 安裝見 [hooks/README.md](hooks/README.md)。
+SessionStart / UserPromptSubmit / SessionEnd hook 安裝見 [hooks/README.md](hooks/README.md)。
 
 ---
 
@@ -372,7 +385,7 @@ ccRecall/
 │   ├── tutorial_zh.md                # 使用者教學（安裝 → MCP → 日常使用）
 │   ├── architecture_zh.md            # Daemon 設計取捨（給 contributor 看）
 │   └── launchd.md                    # macOS LaunchAgent 安裝/troubleshoot
-├── tests/                            # 542 個測試橫跨 34 檔案（parser、scanner、
+├── tests/                            # 651 個測試橫跨 40 檔案（parser、scanner、
 │   │                                 # summarizer、database、indexer、e2e、MCP、
 │   │                                 # memories、hooks、watcher、CLI、migrations、
 │   │                                 # FTS5 CJK edge cases、integrity monitor 等）

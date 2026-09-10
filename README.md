@@ -37,15 +37,20 @@ ccRecall is the "memory" counterpart to [ccRewind](https://github.com/tznthou/cc
 
 ## Dogfood baseline
 
-Single-user daily-driver data, not a controlled study. Updated 2026-07-23.
+Single-user daily-driver data, not a controlled study. Updated 2026-09-11.
 
 | Metric | Value |
 |--------|-------|
-| Running continuously | 97 days |
-| Sessions indexed | 2,298 across 46 projects |
-| Memories stored | 532 (93% keyed for dedup) |
-| Topics in knowledge map | 18,495 |
-| DB on disk | 50 MB |
+| Running continuously | 147 days |
+| Sessions indexed | 1,538 main sessions across 106 projects |
+| Memories stored | 1,639 (98% keyed for dedup) |
+| Topics in knowledge map | 35,887 |
+| DB on disk | 102 MB |
+
+Counted the way `/health` reports them: `mainSessionCount` excludes subagent
+sessions, which are indexed separately (1,648 more). Earlier revisions of this
+table did not say which count they used, so the session figure is not comparable
+across versions.
 
 n = 1. These numbers show the system runs and accumulates data — not that every memory is useful. We don't yet have a good metric for "did this memory actually help the session." That's an [open problem](https://github.com/tznthou/ccRecall/issues/71).
 
@@ -64,6 +69,7 @@ What the numbers don't show: without ccRecall, every session starts cold — you
 | **Metacognition** | `knowledge_map` aggregates topic mentions from sessions + memories. Depth derived from mention count (shallow / medium / deep). Exposed via MCP `recall_context` |
 | **Forgetting curve** | Memories compress over time: raw → summary → one-liner → deleted. Confidence decays on unused memories. Background maintenance tick runs every 5 min |
 | **Cross-project memory** (v0.4.1) | Memories surface across projects via topic intersection — if two projects share a `knowledge_map` topic, high-confidence memories from one appear in the other's startup injection (max 3 rows, confidence ≥ 0.8 gate) |
+| **Mid-conversation recall** | SessionStart fires once; the `UserPromptSubmit` hook is the second trigger point. Topics from the prompt drive an inverse-document-frequency ranked lookup, suppressed per session and capped at 8 memories. 300 ms timeout, fails silent |
 | **Watch mode** | chokidar-based JSONL watcher picks up new sessions within 2 s; periodic 10 min full-resync covers missed filesystem events |
 | **Rescue reindex** | `/session/end` and `/session/last` both retry a reindex on miss, and `/session/last` staleness-gates via `notBefore` — no fresh-session race between the hook, the wrapper, and the daemon |
 | **Auto-start (macOS)** | `ccmem install-daemon` registers a LaunchAgent so the service stays up across reboots |
@@ -85,11 +91,11 @@ flowchart TB
         Parser["Parser<br/>parse conversations"]
         Summarizer["Summarizer<br/>rule-based extraction"]
         DB[("SQLite + FTS5<br/>index & search")]
-        API["HTTP API<br/>5 endpoints"]
+        API["HTTP API<br/>6 endpoints"]
     end
 
     subgraph Consumers["Consumers"]
-        Hook["Claude Code Hooks<br/>SessionStart / SessionEnd"]
+        Hook["Claude Code Hooks<br/>SessionStart / UserPromptSubmit / SessionEnd"]
         Wrapper["Extraction wrapper<br/>post-session Haiku pass"]
         MCP["MCP Server<br/>recall_query / recall_save"]
     end
@@ -105,7 +111,7 @@ Arrows point in the direction of the call: hooks and the extraction wrapper talk
 
 ### Session lifecycle
 
-How the two timing-sensitive ends of a session actually flow:
+How the three injection points and the two timing-sensitive ends actually flow:
 
 ```mermaid
 sequenceDiagram
@@ -123,7 +129,15 @@ sequenceDiagram
     H-->>CC: inject into context
     end
 
-    Note over CC,R: During the session, the watcher<br/>reindexes JSONL writes (2 s debounce)
+    rect rgb(240, 240, 235)
+    Note over CC,R: Every prompt (L1)
+    CC->>H: UserPromptSubmit
+    H->>R: GET /memory/prompt (300 ms timeout)
+    R-->>H: topic-matched rows, deduped per session
+    H-->>CC: inject, or stay silent
+    end
+
+    Note over CC,R: Meanwhile the watcher<br/>reindexes JSONL writes (2 s debounce)
 
     rect rgb(255, 244, 235)
     Note over CC,X: Session end
@@ -149,7 +163,7 @@ The `notBefore` gate keeps a stale session from being extracted twice; the subag
 | FTS5 | Full-text search | Built into SQLite, trigram tokenizer with LIKE fallback for short CJK / mixed-script queries |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
 | chokidar | Filesystem watcher | Cross-platform JSONL change detection with 2 s debounce + single-flight |
-| vitest | Testing | 542 tests across 34 files, integration-style |
+| vitest | Testing | 651 tests across 40 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
@@ -191,7 +205,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 
 ## API Endpoints
 
-Five endpoints, each with a live caller — v0.5.0 removed the other eight
+Six endpoints, each with a live caller — v0.5.0 removed the other eight
 (`/journal/*`, `/memory/save`, `/memory/context`, `/metacognition/check`,
 `/session/checkpoint`, `/lint/warnings`); they now return 404.
 
@@ -200,6 +214,7 @@ Five endpoints, each with a live caller — v0.5.0 removed the other eight
 | `/health` | GET | Service health + DB stats + integrity check status | CLI, extraction wrapper |
 | `/memory/startup?project=...` | GET | SessionStart-tier retrieval: cold + recent-confidence + FTS fallback, token-budgeted | SessionStart hook |
 | `/memory/query?q=...&limit=...&project=...` | GET | FTS5 search across memories with optional project filter | SessionStart hook (keyword tier) |
+| `/memory/prompt?project=...&q=...` | GET | Mid-conversation recall: topic lookup against the current prompt, per-session dedup and ceiling | UserPromptSubmit hook |
 | `/session/end` | POST | Confirm the just-ended session is indexed (rescue reindex on miss) | SessionEnd hook |
 | `/session/last?cwd=...` | GET | Most recent session metadata for a project path (staleness-gated via `notBefore`) | Extraction wrapper |
 
@@ -233,7 +248,7 @@ claude mcp add ccrecall --scope user -- /absolute/path/to/ccRecall/node_modules/
 
 A ready-to-copy example lives at [.mcp.json.example](.mcp.json.example).
 
-See [hooks/README.md](hooks/README.md) for SessionStart / SessionEnd hook installation.
+See [hooks/README.md](hooks/README.md) for SessionStart / UserPromptSubmit / SessionEnd hook installation.
 
 ---
 
@@ -380,7 +395,7 @@ ccRecall/
 │   ├── tutorial.md               # End-user walkthrough (install → MCP → usage)
 │   ├── architecture.md           # Daemon design rationale (contributor-oriented)
 │   └── launchd.md                # macOS LaunchAgent install/troubleshoot
-├── tests/                        # 542 tests across 34 files (parser, scanner,
+├── tests/                        # 651 tests across 40 files (parser, scanner,
 │   │                             # summarizer, database, indexer, e2e, MCP,
 │   │                             # memories, hooks, watcher, CLI, migrations,
 │   │                             # FTS5 CJK edge cases, integrity monitor, ...)
