@@ -222,7 +222,9 @@ describe('hooks/session-start.mjs', () => {
     const startupReq = ctx.received.find(r => r.path?.includes('/memory/startup'))
     const healthReq = ctx.received.find(r => r.path?.includes('/health'))
     expect(startupReq).toBeDefined()
-    expect(startupReq!.path).toContain('maxTokens=300')
+    // Budget policy lives in the daemon: the hook must NOT pin a number, or an
+    // installed copy would override a service that has since been upgraded.
+    expect(startupReq!.path).not.toContain('maxTokens')
     expect(healthReq).toBeDefined()
   })
 
@@ -248,7 +250,9 @@ describe('hooks/session-start.mjs', () => {
     const startupReq = ctx.received.find(r => r.path?.includes('/memory/startup'))
     expect(startupReq).toBeDefined()
     expect(startupReq!.path).toContain('project=-Users-tznthou-Documents-ccRecall')
-    expect(startupReq!.path).toContain('maxTokens=300')
+    // Budget policy lives in the daemon: the hook must NOT pin a number, or an
+    // installed copy would override a service that has since been upgraded.
+    expect(startupReq!.path).not.toContain('maxTokens')
     expect(stdout).toContain('漸進披露探索法')
     expect(stdout).toContain('memories available')
 

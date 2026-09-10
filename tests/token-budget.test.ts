@@ -93,7 +93,13 @@ describe('truncateToChars', () => {
 
 describe('constants', () => {
   it('defaults match plan', () => {
-    expect(DEFAULT_MAX_TOKENS).toBe(300)
+    // 300 → 400 on 2026-09-11. Not a bigger budget: a correct one. Measured
+    // against the real hook, a "300 token" injection emitted 363 because only
+    // `content` was priced. 400 keeps the same five rows reaching the reader
+    // now that the decoration and chrome are counted too. The claim that the
+    // number is honest is asserted separately, against real hook output, in
+    // tests/token-budget-honesty.test.ts — this line only pins the value.
+    expect(DEFAULT_MAX_TOKENS).toBe(400)
     expect(DEFAULT_PER_ROW_CHAR_CAP).toBe(150)
   })
 })

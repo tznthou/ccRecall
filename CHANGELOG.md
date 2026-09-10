@@ -50,6 +50,31 @@ more like an iteration counter than a strict SemVer major).
   baseline is ahead, 0.600 vs 0.400.** Two known weaknesses account for it,
   paraphrase and spaceless CJK queries; five authored cases settle nothing, but
   the arms separate and the floor holds at zero.
+### Fixed
+
+- **The token budget now prices what the hook actually writes** — the "under
+  300 tokens" contract counted only `content`, not the `- ` prefix, the
+  confidence suffix, the `[key: …]` handle, or the header and footer wrapped
+  around the rows. Measured 2026-09-11 against the real hook with a
+  corpus-shaped payload: the endpoint claimed 225 while the hook emitted
+  **363**. Rows are now priced as rendered, chrome is reserved up front, and
+  `totalTokenEstimate` reports the size of the whole emission rather than the
+  rows alone. `DEFAULT_MAX_TOKENS` rises 300 → 400 and the mid-conversation
+  budget 120 → 170 so the same number of memories still reaches the reader —
+  **this buys no extra content, it stops the contract being a fiction.**
+  End-to-end after the change: contract 400, endpoint claims 372, hook emits
+  366, five rows delivered as before.
+- **Mid-conversation recall no longer goes silent when one memory exceeds the
+  whole budget** — a CJK memory costs about one token per character, so at the
+  149-character cap a single one could exceed the budget and the caller
+  received an empty list, indistinguishable from "nothing relevant". The first
+  row is now trimmed to fit instead of dropped. The budget is still never
+  exceeded, and a row that would trim to a meaningless sliver is dropped rather
+  than emitted.
+- **The SessionStart hook no longer pins the budget number.** It sent
+  `maxTokens=300`, so an installed copy would have overridden a service that
+  had since been upgraded. Budget policy belongs to the daemon, matching what
+  the mid-conversation hook already did.
 
 ### Changed
 

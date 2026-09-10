@@ -5,7 +5,10 @@ import { sendJson, parseJsonBody } from './server.js'
 import type { Database } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
 import { scrubErrorMessage } from '../core/log-safe.js'
-import { applyRowBudget, DEFAULT_MAX_TOKENS, DEFAULT_PER_ROW_CHAR_CAP } from '../core/token-budget.js'
+import {
+  applyRowBudget, DEFAULT_MAX_TOKENS, DEFAULT_PER_ROW_CHAR_CAP,
+  startupLineCost, promptLineCost, STARTUP_CHROME_TOKENS, PROMPT_CHROME_TOKENS,
+} from '../core/token-budget.js'
 import { appendRecallTelemetry } from '../core/recall-telemetry.js'
 import { extractTopicsFromContent } from '../core/topic-extractor.js'
 import { resolveProjectId } from '../core/project-id.js'
@@ -18,11 +21,16 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
 // bound a cost that additionalContext accumulation makes permanent
 // (anthropics/claude-code#40216) — unlike SessionStart, which pays its cost once.
 //
-// 120 tokens: SessionStart spends 300 for the session's whole opening context.
+// 170 tokens: SessionStart spends 400 for the session's whole opening context.
 // A mid-conversation nudge answers one prompt, so it gets a fraction — enough
 // for two ~150-char excerpts plus their handles, and small enough that the
 // worst case below stays affordable.
-const PROMPT_RECALL_MAX_TOKENS = 120
+//
+// Raised from 120 on 2026-09-11, when the budget started pricing the rendered
+// line rather than the content alone. At 120 an honest count admitted one row
+// where two used to appear; 170 restores the pair. It buys no extra content,
+// it stops the previous number from being a fiction.
+const PROMPT_RECALL_MAX_TOKENS = 170
 // Two memories per prompt: enough for a primary match plus one near-miss,
 // while keeping a single injection small enough to skim.
 const PROMPT_RECALL_DEFAULT_LIMIT = 2
@@ -318,7 +326,14 @@ export function createRequestHandler(
       const fresh = candidates.filter(m => !alreadySeen.has(m.id)).slice(0, limit)
       if (fresh.length === 0) { empty(false); return }
 
-      const budgeted = applyRowBudget(fresh, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
+      // minimumOneRow matters most here: a CJK memory costs one token per
+      // character, so at the 149-char cap a single one exceeded this budget and
+      // the caller received nothing — indistinguishable from "nothing relevant".
+      const budgeted = applyRowBudget(fresh, maxTokens, DEFAULT_PER_ROW_CHAR_CAP, {
+        costOf: promptLineCost,
+        reservedTokens: PROMPT_CHROME_TOKENS,
+        minimumOneRow: true,
+      })
 
       sendJson(res, 200, {
         memories: budgeted.emitted.map(m => ({
@@ -365,14 +380,17 @@ export function createRequestHandler(
       const sessionId = url.searchParams.get('sessionId') || null
 
       const rows = db.getStartupMemories(project, limit, fallback)
-      const budgeted = applyRowBudget(rows, maxTokens, DEFAULT_PER_ROW_CHAR_CAP)
+      const budgeted = applyRowBudget(rows, maxTokens, DEFAULT_PER_ROW_CHAR_CAP, {
+        costOf: startupLineCost,
+        reservedTokens: STARTUP_CHROME_TOKENS,
+      })
       memoryService.touch(budgeted.emitted.map(m => m.id), 'startup', sessionId)
 
-      // `key` rides along unbudgeted, by design: applyRowBudget above prices only
-      // `content`, so adding the handle cannot change which memories are selected
-      // — that keeps #71's observation window (a memory_id distribution) clean.
-      // The honest accounting (prefix chars are real tokens the 300 contract does
-      // not count) is deferred until that window closes; see #77.
+      // The handle and confidence suffix used to ride along unbudgeted, deferred
+      // until #71's observation window closed. Measured 2026-09-11 against the
+      // real hook: contract 300, this endpoint claimed 225, the hook emitted 363.
+      // They are priced now, and DEFAULT_MAX_TOKENS was raised to keep the same
+      // five rows reaching the reader rather than shrinking the injection.
       const memories = budgeted.emitted.map(m => ({
         id: m.id,
         content: m.content,
