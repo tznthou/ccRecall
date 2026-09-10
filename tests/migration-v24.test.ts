@@ -8,6 +8,19 @@ import type { MessageInput } from '../src/core/database'
 
 let tmpDir: string
 
+/** The version a fresh DB lands on after every migration runs. Read rather than
+ *  hard-coded: these tests assert that a rewound DB is brought fully up to date,
+ *  which is a different claim from "the newest migration is numbered N" — and
+ *  the hard-coded form broke on every added migration for no real reason. */
+function latestSchemaVersion(): number {
+  const probe = new Database(':memory:')
+  try {
+    return probe.getSchemaVersion()
+  } finally {
+    probe.close()
+  }
+}
+
 function mkMsg(uuid: string, sequence: number, role: 'user' | 'assistant' = 'user'): MessageInput {
   return {
     uuid, role, type: role, contentText: null, contentJson: null,
@@ -119,7 +132,7 @@ describe('v24 migration — upgrade from simulated v23', () => {
 
     const dbB = new Database(dbPath)
     try {
-      expect(dbB.getSchemaVersion()).toBe(25)
+      expect(dbB.getSchemaVersion()).toBe(latestSchemaVersion())
 
       const tables = dbB.rawAll<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type='table'",
@@ -187,7 +200,7 @@ describe('v24 migration — upgrade from simulated v23', () => {
 
     const dbB = new Database(dbPath)
     try {
-      expect(dbB.getSchemaVersion()).toBe(25)
+      expect(dbB.getSchemaVersion()).toBe(latestSchemaVersion())
       const uuidCols = dbB.rawAll<{ name: string }>('PRAGMA table_info(message_uuids)').map(c => c.name)
       expect(uuidCols.sort()).toEqual(['session_hash', 'uuid_hash'])
       const sessionCols = dbB.rawAll<{ name: string }>('PRAGMA table_info(sessions)').map(c => c.name)

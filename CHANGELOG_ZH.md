@@ -10,6 +10,20 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ## [未發布]
 
+### 新增
+
+- **記憶開始記錄「是誰寫的」，自動抽取不再蓋掉你手寫的內容** — 自動抽取與手動
+  儲存走的是同一個 `recall_save`，寫入端本來分不出兩者。後來的抽取只要撞到同一個
+  `key` 就整條取代既有記憶：content、type、confidence，連 access 歷史與壓縮層級
+  都被 upsert 一併歸零。現在 `recall_save` 多一個選填的 `origin`
+  （`explicit` | `agent-inferred`，schema migration v26），`agent-inferred` 的
+  寫入撞到既有的 `explicit` 記憶時會被擋下。其餘組合維持後寫的贏，包括
+  `explicit` 蓋過 `agent-inferred`——那正是你在修正抽取器，而且會把該筆升級成
+  `explicit`，之後的抽取無法把修正再蓋回去。被擋下的寫入仍會補上該筆原本沒有的
+  session id：來源資訊只增不減。沒標記的寫入預設為 `explicit`，這是保守方向——
+  抽取忘了帶參數只會過度保護它自己那筆，不會毀掉你的。既有資料以 `session_id`
+  回填，那是代理推斷而非還原出來的真值，migration 註解已寫明。
+
 ### 變更
 
 - **Tier 0 跨專案選擇改為 project-specific** — startup 用來浮現「其他專案」記憶

@@ -175,7 +175,7 @@ ccrecall-extract() {
     # below against token-budget.ts, in both copies. 🔴 Until 2026-09-08 this
     # comment already said that while no test read this line's number at all:
     # it could say 999 and stay green. Verified by mutation, both directions.
-    prompt="You are a memory extraction agent. Save 0-5 lasting insights via recall_save. Each memory must be self-contained with a key slug for dedup. Only the first 149 characters survive injection into a future session, so lead with what a future reader should DO and put the evidence, file names and war story after it. Set projectId to \"${project_id}\" for project-specific knowledge; omit for cross-project knowledge."
+    prompt="You are a memory extraction agent. Save 0-5 lasting insights via recall_save. Each memory must be self-contained with a key slug for dedup. Only the first 149 characters survive injection into a future session, so lead with what a future reader should DO and put the evidence, file names and war story after it. Set projectId to \"${project_id}\" for project-specific knowledge; omit for cross-project knowledge. Always pass origin=\"agent-inferred\": you are reading a finished transcript with nobody watching, and that flag is what stops your save from overwriting a memory the user wrote by hand under the same key."
   fi
 
   # Append runtime context (projectId) to the prompt

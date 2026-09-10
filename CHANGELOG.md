@@ -13,6 +13,25 @@ more like an iteration counter than a strict SemVer major).
 
 ## [Unreleased]
 
+### Added
+
+- **Memories now record who wrote them, and extraction can no longer overwrite
+  what you wrote by hand** — automatic extraction and manual saves both enter
+  through `recall_save`, so the write path had no way to tell them apart. A
+  later extraction that picked the same `key` replaced the existing memory
+  outright: content, type, confidence, and — because the upsert resets them —
+  its access history and compression level too. `recall_save` takes an optional
+  `origin` (`explicit` | `agent-inferred`, schema migration v26), and an
+  `agent-inferred` save is refused against an existing `explicit` row. Every
+  other combination keeps last-writer-wins, including `explicit` over
+  `agent-inferred` — that is you correcting the extractor, and it promotes the
+  row so a later extraction cannot undo the correction. A refused write still
+  contributes a session id the row was missing; provenance is additive.
+  Unlabelled writes default to `explicit`, the fail-safe direction: an
+  extraction that forgets the parameter over-protects its own row instead of
+  destroying yours. Existing rows are backfilled from `session_id` — a proxy,
+  not a recovered label, and the migration says so.
+
 ### Changed
 
 - **Tier 0 cross-project selection is now project-specific** — the three
