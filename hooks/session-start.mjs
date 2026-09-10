@@ -18,6 +18,8 @@ const PORT = Number(process.env.CCRECALL_PORT ?? 7749)
 const HOST = '127.0.0.1'
 const TIMEOUT_MS = 2000
 const MEMORY_LIMIT = 5
+// Legacy strategy only. /memory/query treats an absent maxTokens as "no budget
+// at all" and would emit whole memories, so this one still has to be sent.
 const MAX_TOKENS = 300
 // A key longer than this is not rendered at all rather than truncated: a clipped
 // key is a handle that silently resolves to nothing. Observed keys run to 52
@@ -82,11 +84,16 @@ async function queryLegacy(query, projectId) {
 }
 
 async function queryStartupV1(query, projectId, sessionId) {
+  // No maxTokens: the daemon owns budget policy, same as the prompt hook. It
+  // prices the rendered line — prefix, confidence suffix, [key: …] handle,
+  // header and footer — and this file is the thing being priced, so it cannot
+  // be the one naming the number. It also means an upgrade to the service
+  // changes the budget without rewriting a hook already installed in the
+  // user's settings.json.
   const params = new URLSearchParams({
     project: projectId,
     q: query,
     limit: String(MEMORY_LIMIT),
-    maxTokens: String(MAX_TOKENS),
   })
   if (sessionId) params.set('sessionId', sessionId)
   const result = await httpGet(`/memory/startup?${params.toString()}`)
