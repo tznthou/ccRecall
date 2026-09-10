@@ -106,6 +106,10 @@ For each memory, call `recall_save` with:
 - `projectId`: include for project-specific, omit for cross-project
 - `sessionId`: the Origin session ID given in the transcript header above —
   pass it verbatim so each memory can be traced back to its origin session
+- `origin`: always `"agent-inferred"`. You are reading a finished transcript
+  with nobody watching, so your saves must not overwrite a memory the user
+  wrote by hand under the same key. Omitting this marks your save as the
+  user's own and removes that protection.
 
 ## Output
 

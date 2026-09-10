@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import * as z from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { Database } from '../core/database.js'
+import type { Database, MemoryOrigin } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
 import type { Memory, MemoryType, KnowledgeDepth } from '../core/types.js'
 import { deriveDepth } from '../core/types.js'
@@ -130,6 +130,14 @@ const recallSaveInput = {
   ),
   key: z.string().min(1).max(100).optional().describe(
     'Stable hyphenated slug for dedup (e.g. "sqlite-wal-truncate-checkpoint"). Same (projectId, key) updates instead of creating a duplicate.',
+  ),
+  origin: z.enum(['explicit', 'agent-inferred']).optional().describe(
+    'Who is writing. Leave unset (defaults to "explicit") whenever a human is in ' +
+    'the conversation — including when you decide on your own that something is ' +
+    'worth saving mid-session. Set "agent-inferred" ONLY from the automated ' +
+    'post-session extraction pass, which reads a finished transcript with nobody ' +
+    'watching. The difference is enforced: an agent-inferred save will not ' +
+    'overwrite an existing explicit memory under the same key.',
   ),
 }
 
@@ -293,6 +301,7 @@ export function recallSaveHandler(
     confidence?: number
     projectId?: string | null
     key?: string
+    origin?: MemoryOrigin
   },
 ): McpTextResult {
   try {
@@ -304,6 +313,7 @@ export function recallSaveHandler(
       confidence: args.confidence ?? 1,
       projectId: args.projectId ?? null,
       key: args.key ?? null,
+      origin: args.origin,
     })
 
     // Auto topic extraction — Phase 3 Tier 0 needs memory_topics to exist.

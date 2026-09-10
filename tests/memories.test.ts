@@ -47,7 +47,7 @@ describe('memories schema', () => {
     expect(names).toEqual([
       'id', 'session_id', 'message_id', 'content', 'type', 'confidence', 'created_at',
       'last_accessed', 'access_count', 'compressed_at', 'compression_level', 'project_id',
-      'key',
+      'key', 'origin',
     ])
   })
 })

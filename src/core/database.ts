@@ -32,7 +32,17 @@ export interface MemoryInput {
   /** v0.4.1: stable slug for key-based upsert dedup. When provided, a second
    *  save with the same (project_id, key) updates instead of inserting. */
   key?: string | null
+  /** v0.7.3: who wrote this. Defaults to 'explicit' — the fail-safe direction,
+   *  because the guard in saveMemory refuses to let 'agent-inferred' overwrite
+   *  'explicit'. An extraction that forgets the parameter therefore over-protects
+   *  its own row rather than destroying a hand-written one. */
+  origin?: MemoryOrigin
 }
+
+/** Who wrote a memory. Automatic extraction and hand-written saves share the
+ *  same `recall_save` entry point, so this is stated by the caller rather than
+ *  inferred from the request. */
+export type MemoryOrigin = 'explicit' | 'agent-inferred'
 
 /** 寫入 messages 時使用的參數型別 */
 export interface MessageInput {
@@ -861,6 +871,41 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_injection_log_session ON injection_log(session_id);
         CREATE INDEX IF NOT EXISTS idx_injection_log_memory ON injection_log(memory_id);
       `)
+    },
+  },
+  {
+    version: 26,
+    description: 'memories.origin: separate hand-written memories from extracted ones',
+    up: (db) => {
+      // Same guard every other ADD COLUMN migration here uses (v2, v5, v7, v10,
+      // v11, v21, v23): a DB can reach this with the column already present.
+      // The migration-rewind tests restore an older schema_version without
+      // undoing later ALTERs, and re-running the backfill below on a live DB
+      // would relabel rows the user had since corrected to 'explicit'. Bailing
+      // out whole, rather than skipping only the ALTER, is what keeps that safe.
+      const cols = db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>
+      if (cols.some(c => c.name === 'origin')) return
+
+      // Both paths reach saveMemory through recall_save, so the write path
+      // cannot tell them apart without being told. Until it was, an extraction
+      // landing on an existing key overwrote whatever the user had written
+      // there — including its access history, which the upsert resets.
+      //
+      // DEFAULT 'explicit' is the fail-safe direction: an unlabelled write is
+      // treated as the user's and therefore protected. The opposite default
+      // would make a forgotten parameter silently destructive.
+      db.exec(`
+        ALTER TABLE memories ADD COLUMN origin TEXT NOT NULL DEFAULT 'explicit'
+          CHECK (origin IN ('explicit', 'agent-inferred'));
+      `)
+      // Backfill from session_id. This is a proxy and not a recovered label:
+      // rows written before this column existed never carried one. It holds on
+      // the live corpus because nothing in an interactive session knows its own
+      // session id to pass, so every manual save is session-less (86 of 86 on
+      // 2026-09-11) while extraction always passes one. A future caller that
+      // passes a session id by hand would be mislabelled here — which is why
+      // new writes carry the real value instead of being re-derived.
+      db.exec(`UPDATE memories SET origin = 'agent-inferred' WHERE session_id IS NOT NULL;`)
     },
   },
 ]
@@ -1842,17 +1887,39 @@ export class Database {
 
     // v0.4.1: key-based upsert — same (project_id, key) updates instead of inserting.
     // Wrapped in transaction to prevent TOCTOU race between SELECT and UPDATE/INSERT.
+    const origin: MemoryOrigin = input.origin ?? 'explicit'
+
     if (key) {
       const upsert = this.db.transaction(() => {
         const existing = this.db.prepare(`
-          SELECT id FROM memories
+          SELECT id, origin FROM memories
           WHERE key = ? AND COALESCE(project_id, '') = COALESCE(?, '')
-        `).get(key, projectId) as { id: number } | undefined
+        `).get(key, projectId) as { id: number; origin: MemoryOrigin } | undefined
 
         if (existing) {
+          // v0.7.3: extraction must not displace what the user wrote by hand.
+          // Every other combination keeps last-writer-wins — including explicit
+          // over agent-inferred, which is the user correcting the extractor and
+          // promotes the row so later extractions cannot undo the correction.
+          if (existing.origin === 'explicit' && origin === 'agent-inferred') {
+            // Provenance is still additive: refusing the content change is no
+            // reason to drop a session id this row did not have. Nothing else
+            // moves — in particular not access_count or compression_level,
+            // which the unguarded update below resets. Resetting them on a
+            // write we just refused would distort decay ranking and re-run the
+            // compression pipeline over content that never changed.
+            this.db.prepare(`
+              UPDATE memories
+              SET session_id = COALESCE(session_id, ?),
+                  message_id = COALESCE(message_id, ?)
+              WHERE id = ?
+            `).run(input.sessionId, input.messageId, existing.id)
+            return existing.id
+          }
+
           this.db.prepare(`
             UPDATE memories
-            SET content = ?, confidence = ?, type = ?,
+            SET content = ?, confidence = ?, type = ?, origin = ?,
                 session_id = COALESCE(?, session_id),
                 message_id = COALESCE(?, message_id),
                 access_count = 0, last_accessed = NULL,
@@ -1862,6 +1929,7 @@ export class Database {
             input.content,
             input.confidence ?? 0.8,
             input.type,
+            origin,
             input.sessionId,
             input.messageId,
             existing.id,
@@ -1870,8 +1938,8 @@ export class Database {
         }
 
         const info = this.db.prepare(`
-          INSERT INTO memories (session_id, message_id, content, type, confidence, project_id, key)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO memories (session_id, message_id, content, type, confidence, project_id, key, origin)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           input.sessionId,
           input.messageId,
@@ -1880,6 +1948,7 @@ export class Database {
           input.confidence ?? 0.8,
           projectId,
           key,
+          origin,
         )
         return Number(info.lastInsertRowid)
       })
@@ -1887,8 +1956,8 @@ export class Database {
     }
 
     const info = this.db.prepare(`
-      INSERT INTO memories (session_id, message_id, content, type, confidence, project_id, key)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (session_id, message_id, content, type, confidence, project_id, key, origin)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.sessionId,
       input.messageId,
@@ -1897,6 +1966,7 @@ export class Database {
       input.confidence ?? 0.8,
       projectId,
       key,
+      origin,
     )
     return Number(info.lastInsertRowid)
   }
