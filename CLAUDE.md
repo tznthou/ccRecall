@@ -28,12 +28,25 @@
 
 ## 架構
 
+三條讀取路徑 + 一條寫入路徑，共用同一個 SQLite 檔（MCP 走 WAL 直接開檔，不經 HTTP）。
+
 ```
-Claude Code hooks ──HTTP──→ ccRecall Service ──→ SQLite + FTS5
-                                                  ├── memories
-                                                  ├── knowledge_map
-                                                  └── sessions/messages (from JSONL)
+讀（注入）
+  SessionStart hook      ──HTTP──→ /memory/startup  ┐
+  UserPromptSubmit hook  ──HTTP──→ /memory/prompt   ├─→ ccRecall daemon :7749 ─┐
+  MCP recall_query/context ─────── WAL 直接開檔 ─────────────────────────────┐ │
+                                                                            ↓ ↓
+寫（產生記憶）                                            SQLite + FTS5 ├── memories
+  ccrecall-extract wrapper → Haiku → MCP recall_save ──→                ├── memory_topics
+  手動 recall_save ────────────────────────────────→                    ├── knowledge_map
+                                                                        ├── injection_log
+索引（唯讀來源）                                                        └── sessions/messages
+  ~/.claude/**/*.jsonl → watcher → scanner → parser → summarizer → indexer ↑
 ```
+
+⚠️ **摘要引擎（summarizer）是規則式零成本，但記憶抽取（extraction）走 Haiku**——
+兩件事，別混為一談。SessionEnd hook 只標記結束，不抽取；抽取只在 `ccrecall-extract`
+（zsh alias `ccdm`）收尾時跑。
 
 ## 測試誠信
 
@@ -58,17 +71,20 @@ Claude Code hooks ──HTTP──→ ccRecall Service ──→ SQLite + FTS5
 - Hooks 注入可行性: `.claude/pi-research/hooks-context-injection-feasibility.md`
 - LLM Wiki 範式分析: `.claude/pi-research/llm-wiki-karpathy-analysis.md`
 
-## 核心模組來源（從 ccRewind 抽取）
+## 核心模組（源自 ccRewind，抽取已完成）
 
-抽取順序：types → parser → scanner → summarizer → database（裁剪 UI query）→ indexer
+六個模組全部就位，`src/core/` 是唯一權威版本；不要回頭去 ccRewind 找。
 
-| 模組 | ccRewind 來源 | LOC | 測試 | 狀態 |
-|------|--------------|-----|------|------|
-| types | `src/shared/types.ts` | — | — | ✓ 已抽取（`src/core/types.ts`） |
-| parser | `src/main/parser.ts` | 240 | `tests/parser.test.ts` | 待抽取 |
-| scanner | `src/main/scanner.ts` | 131 | `tests/scanner.test.ts` | 待抽取 |
-| summarizer | `src/main/summarizer.ts` | 476 | `tests/summarizer.test.ts` | 待抽取 |
-| database | `src/main/database.ts` | 1665 | `tests/database.test.ts` | 待抽取（需裁剪 UI query） |
-| indexer | `src/main/indexer.ts` | 253 | `tests/indexer.test.ts` | 待抽取 |
+| 模組 | 現在的位置 | LOC | 測試 |
+|------|-----------|-----|------|
+| types | `src/core/types.ts` | 280 | — |
+| parser | `src/core/parser.ts` | 241 | `tests/parser.test.ts` |
+| scanner | `src/core/scanner.ts` | 132 | `tests/scanner.test.ts` |
+| summarizer | `src/core/summarizer.ts` | 476 | `tests/summarizer.test.ts` |
+| database | `src/core/database.ts` | 2601 | `tests/database.test.ts` |
+| indexer | `src/core/indexer.ts` | 271 | `tests/indexer.test.ts` |
 
-所有模組零 Electron 依賴，可原樣搬遷。唯一外部依賴：better-sqlite3（database.ts）。
+抽取後 ccRecall 自己長出來的：`memory-service` / `compression` / `token-budget` /
+`topic-extractor` / `watcher` / `integrity-monitor` / `maintenance-coordinator` /
+`recall-telemetry` / `project-id` / `log-safe`。零 Electron 依賴，外部依賴只有
+better-sqlite3。
