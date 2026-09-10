@@ -31,6 +31,25 @@ more like an iteration counter than a strict SemVer major).
   extraction that forgets the parameter over-protects its own row instead of
   destroying yours. Existing rows are backfilled from `session_id` — a proxy,
   not a recovered label, and the migration says so.
+- **A three-arm comparison harness for "did the memory actually help?"**
+  (`evaluation/`, `pnpm eval:demo`) — every metric shipped so far measures
+  retrieval: did the right row come back, did it reach the injection, was it
+  surfaced more than once. None of them answers
+  [#71](https://github.com/tznthou/ccRecall/issues/71). This runs the same
+  question under three evidence conditions — the real retrieval path, a
+  deliberately dumb bag-of-words baseline, and no memory at all — and compares
+  them. The baseline is the load-bearing arm: beating "no memory" only shows
+  that context beats no context, while beating a 15-line ranker is what would
+  justify the ranking machinery. The answering callback receives only
+  `{ question, evidence }`, so it cannot tell which arm it is in; each case
+  loads its corpus into a database of its own and never opens the real store;
+  and one case is unanswerable from its own corpus, so the suite has a floor
+  that catches a metric drifting into measuring the model's prior knowledge.
+  The demo runs offline against a stub model — no API key, no cost, and no
+  claim about answer quality. **First result (n = 5, stub model): the dumb
+  baseline is ahead, 0.600 vs 0.400.** Two known weaknesses account for it,
+  paraphrase and spaceless CJK queries; five authored cases settle nothing, but
+  the arms separate and the floor holds at zero.
 
 ### Changed
 
