@@ -175,7 +175,7 @@ ccrecall-extract() {
     # below against token-budget.ts, in both copies. 🔴 Until 2026-09-08 this
     # comment already said that while no test read this line's number at all:
     # it could say 999 and stay green. Verified by mutation, both directions.
-    prompt="You are a memory extraction agent. Save 0-5 lasting insights via recall_save. Each memory must be self-contained with a key slug for dedup. Only the first 149 characters survive injection into a future session, so lead with what a future reader should DO and put the evidence, file names and war story after it. Set projectId to \"${project_id}\" for project-specific knowledge; omit for cross-project knowledge. Always pass origin=\"agent-inferred\": you are reading a finished transcript with nobody watching, and that flag is what stops your save from overwriting a memory the user wrote by hand under the same key."
+    prompt="You are a memory extraction agent. Save 0-5 lasting insights via recall_save. Each memory must be self-contained with a key slug for dedup. Only the first 149 characters survive injection into a future session, so lead with what a future reader should DO and put the evidence, file names and war story after it. Set projectId to \"${project_id}\" for project-specific knowledge; omit for cross-project knowledge. Always pass origin=\"agent-inferred\": you are reading a finished transcript with nobody watching, and that flag is what stops your save from overwriting a memory the user wrote by hand under the same key. Pass messageId: the uuid in the \"--- human [<uuid>] ---\" header of the one message a memory came from, copied verbatim — omit it when no single message is the source, and never guess a uuid."
   fi
 
   # Append runtime context (projectId) to the prompt
@@ -203,21 +203,46 @@ ccrecall-extract() {
       local session_transcript
       # A2: -R + fromjson? skips malformed JSONL lines instead of aborting
       # A1+A5: head -c 200000 + iconv -c strips incomplete UTF-8 at boundary
+      #
+      # Q1 (2026-09-11): each header carries the message uuid, so a memory can
+      # name the message it came from (`memories.message_id`, 0/1639 filled
+      # before this). The transcript was the blocker, not the schema: the
+      # column and the recall_save parameter both already existed, and the
+      # model had nothing to point at.
+      #
+      # Costs ~40 bytes per message against the 200KB cap. Measured on a real
+      # 151-message session: 119,507 -> 125,396 bytes, +4.93%. (The share is
+      # higher on an English-heavy session — that one is mostly CJK, where the
+      # body text costs 3 bytes a character and dilutes the ASCII uuids. head
+      # -c counts bytes, not characters.) A session already at the cap loses
+      # that much off its tail, which is a real cost, accepted because the tail
+      # is what the model has most recently read in full, while provenance is
+      # unrecoverable after the fact — 65.6% of stored memories have already
+      # been rewritten by compression.
+      #
+      # gsub keeps the header structurally intact: the transcript is untrusted
+      # data, and a uuid holding `] ---` would otherwise let a crafted JSONL
+      # forge message boundaries. Restricting the characters rather than
+      # matching a uuid shape is deliberate — a format gate would stop printing
+      # citations the day Claude Code changes its id format, silently. A value
+      # mangled by gsub simply fails verification on the write side.
       session_transcript=$(jq -R -r '
         fromjson? // empty |
+        (((.uuid | strings) // "") | gsub("[^A-Za-z0-9-]"; "")) as $u |
+        (if $u == "" then "" else " [" + $u + "]" end) as $cite |
         if .type == "user" and .message then
           .message.content |
           if type == "array" then
             [.[] | select(.type == "text") | .text // empty] | join("\n") |
-            if . != "" then "--- human ---\n" + . else empty end
+            if . != "" then "--- human" + $cite + " ---\n" + . else empty end
           elif type == "string" then
-            if . != "" then "--- human ---\n" + . else empty end
+            if . != "" then "--- human" + $cite + " ---\n" + . else empty end
           else empty end
         elif .type == "assistant" and .message then
           .message.content |
           if type == "array" then
             [.[] | select(.type == "text") | .text // empty] | join("\n") |
-            if . != "" then "--- assistant ---\n" + . else empty end
+            if . != "" then "--- assistant" + $cite + " ---\n" + . else empty end
           else empty end
         else empty end
       ' "$jsonl_path" 2>/dev/null | head -c 200000 | iconv -c -f utf-8 -t utf-8)

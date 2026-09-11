@@ -224,7 +224,7 @@ Six endpoints, each with a live caller — v0.5.0 removed the other eight
 |------|---------|
 | `recall_query` | User-scoped FTS5 keyword search across memories with project-aware ranking. Cross-project memories surface via topic intersection |
 | `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
-| `recall_save` | Store a new memory with optional `key` slug for dedup (same key updates instead of duplicating). Auto-extracts topics for cross-project retrieval |
+| `recall_save` | Store a new memory with optional `key` slug for dedup (same key updates instead of duplicating). Auto-extracts topics for cross-project retrieval. Optional `messageId` records which message the memory came from — checked against that session's real messages, and dropped rather than stored if it doesn't match |
 
 **Memory types** (for `recall_save`):
 

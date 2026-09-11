@@ -15,6 +15,24 @@ more like an iteration counter than a strict SemVer major).
 
 ### Added
 
+- **An extracted memory can now name the message it came from** —
+  `memories.message_id` was empty for all 1,639 rows, and the schema was never
+  the reason: the column and the `recall_save` parameter both already existed.
+  The extraction transcript headed every turn `--- human ---`, identical for
+  all of them, so the model had nothing to point at. Headers now carry the
+  message uuid (`--- human [<uuid>] ---`), the prompt asks for the uuid of the
+  one message a memory came from, and the write path checks it against that
+  session's real messages — a uuid the session does not hold is dropped and the
+  memory is saved without it. Provenance is additive: never a gate on content.
+  **What a stored citation does not claim is that the cited message proves the
+  memory.** Nothing compares the two texts; the check is existence and session
+  ownership only, and the prompt says so to the model as plainly as this says
+  it to you. What it does buy is that a fabricated uuid cannot get in, which is
+  the whole reason the column is worth filling — a provenance field that can
+  hold invented values is worse than an empty one, because it reads as
+  evidence. Costs ~40 bytes per transcript message (measured: +4.93% on a
+  151-message session), taken off the tail of any session already at the 200KB
+  transcript cap.
 - **Memories now record who wrote them, and extraction can no longer overwrite
   what you wrote by hand** — automatic extraction and manual saves both enter
   through `recall_save`, so the write path had no way to tell them apart. A

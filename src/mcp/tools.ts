@@ -2,6 +2,7 @@
 import * as z from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Database, MemoryOrigin } from '../core/database.js'
+import { normaliseMessageUuid } from '../core/database.js'
 import { MemoryService } from '../core/memory-service.js'
 import type { Memory, MemoryType, KnowledgeDepth } from '../core/types.js'
 import { deriveDepth } from '../core/types.js'
@@ -123,7 +124,14 @@ const recallSaveInput = {
   content: z.string().min(1).describe('Memory content — the fact or insight to remember'),
   type: z.enum(MEMORY_TYPES).describe('Memory category'),
   sessionId: z.string().nullable().optional().describe('Origin session ID (optional)'),
-  messageId: z.string().nullable().optional().describe('Origin message ID (optional)'),
+  messageId: z.string().nullable().optional().describe(
+    'The uuid of the single message this memory came from. Post-session ' +
+    'extraction reads it from the transcript header (`--- human [<uuid>] ---`). ' +
+    'Checked against the messages of the session named in sessionId: a uuid ' +
+    'that session does not hold is dropped and the memory is saved without it, ' +
+    'so omit this rather than guess. Storing a citation does not assert that ' +
+    'the cited message proves the memory — it records where it came from.',
+  ),
   confidence: z.number().min(0).max(1).optional().describe('Confidence 0-1 (default 1)'),
   projectId: z.string().nullable().optional().describe(
     'Project ID for scoped queries. Session-backed memories derive this from sessions.project_id automatically. Omit projectId for knowledge reusable across all projects.',
@@ -305,9 +313,40 @@ export function recallSaveHandler(
   },
 ): McpTextResult {
   try {
+    // Q1 (2026-09-11): a citation is stored only if this session really holds
+    // that message. The model is a small one copying a 36-char hex string out
+    // of a 200KB transcript, so the failure to design against is not refusal
+    // but a plausible-looking wrong value — `message_id` reads as evidence,
+    // and evidence that can be invented is worse than an empty column.
+    //
+    // Verification failure drops the citation and keeps the memory: provenance
+    // is additive, never a gate on content. The note back to the caller says
+    // so explicitly, because an extraction run has a hard turn budget
+    // (--max-turns 5) and a retry loop would cost saves it has not made yet.
+    let messageId: string | null = null
+    let provenanceNote = ''
+    const citedMessageId = normaliseMessageUuid(args.messageId)
+    if (citedMessageId !== null) {
+      if (db.hasMessageUuid(citedMessageId, args.sessionId ?? null)) {
+        messageId = citedMessageId
+      } else {
+        // The only trace this leaves: MCP stderr reaches claude's stderr,
+        // which the extraction wrapper captures into extract.log.jsonl. Without
+        // it a dropped citation is byte-identical to a model that never cited
+        // anything — the same silent-miss shape #75 took months to notice.
+        console.warn(
+          '[recall_save] messageId failed verification (unknown uuid, or a message ' +
+          'from a different session) — provenance dropped, memory saved',
+        )
+        provenanceNote =
+          ' — the supplied messageId is not a message of this session and was dropped; ' +
+          'the memory itself is saved, so do not retry'
+      }
+    }
+
     const id = db.saveMemory({
       sessionId: args.sessionId ?? null,
-      messageId: args.messageId ?? null,
+      messageId,
       content: args.content,
       type: args.type,
       confidence: args.confidence ?? 1,
@@ -337,7 +376,7 @@ export function recallSaveHandler(
       }
     }
 
-    return textResult(`Saved memory #${id} (type: ${args.type})`)
+    return textResult(`Saved memory #${id} (type: ${args.type})${provenanceNote}`)
   } catch (err) {
     return textError('Error saving memory', err)
   }

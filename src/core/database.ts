@@ -18,6 +18,20 @@ export function hash64(s: string): bigint {
   return createHash('sha256').update(s).digest().readBigInt64BE(0)
 }
 
+/** Q1 (2026-09-11): clean up a model-supplied message citation.
+ *
+ *  The extraction transcript prints `--- human [<uuid>] ---`, and a model
+ *  copying that value sometimes brings the brackets along. Stripping those is
+ *  the whole of the normalisation. Anything cleverer — case folding, pulling a
+ *  uuid-shaped substring out of a longer string — would hard-code an
+ *  assumption about an id format Claude Code is free to change, and being
+ *  wrong there costs a silently dropped citation rather than a visible error. */
+export function normaliseMessageUuid(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim().replace(/^\[+/, '').replace(/\]+$/, '').trim()
+  return trimmed === '' ? null : trimmed
+}
+
 /** 寫入 memories 時使用的參數型別 */
 export interface MemoryInput {
   sessionId: string | null
@@ -1484,6 +1498,40 @@ export class Database {
   }
 
   // ── UUID dedup helper ──
+
+  /** Q1 (2026-09-11): is this uuid a message the cited session actually holds?
+   *
+   *  ⚠️ Existence and ownership only. `true` does NOT mean the cited message
+   *  supports the memory — the extraction model chose the citation and nothing
+   *  here compares the two texts. cairn-memory states the same boundary in its
+   *  own extract prompt ("selecting an index is not proof of entailment"); we
+   *  keep the weaker claim rather than implying a stronger one. Checking
+   *  entailment needs the message text stored beside the memory, which is the
+   *  receipts design this deliberately is not.
+   *
+   *  What it does buy: a fabricated uuid cannot enter the column. That is the
+   *  whole reason `message_id` is worth filling — a provenance field that can
+   *  hold invented values is worse than an empty one, because it reads as
+   *  evidence.
+   *
+   *  A null sessionId (hand-written recall_save) drops to existence-only.
+   *  Ownership is unverifiable without a session, and refusing outright would
+   *  close the column to the one write path a human actually uses. */
+  hasMessageUuid(uuid: string | null | undefined, sessionId: string | null): boolean {
+    const normalised = normaliseMessageUuid(uuid)
+    if (normalised === null) return false
+    // SELECT 1, never the hash itself: reading a uuid_hash back would need
+    // .safeIntegers(true) to survive values beyond 2^53 (see getExistingUuids).
+    // Binding a BigInt needs no such flag — indexSession already does it.
+    const row = sessionId
+      ? this.db.prepare(
+        'SELECT 1 AS ok FROM message_uuids WHERE uuid_hash = ? AND session_hash = ?',
+      ).get(hash64(normalised), hash64(sessionId))
+      : this.db.prepare(
+        'SELECT 1 AS ok FROM message_uuids WHERE uuid_hash = ?',
+      ).get(hash64(normalised))
+    return row !== undefined
+  }
 
   /** 查詢 DB 中已存在的 uuid（用於跨 session 去重 resumed session replay）。
    *  v24: message_uuids 只存 64-bit hash，查詢以 hash 比對、以 Map 反查還原
