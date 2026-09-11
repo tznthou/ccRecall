@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-import { mkdirSync, appendFileSync } from 'node:fs'
+import { appendFileSync } from 'node:fs'
+import { ensureCcrecallDir, secureCcrecallFile, CCRECALL_FILE_MODE } from './secure-dir.js'
 import path from 'node:path'
 import os from 'node:os'
 
@@ -59,8 +60,13 @@ export function appendRecallTelemetry(
   const entry = buildRecallTelemetryEntry(input, options.now)
 
   try {
-    mkdirSync(path.dirname(telemetryPath), { recursive: true, mode: 0o700 })
-    appendFileSync(telemetryPath, JSON.stringify(entry) + '\n', { mode: 0o600 })
+    // #95: this was the one creator that already passed a mode, and it is now
+    // routed through the shared helper so it also repairs a directory an older
+    // install left at 0755 — passing `mode` only ever affected a directory this
+    // call actually created.
+    ensureCcrecallDir(path.dirname(telemetryPath))
+    appendFileSync(telemetryPath, JSON.stringify(entry) + '\n', { mode: CCRECALL_FILE_MODE })
+    secureCcrecallFile(telemetryPath)
   } catch {
     // telemetry write must never affect endpoint response;
     // swallow errors (privilege issues, disk full, etc.)

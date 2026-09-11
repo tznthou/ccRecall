@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
+import { ensureCcrecallDir, CCRECALL_FILE_MODE } from './secure-dir.js'
 import path from 'node:path'
 import os from 'node:os'
 import type { Database } from './database.js'
@@ -105,7 +106,7 @@ export class IntegrityMonitor {
 
   private writeAlertFile(at: string, lines: string[]): string | null {
     try {
-      mkdirSync(this.alertDir, { recursive: true })
+      ensureCcrecallDir(this.alertDir)
       const safeStamp = at.replace(/[:.]/g, '-')
       const file = path.join(this.alertDir, `integrity-check-${safeStamp}.log`)
       const body = [
@@ -117,7 +118,10 @@ export class IntegrityMonitor {
         ...lines,
         '',
       ].join('\n')
-      writeFileSync(file, body, { encoding: 'utf8', flag: 'wx' })
+      // #95: an alert carries full PRAGMA output and the database path, so it
+      // gets the same 0600 the rest of ~/.ccrecall now uses. `wx` means this is
+      // always a fresh file, so the mode option is enough — no repair needed.
+      writeFileSync(file, body, { encoding: 'utf8', flag: 'wx', mode: CCRECALL_FILE_MODE })
       return file
     } catch (err) {
       console.error(
