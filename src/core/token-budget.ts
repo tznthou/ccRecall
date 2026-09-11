@@ -2,7 +2,10 @@
 
 /**
  * Token budget primitives for recall output (Issue #12).
- * Implementation of the "<300 tokens" contract documented in tutorial.md.
+ * Implementation of the injection budget contract documented in tutorial.md.
+ * The number lives in DEFAULT_MAX_TOKENS below, not in this sentence: stating
+ * it twice is how the file came to say "<300 tokens" three lines above the
+ * constant that reads 400.
  */
 
 /** Total output budget for one SessionStart injection.
