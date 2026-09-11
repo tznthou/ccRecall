@@ -330,10 +330,16 @@ export function recallSaveHandler(
       if (db.hasMessageUuid(citedMessageId, args.sessionId ?? null)) {
         messageId = citedMessageId
       } else {
-        // The only trace this leaves: MCP stderr reaches claude's stderr,
-        // which the extraction wrapper captures into extract.log.jsonl. Without
-        // it a dropped citation is byte-identical to a model that never cited
-        // anything — the same silent-miss shape #75 took months to notice.
+        // Where this trace actually lands (measured 2026-09-11): NOT in the
+        // extraction wrapper's extract.log.jsonl. Claude Code does not forward
+        // an MCP server's stderr to its own — it captures it into a per-project
+        // MCP log, on macOS ~/Library/Caches/claude-cli-nodejs/<projectId>/
+        // mcp-logs-ccrecall/<ts>.jsonl, one entry per line prefixed
+        // `Server stderr:`. Measured against the banner every launch prints:
+        // 0 of 590 wrapper runs captured it, while the MCP log holds it every
+        // time. Look in the wrong file and a dropped citation reads as
+        // byte-identical to a model that never cited anything — the same
+        // silent-miss shape #75 took months to notice.
         console.warn(
           '[recall_save] messageId failed verification (unknown uuid, or a message ' +
           'from a different session) — provenance dropped, memory saved',
