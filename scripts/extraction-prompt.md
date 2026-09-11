@@ -96,6 +96,26 @@ memory is updated instead of duplicated. Choose keys that are:
 - Stable enough that the same insight would get the same key next time
 - Lowercase, hyphenated, no special characters
 
+## Message provenance (messageId)
+
+Every turn in the transcript is headed `--- human [<uuid>] ---` or
+`--- assistant [<uuid>] ---`. That uuid identifies the message.
+
+For each memory, pass the uuid of the ONE message that most directly produced
+it — where the decision was stated, the root cause named, the preference
+expressed. Copy it verbatim out of the header.
+
+- **Never invent, reconstruct, or guess a uuid.** If no single message stands
+  out, omit `messageId` entirely. A missing citation costs nothing; a wrong one
+  makes a memory look sourced when it is not, which is worse than unsourced.
+- A header printed without a uuid (`--- human ---`) cannot be cited. Omit.
+- Citing a message is **not** a claim that the message proves the memory. It
+  records where you drew it from, so a human can go read that turn later. Pick
+  the most direct source; do not stretch to manufacture one.
+- The save path checks the uuid against this session's real messages. One it
+  cannot find is dropped, the memory is saved without it, and the result says
+  so. Do not retry — the turn budget is better spent on saves not yet made.
+
 ## recall_save parameters
 
 For each memory, call `recall_save` with:
@@ -106,6 +126,9 @@ For each memory, call `recall_save` with:
 - `projectId`: include for project-specific, omit for cross-project
 - `sessionId`: the Origin session ID given in the transcript header above —
   pass it verbatim so each memory can be traced back to its origin session
+- `messageId`: the uuid of the single message this memory came from, copied
+  from its `--- human [<uuid>] ---` header (see above). Omit when no one
+  message is the source — never guess one
 - `origin`: always `"agent-inferred"`. You are reading a finished transcript
   with nobody watching, so your saves must not overwrite a memory the user
   wrote by hand under the same key. Omitting this marks your save as the

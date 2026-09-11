@@ -222,7 +222,7 @@ curl "http://127.0.0.1:7749/memory/query?q=authentication&limit=5"
 |------|------|
 | `recall_query` | 使用者範圍的 FTS5 關鍵字搜尋，帶 project-aware 排序。跨專案記憶透過 topic intersection 浮出 |
 | `recall_context` | 按 topic 分組的檢索——normalize keywords、依匹配 topic 分組 memories 並附 depth 訊號，無 topic 匹配時退回 per-keyword FTS |
-| `recall_save` | 儲存新記憶，支援選填 `key` slug 做 dedup（同 key 更新而非重複）。自動抽取 topics 供跨專案檢索 |
+| `recall_save` | 儲存新記憶，支援選填 `key` slug 做 dedup（同 key 更新而非重複）。自動抽取 topics 供跨專案檢索。選填 `messageId` 記下這筆記憶出自哪則訊息——會跟該 session 真正有的訊息核對，對不上就丟掉不存 |
 
 **Memory types**（用於 `recall_save`）：
 
