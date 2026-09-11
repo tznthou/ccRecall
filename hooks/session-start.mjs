@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { resolveProjectId } from './lib/project-id.mjs'
+import { ensureCcrecallDir, secureCcrecallFile, CCRECALL_FILE_MODE } from './lib/secure-dir.mjs'
 
 const PORT = Number(process.env.CCRECALL_PORT ?? 7749)
 const HOST = '127.0.0.1'
@@ -108,8 +109,17 @@ async function queryStartupV1(query, projectId, sessionId) {
 function writeTelemetry(record) {
   if (TELEMETRY_OFF) return
   try {
-    fs.mkdirSync(path.dirname(TELEMETRY_PATH), { recursive: true })
-    fs.appendFileSync(TELEMETRY_PATH, JSON.stringify(record) + '\n', 'utf8')
+    // #95: this hook runs on every session start, which made it the creator
+    // that in practice decided ~/.ccrecall's mode — 0755 on the dogfood
+    // machine. secureCcrecallFile also repairs a log already sitting at 0644,
+    // which appendFileSync's own `mode` option would not: that applies only
+    // when the file is created.
+    ensureCcrecallDir(path.dirname(TELEMETRY_PATH))
+    fs.appendFileSync(TELEMETRY_PATH, JSON.stringify(record) + '\n', {
+      encoding: 'utf8',
+      mode: CCRECALL_FILE_MODE,
+    })
+    secureCcrecallFile(TELEMETRY_PATH)
   } catch (err) {
     console.error(`[ccRecall] telemetry write failed: ${err.message}`)
   }

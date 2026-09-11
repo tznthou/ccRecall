@@ -70,6 +70,31 @@ more like an iteration counter than a strict SemVer major).
   the arms separate and the floor holds at zero.
 ### Fixed
 
+- **`~/.ccrecall` and everything in it is now private to your account** — the
+  directory holds the database (every memory, every session title) and
+  telemetry whose rows carry `cwd`: your account name and every project you
+  work on. Four call sites create it and only one passed a mode, so whichever
+  ran first decided. In practice that was the session-start hook, which runs
+  every time you open a session and passed none — leaving `0755` on a default
+  install, or `0775` under the `umask 002` several distributions ship, a
+  directory another local user can write into. The database file itself was
+  `0644`: world-readable, 106MB of memories on the dogfood machine.
+
+  All four creators now make the directory `0700`, and the database, the
+  telemetry logs and integrity alerts are `0600`. **Existing installs are
+  repaired, not just new ones** — `mkdirSync` leaves an existing directory's
+  mode alone and the `mode` option on a file write only applies at creation, so
+  without an explicit repair the fix would have reached nobody who already had
+  ccRecall installed. The repair is deliberately limited to paths under
+  `~/.ccrecall`: PR #94 tried re-moding a configurable path and turned a user's
+  own project directory from `0755` into `0700`, and was reverted twice. A
+  creator may choose the mode of a directory it makes; it may not re-mode one
+  that was already there and is not ours.
+
+  The failure was silent by construction — a directory back at `0755` raises no
+  error, serves every query identically, and shows up in no diff. Only an
+  assertion on the mode catches it, so each creator now has one. ([#95](https://github.com/tznthou/ccRecall/issues/95))
+
 - **The token budget now prices what the hook actually writes** — the "under
   300 tokens" contract counted only `content`, not the `- ` prefix, the
   confidence suffix, the `[key: …]` handle, or the header and footer wrapped

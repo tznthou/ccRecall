@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import BetterSqlite3 from 'better-sqlite3'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync } from 'node:fs'
+import { ensureCcrecallDir, secureCcrecallFile } from './secure-dir.js'
 import path from 'node:path'
 import type { Project, SessionMeta, SearchOptions, SessionSearchPage, SessionFile, FileOperation, OutcomeStatus, FileHistoryEntry, SubagentSession, SessionFileInput, Memory, MemoryType, Topic, InjectionSource } from './types.js'
 import { scrubErrorMessage } from './log-safe.js'
@@ -994,9 +995,17 @@ export class Database {
     this.dbPath = dbPath
     // :memory: 不需要建目錄
     if (dbPath !== ':memory:') {
-      mkdirSync(path.dirname(dbPath), { recursive: true })
+      ensureCcrecallDir(path.dirname(dbPath))
     }
     this.db = new BetterSqlite3(dbPath)
+    // #95: better-sqlite3 creates the file at the process umask — 0644 on a
+    // default macOS install, which is world-readable and holds every memory and
+    // session title in the database. Done before the first pragma so the
+    // -wal/-shm sidecars, which SQLite creates from the main file's mode,
+    // inherit 0600 rather than being secured after they already exist.
+    if (dbPath !== ':memory:') {
+      secureCcrecallFile(dbPath)
+    }
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
     this.db.pragma('busy_timeout = 5000')
