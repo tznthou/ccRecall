@@ -125,7 +125,7 @@ sequenceDiagram
     Note over CC,R: Session start
     CC->>H: SessionStart
     H->>R: GET /memory/startup
-    R-->>H: 3-tier memory pick (< 300 tokens)
+    R-->>H: 3-tier memory pick (< 400 tokens)
     H-->>CC: inject into context
     end
 
@@ -224,7 +224,7 @@ Six endpoints, each with a live caller — v0.5.0 removed the other eight
 |------|---------|
 | `recall_query` | User-scoped FTS5 keyword search across memories with project-aware ranking. Cross-project memories surface via topic intersection |
 | `recall_context` | Topic-clustered retrieval — normalizes keywords, groups memories by matched topic with depth signals, falls back to per-keyword FTS if no topic matches |
-| `recall_save` | Store a new memory with optional `key` slug for dedup (same key updates instead of duplicating). Auto-extracts topics for cross-project retrieval. Optional `messageId` records which message the memory came from — checked against that session's real messages, and dropped rather than stored if it doesn't match |
+| `recall_save` | Store a new memory. An optional `key` slug dedups (same key updates instead of duplicating), and topics are auto-extracted for cross-project retrieval. Optional `origin` (`explicit` \| `agent-inferred`) says who is writing: an `agent-inferred` save is refused against an existing `explicit` memory, so extraction cannot overwrite what you wrote by hand. Optional `messageId` records which message the memory came from — checked against that session's real messages, and dropped rather than stored if it doesn't match |
 
 **Memory types** (for `recall_save`):
 
