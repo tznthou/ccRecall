@@ -11,7 +11,7 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
-## [Unreleased]
+## [0.8.0] — 2026-09-12
 
 ### Added
 
@@ -155,6 +155,45 @@ more like an iteration counter than a strict SemVer major).
   volume alone, but it does not make the band length-neutral: dividing by a
   length proxy inverts the correlation rather than cancelling it (median −0.53
   per project).
+
+- **Extraction now leads with the prescription instead of the narrative** — a
+  memory reaches a session as its first 149 characters, and the house style put
+  the actionable part last: symptom, then root cause, then what to do about it.
+  Across the 118 memories carrying an explicit prescription marker, 116 of them
+  — **98.3%** — had that marker past the cut, at a median offset of 446
+  characters, three times the cap. What arrived was a symptom report with the
+  fix removed, which is why the same mistakes kept recurring while recall itself
+  looked healthy. The extraction prompt now asks for the action in the opening
+  sentence.
+
+  Acceptance was deliberately not left to the measurement script, and that
+  turned out to matter. The script looks for labels like `Mitigation:`, and a
+  memory whose first sentence *is* the prescription has no reason to carry one,
+  so the change reads as a regression under that instrument: 0 of 17 locatable
+  rows inside the cap afterwards, against 1 of 54 before. Two blind human reads
+  of 79 memories drawn from the same two windows — criteria fixed in advance,
+  arms mixed and hidden until after labelling — found the opposite: **28 of 40
+  after against 13 of 39 before**, Fisher exact p = 0.0016, with 23 of those 28
+  carrying no marker anywhere in the text. About a third of memories still open
+  with background; every one of those was checked by hand and does contain its
+  prescription, just past the cut. That residue is a question about the cap, not
+  about the prompt.
+
+- **`scripts/l3-prescription-position.py` now measures actionability rather than
+  labelling** — following the change above, the marker locator was the wrong
+  instrument for the text it was reading. The new locator looks for an
+  instruction that survives truncation, its verb list harvested from a frequency
+  scan of the corpus rather than written from intuition. The marker locator is
+  kept as a cross-check and printed alongside; when the two disagree in the
+  direction described above, the script names the figure not to quote. Three
+  flags come with it: `--test` (synthetic cases, touches no database),
+  `--self-check` (scores the locator against human labels, reporting
+  development-set and holdout numbers separately, because the locator was tuned
+  while looking at the first draw — recall is 0.75 there and 0.48 on the draw
+  labelled after it was frozen), and `--until` (bounds the window from above;
+  without it a "before the change" run silently includes the arm it is meant to
+  be the control for). Nine defects found by a later review of this work are
+  recorded in #117 and are deliberately not fixed here.
 
 ## [0.7.2] — 2026-08-18
 
