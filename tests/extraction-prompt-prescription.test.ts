@@ -82,9 +82,13 @@ function example(body: string, label: 'BAD' | 'GOOD'): string {
 }
 
 /**
- * Same locator the acceptance script uses (scripts/l3-prescription-position.py),
- * kept deliberately simple: this only has to find the marker in two short
- * hand-written strings.
+ * The LEGACY marker locator. scripts/l3-prescription-position.py no longer leads
+ * with it — as of 2026-09-12 its primary metric is an actionability probe, and
+ * the marker regex is kept there only as a cross-check, because a memory that
+ * opens with its prescription has no reason to carry a "Mitigation:" label.
+ * Kept here regardless: this test only has to find a marker in two short
+ * hand-written strings. Note the alternation below is a strict subset of that
+ * script's PRESCRIPTION_MARKERS.
  */
 const MARKER =
   /(?:^\s*(?:[-*]\s*)?|[.,;:!?。，、；！？]\s*)(Mitigation|Solution|Fix|Prevention|Workaround|Remedy|Correction|Lesson|Rule|解法|修法|判準)\s*[:：]/im
