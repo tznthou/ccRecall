@@ -11,6 +11,45 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A long session no longer silently extracts nothing** — post-session
+  extraction handed the whole transcript to `claude -p` as one argv parameter,
+  capped at 200,000 bytes. Two different ceilings sit below that cap, and which
+  one you hit depends on where you run:
+  - **On Linux, the kernel itself.** `execve` refuses any single argument over
+    `MAX_ARG_STRLEN` — 32 pages, so 131,072 bytes where pages are 4 kB — with
+    `E2BIG`. No terminal, wrapper or shim is involved: this is every Linux
+    user, and the effective transcript budget was about 123,000 bytes against
+    a cap that allowed 200,000.
+  - **On macOS, a terminal that wraps `claude`.** macOS has no per-argument
+    ceiling of its own (verified: a 900,000-byte argument passes, bounded only
+    by `ARG_MAX` at 1,048,576), so plain macOS was never affected — but a
+    terminal that installs its own `claude` shim can impose one. cmux caps a
+    single argument at 122,880 bytes and returns 2 before Claude Code starts.
+
+  Either way the run ended in 0 seconds having saved nothing — a total loss
+  rather than a few missed memories, and an invisible one, because the only
+  trace of the reason was the `stderr` field of a telemetry row nobody reads.
+  The script's own `head -c 200000` cap sat well above both real ceilings, so
+  the guard that existed could never fire. Three real sessions from one project
+  show the shape: 151,344 and 135,675 bytes each lost everything, while 114,067
+  bytes got through with 936 bytes to spare — this was never recently broken,
+  sessions had simply been arriving just under a limit nobody knew was there.
+  The prompt now travels over stdin, which neither ceiling applies to.
+  `command claude` was never a defence: the shim sits on PATH, and `command`
+  skips shell functions and aliases, not PATH entries. Sessions lost before
+  this fix are not gone — Claude Code still holds their transcripts under
+  `~/.claude/projects/`, so they can be re-extracted after the fact.
+- **A failed extraction now says why, at the terminal** — it used to print
+  `extraction exited with code 2` and stop there, leaving the actual reason
+  reachable only by parsing `~/.ccrecall/extract.log.jsonl` by hand. The first
+  line of stderr now travels with the exit code.
+
+---
+
 ## [0.8.0] — 2026-09-12
 
 ### Added
