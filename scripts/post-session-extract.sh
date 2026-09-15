@@ -331,8 +331,20 @@ ${prompt}"
   # concurrency-safe where a blanket rm of a fixed name was not). No byte cap
   # on the capture: model output is already bounded by Haiku's output-token
   # ceiling. Only stderr — claude's own diagnostics — is captured, scrubbed,
-  # and logged. $? still reflects claude's exit (the assignment is the last
-  # command before it).
+  # and logged.
+  #
+  # $? reflects claude's exit: it is the last command of the pipeline below.
+  # Under a user shell with pipefail set, what was actually verified (bash and
+  # zsh, 2026-09-16) is narrower than "the printf never interferes": a NON-ZERO
+  # claude survives, because pipefail reports the rightmost non-zero status and
+  # that is claude's. The case it does not cover is claude exiting ZERO without
+  # draining stdin — then the SIGPIPE'd printf's 141 is the only non-zero status
+  # and pipefail would report it, turning a successful extraction into a
+  # spurious failure. That needs `claude -p` to stop reading its prompt early,
+  # which it does not do (no prompt argument means it reads stdin to EOF), so
+  # this is a bound on the claim rather than a live failure path. Stated exactly
+  # because the earlier version of this comment generalised from the non-zero
+  # case it had tested, which is how a verified fact becomes a wrong one.
   local log_dir
   log_dir=$(dirname "$CCRECALL_EXTRACT_LOG")
   # Same umask as the log guard uses. This line runs ~95 lines before the
@@ -361,23 +373,66 @@ ${prompt}"
   # user's interactive shell, so a bare rm resolves through their aliases —
   # a trash-style wrapper that rejects `--` intercepts it and the capture is
   # stranded (#99). Same hazard `command claude` below already guards.
-  extract_stderr=$(
+  #
+  # The prompt goes over STDIN, not argv (#120). As one argv parameter it hit a
+  # per-argument ceiling that `head -c 200000` sits well above, so the cap we do
+  # enforce could never fire. Two different ceilings, and both are real:
+  #
+  #   - Linux: the kernel refuses any single argument over MAX_ARG_STRLEN (32
+  #     pages = 131,072 bytes at a 4kB page size) with E2BIG. No wrapper needed
+  #     — this is every Linux user, effective transcript budget ~123,000 bytes.
+  #   - macOS: no per-argument ceiling of its own (a 900,000-byte argument
+  #     passes; only ARG_MAX at 1,048,576 applies), but a terminal that installs
+  #     its own `claude` shim can add one. cmux caps a single argument at
+  #     122,880 bytes and returns 2 before Claude Code ever starts.
+  #
+  # Either way the run exits in 0 seconds having saved nothing. `command claude`
+  # is not a defence against the shim case: it sits on PATH, and `command` skips
+  # shell functions and aliases, not PATH entries. Neither ceiling applies to
+  # stdin, so `head -c 200000` above is once again the only limit in play.
+  #
+  # `builtin printf`, not a bare one: this file is sourced into the user's
+  # interactive shell, where a shell function shadows a builtin (the same hazard
+  # as the rm alias in #99, one command over). A hijacked printf would substitute
+  # the prompt silently, and extraction would then succeed having read something
+  # other than the session. `command printf` would be wrong here — it forces the
+  # EXTERNAL /usr/bin/printf, putting the prompt back on an argv, which is the
+  # bug this whole change exists to fix.
+  #
+  # `1>|` overrides noclobber. $stdout_tmp is a file mktemp just created, so
+  # under a caller with `set -o noclobber` a plain `1>` refuses to open it and
+  # claude never execs at all.
+  #
+  # Wrapped in `if` rather than assigned and then read via $?: under a caller
+  # with `set -o errexit`, a non-zero command substitution aborts the shell
+  # right here — before the exit code is captured, before the capture file is
+  # deleted, and before either the terminal notice or the telemetry row. The
+  # failure reporting below is worth nothing in a shell it never reaches.
+  if extract_stderr=$(
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 130' INT
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 143' TERM
-    command claude -p \
+    builtin printf '%s' "$full_prompt" | command claude -p \
       --no-session-persistence \
       --model haiku \
       "${budget_args[@]}" \
       --max-turns 5 \
-      --dangerously-skip-permissions \
-      "$full_prompt" 2>&1 1>"$stdout_tmp")
-  extract_exit=$?
+      --dangerously-skip-permissions 2>&1 1>|"$stdout_tmp"
+  ); then
+    extract_exit=0
+  else
+    extract_exit=$?
+  fi
   # Reduce stdout to the diagnostic marker, then delete the full capture.
   # Anchored to claude's full notice line: an unanchored match could be faked
   # by the model echoing transcript content that merely discusses this exact
   # phrase (guaranteed to occur in this repo's own sessions).
+  #
+  # `|| :` on both marker greps: grep exits 1 on no match, which is the ORDINARY
+  # outcome here, and under a caller with errexit that ordinary outcome aborts
+  # the shell — taking the terminal notice and the telemetry row with it. Same
+  # reason the claude invocation above is wrapped in `if`.
   local stdout_marker
-  stdout_marker=$(grep -m1 -oE '^Error: Reached max turns \([0-9]+\)$' "$stdout_tmp" 2>/dev/null)
+  stdout_marker=$(grep -m1 -oE '^Error: Reached max turns \([0-9]+\)$' "$stdout_tmp" 2>/dev/null) || :
   # Second marker (#75): the model sometimes PRINTS `recall_save(...)` instead of
   # invoking the MCP tool. That run exits 0 with empty stderr and writes nothing,
   # which in telemetry is byte-identical to a session that genuinely had nothing
@@ -397,7 +452,7 @@ ${prompt}"
   # -c yields a bare count and never the matched line, so no session content can
   # reach the telemetry log — the same constraint that governs the stdout capture.
   local recall_save_text_count
-  recall_save_text_count=$(grep -cE '^[[:space:]]*recall_save[[:space:]]*\(' "$stdout_tmp" 2>/dev/null)
+  recall_save_text_count=$(grep -cE '^[[:space:]]*recall_save[[:space:]]*\(' "$stdout_tmp" 2>/dev/null) || :
   # grep exits 1 with empty output on no match (and $stdout_tmp is /dev/null when
   # mktemp failed); --argjson would abort the whole telemetry write on a non-number.
   [[ "$recall_save_text_count" =~ ^[0-9]+$ ]] || recall_save_text_count=0
@@ -425,8 +480,37 @@ ${prompt}"
       printf '✅ ccRecall: extraction complete (%ds).\n' "$extract_duration"
     fi
   else
-    printf '⚠️  ccRecall: extraction exited with code %d (%ds)%s.\n' \
-      "$extract_exit" "$extract_duration" "${stdout_marker:+ — $stdout_marker}"
+    # Carry the first line of stderr (#120). Without it the terminal said only
+    # "exited with code 2" while the actual reason — `cmux: argument too large`
+    # — sat in the telemetry log, so the one person who could act on it had to
+    # go and parse JSONL to find out anything at all. First line only, and it is
+    # the already-scrubbed copy: claude's diagnostics open with the reason, and
+    # a multi-line dump at session exit buries it again.
+    #
+    # Capped at 200 characters, because this is a SECOND sink for that stderr
+    # and it is the unprotected one: the telemetry log is 0600 precisely
+    # because these diagnostics can carry paths and account names, while
+    # terminal scrollback is captured by tmux logging, session recorders and
+    # screen sharing. The scrubber above is a best-effort denylist of known
+    # credential prefixes, so what reaches here is not guaranteed clean — and
+    # an MCP server failing its own auth can print whatever it likes. 200 is
+    # sized off real diagnostics ("cmux: argument too large (maximum 122880
+    # bytes)" is 44 characters); the longer capture stays in the log.
+    #
+    # Reduced to printable ASCII BEFORE truncation. `%s` stops the string being
+    # read as a format, but not from being read by the TERMINAL: an ESC, CR or
+    # OSC sequence in claude's diagnostics — or in a failing MCP server's — can
+    # overwrite this very notice, clear the screen, or reach an OSC handler. And
+    # cutting at a fixed length can sever a sequence partway, leaving whatever
+    # the fragment set. Substituting first makes the slice deterministic too:
+    # one byte, one character, no locale in the middle of it. LC_ALL=C keeps tr
+    # byte-oriented so a multi-byte character cannot survive half-translated.
+    local stderr_line
+    stderr_line=$(printf '%s' "${extract_stderr%%$'\n'*}" \
+      | LC_ALL=C command tr -c '\040-\176' '?') || :
+    printf '⚠️  ccRecall: extraction exited with code %d (%ds)%s%s.\n' \
+      "$extract_exit" "$extract_duration" "${stdout_marker:+ — $stdout_marker}" \
+      "${stderr_line:+ — ${stderr_line:0:200}}"
   fi
 
   # Telemetry log (-c = one compact JSON object per line = valid JSONL).

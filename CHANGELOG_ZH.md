@@ -8,6 +8,38 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [未發布]
+
+### 修復
+
+- **長 session 不再靜默地整場抽不到任何東西** — session 結束後的記憶抽取，是把
+  整份 transcript 當成單一個 argv 參數交給 `claude -p`，上限設在 200,000 bytes。
+  但有兩道天花板比這個上限更低，撞到哪一道取決於你在哪裡跑：
+  - **在 Linux 上是核心本身。** `execve` 會拒絕任何超過 `MAX_ARG_STRLEN` 的單一
+    參數——32 個 page，在 4 kB page 的系統上就是 131,072 bytes——回 `E2BIG`。
+    這跟終端、wrapper、shim 都無關：**所有 Linux 使用者都中**，transcript 的實際
+    可用額度大約只有 123,000 bytes，而上限卻開到 200,000。
+  - **在 macOS 上是包住 `claude` 的終端。** macOS 自己沒有單一參數上限（實測：
+    900,000 bytes 的參數照樣過，只受總量 `ARG_MAX` 1,048,576 限制），所以純
+    macOS 從來不受影響——但自己裝一支 `claude` shim 的終端可以加上一道。cmux 對
+    單一參數設 122,880 bytes，超過就在 Claude Code 啟動前回 exit 2。
+
+  兩種情況的結果一樣：那次執行 0 秒結束、一條記憶都沒存——不是漏抽幾條而是整場
+  全滅，而且是靜默的，因為唯一留下原因的地方是遙測紀錄裡沒人會去讀的 `stderr`
+  欄位。腳本自己的 `head -c 200000` 上限比這兩道真正的天花板都高，所以那道閘門
+  結構上永遠不會觸發。同一個專案的三個真實 session 說明了這件事的形狀：151,344
+  與 135,675 bytes 兩筆全滅，而 114,067 bytes 那筆只剩 936 bytes 餘裕就過關了
+  ——這從來不是「最近才壞掉」，只是 session 一直都剛好擦著一道沒人知道存在的線
+  通過。現在 prompt 改走 stdin，兩道天花板都管不到它。`command claude` 從來擋
+  不住這件事：shim 掛在 PATH 上，而 `command` 跳過的是 shell function 與
+  alias，不是 PATH。修復前已經損失的 session 沒有真的消失——Claude Code 仍然把
+  它們的 transcript 留在 `~/.claude/projects/` 底下，事後還抽得回來。
+- **抽取失敗現在會在終端說出原因** — 以前只印 `extraction exited with code 2`
+  就沒了，真正的原因得自己去翻 `~/.ccrecall/extract.log.jsonl` 才看得到。現在
+  stderr 的第一行會跟著 exit code 一起出現。
+
+---
+
 ## [0.8.0] — 2026-09-12
 
 ### 新增
