@@ -261,9 +261,14 @@ describe('extract wrapper: the prompt travels over stdin, not argv (#120)', () =
    * run its own timeout or cleanup hooks while it waits. A hung child without
    * this hangs the whole runner with no output at all (observed, 2026-09-16).
    */
-  function runExtract(argLimit: number, extra: NodeJS.ProcessEnv = {}, prelude = '') {
+  function runExtract(
+    argLimit: number,
+    extra: NodeJS.ProcessEnv = {},
+    prelude = '',
+    bashBin = 'bash',
+  ) {
     return spawnSync(
-      'bash',
+      bashBin,
       ['-c', `${prelude}\nsource "${WRAPPER}" && ccrecall-extract`],
       {
         encoding: 'utf8',
@@ -278,7 +283,7 @@ describe('extract wrapper: the prompt travels over stdin, not argv (#120)', () =
   /** The argv the stub received, split on the NUL it recorded them with. */
   async function argvArguments(): Promise<string[]> {
     const raw = await readFile(path.join(stubOut, 'argv.nul'), 'utf8')
-    return raw.split(' ').slice(0, -1)
+    return raw.split('\0').slice(0, -1)
   }
 
   async function telemetryRows(): Promise<Array<Record<string, unknown>>> {
@@ -320,6 +325,48 @@ describe('extract wrapper: the prompt travels over stdin, not argv (#120)', () =
     expect(String(run!.stderr ?? '')).not.toContain('argument too large')
   })
 
+  it('reaches claude under a bash 3.2 caller that sets -u, with no API key', async () => {
+    // This file is SOURCED into the user's shell, so it runs under their shell
+    // options. Under `set -u`, bash 3.2 — still what /bin/bash is on macOS —
+    // treats an EMPTY array's "${a[@]}" as an unbound variable, and with no
+    // ANTHROPIC_API_KEY the budget array is empty on the ordinary subscription
+    // path. The shell aborted inside the command substitution and claude never
+    // exec'd. zsh and bash 4+ accept the bare form, which is why this reaches
+    // only a bash-3.2 caller who sets -u.
+    const major = Number(
+      (
+        spawnSync('/bin/bash', ['-c', 'echo "${BASH_VERSINFO[0]}"'], {
+          encoding: 'utf8',
+          timeout: 10_000,
+        }).stdout || ''
+      ).trim(),
+    )
+
+    const r = runExtract(10_000_000, {}, 'set -u', '/bin/bash')
+
+    expect(r.stderr, 'set -u in the caller aborted the wrapper').not.toContain(
+      'unbound variable',
+    )
+    await expect(
+      readFile(path.join(stubOut, 'stdin.txt'), 'utf8'),
+      `claude never ran under /bin/bash (bash ${major}). stdout:\n${r.stdout}\nstderr:\n${r.stderr}`,
+    ).resolves.toContain('Session transcript to analyze')
+
+    // The budget flag must be absent, not merely harmless: its presence would
+    // mean an API key leaked in and this run never exercised the empty array.
+    const argv = await argvArguments()
+    expect(argv).not.toContain('--max-budget-usd')
+
+    if (major >= 4) {
+      // Not a failure — a statement of what this run did and did not prove, so
+      // a green tick on a Linux runner is not read as coverage of 3.2.
+      console.warn(
+        `[extract-wrapper] /bin/bash is bash ${major}; the empty-array defect only ` +
+          'manifests on bash 3.2 (macOS). This assertion was vacuous on this runner.',
+      )
+    }
+  })
+
   it('delivers the whole transcript on stdin', async () => {
     // A cap high enough that argv would also have gone through: this isolates
     // "the prompt arrives over stdin" from "the cap was dodged".
@@ -342,7 +389,7 @@ describe('extract wrapper: the prompt travels over stdin, not argv (#120)', () =
     // the bug with it.
     runExtract(10_000_000)
     const args = await argvArguments()
-    const joined = args.join(' ')
+    const joined = args.join('\0')
     expect(joined).not.toContain(SENTINEL)
     expect(joined).not.toContain('Session transcript to analyze')
     // Flags still travel on argv — this is not an assertion that argv is empty.

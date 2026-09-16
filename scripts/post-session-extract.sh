@@ -307,6 +307,14 @@ ${prompt}"
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     budget_args=(--max-budget-usd "${CCRECALL_EXTRACT_MAX_BUDGET_USD:-0.50}")
   fi
+  # Expanded below as ${budget_args[@]+"${budget_args[@]}"}, never the bare
+  # "${budget_args[@]}". This file is SOURCED into the user's shell and inherits
+  # whatever they set: under `set -u`, bash 3.2 — still what /bin/bash is on
+  # macOS — treats an EMPTY array's "${a[@]}" as an unbound variable, and with no
+  # ANTHROPIC_API_KEY the array is empty on the ordinary subscription path. The
+  # shell would abort inside the command substitution and claude never exec.
+  # zsh and bash 4+ are both fine with the bare form, which is why this only
+  # shows up for a bash-3.2 caller who sets -u. Verified across all three.
 
   # Haiku is prompted to emit NO text — only its recall_save MCP tool calls
   # carry the result, and those travel over MCP, never through stdout. Small
@@ -379,8 +387,9 @@ ${prompt}"
   # enforce could never fire. Two different ceilings, and both are real:
   #
   #   - Linux: the kernel refuses any single argument over MAX_ARG_STRLEN (32
-  #     pages = 131,072 bytes at a 4kB page size) with E2BIG. No wrapper needed
-  #     — this is every Linux user, effective transcript budget ~123,000 bytes.
+  #     PAGES, so 131,072 bytes at a 4kB page size — but 2 MiB at 64kB pages,
+  #     above our cap, so those systems were never affected) with E2BIG. No
+  #     wrapper needed; at 4kB the effective transcript budget was ~123,000 bytes.
   #   - macOS: no per-argument ceiling of its own (a 900,000-byte argument
   #     passes; only ARG_MAX at 1,048,576 applies), but a terminal that installs
   #     its own `claude` shim can add one. cmux caps a single argument at
@@ -414,7 +423,7 @@ ${prompt}"
     builtin printf '%s' "$full_prompt" | command claude -p \
       --no-session-persistence \
       --model haiku \
-      "${budget_args[@]}" \
+      ${budget_args[@]+"${budget_args[@]}"} \
       --max-turns 5 \
       --dangerously-skip-permissions 2>&1 1>|"$stdout_tmp"
   ); then

@@ -23,7 +23,8 @@ more like an iteration counter than a strict SemVer major).
   selects the sessions this bug killed, matching both wordings it produces —
   `argument too large` from a shim, `Argument list too long` from a Linux
   kernel. Matching only the first would quietly find nothing on the platform
-  where every user was affected. `--dry-run` resolves and reports without
+  where the kernel enforces the limit itself, with no shim in sight.
+  `--dry-run` resolves and reports without
   running anything, and a session that already holds memories is skipped
   unless `--force` says otherwise.
 
@@ -43,9 +44,12 @@ more like an iteration counter than a strict SemVer major).
   one you hit depends on where you run:
   - **On Linux, the kernel itself.** `execve` refuses any single argument over
     `MAX_ARG_STRLEN` — 32 pages, so 131,072 bytes where pages are 4 kB — with
-    `E2BIG`. No terminal, wrapper or shim is involved: this is every Linux
-    user, and the effective transcript budget was about 123,000 bytes against
-    a cap that allowed 200,000.
+    `E2BIG`. No terminal, wrapper or shim is involved — it reaches Linux users
+    directly. The figure tracks page size rather than being fixed: at the usual
+    4 kB the effective transcript budget was about 123,000 bytes against a cap
+    that allowed 200,000, while a 64 kB page puts the ceiling at 2 MiB, well
+    above the cap. Systems on larger pages — the default on some aarch64
+    distributions — were therefore never affected.
   - **On macOS, a terminal that wraps `claude`.** macOS has no per-argument
     ceiling of its own (verified: a 900,000-byte argument passes, bounded only
     by `ARG_MAX` at 1,048,576), so plain macOS was never affected — but a
