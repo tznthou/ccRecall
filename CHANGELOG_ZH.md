@@ -8,6 +8,26 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [未發布]
+
+### 修復
+
+- **`backfill-extract.sh` 裝起來根本不能執行** — 它自己 usage 寫的那行指令，對
+  從 npm 安裝（而不是 clone repo）的使用者來說是 permission error。檔案在 repo
+  裡是 `100755`，發出去卻是 `-rw-r--r--`：`pnpm publish` 會把 tarball 裡的權限
+  正規化，`bin` 欄位列到的路徑發 755，其餘一律 644，不管 git 記的是什麼。所以
+  repo 自己的 mode 從頭到尾都修不了這件事。現在它是 `bin` 項目 **`ccmem-backfill`**，
+  這既決定了權限，也把它放上 `PATH`——救援工具終於是一個指令，而不是一條要自己
+  去 `node_modules` 裡面翻的路徑。
+
+  「透過 symlink 被呼叫」對它是全新的處境，而它本來撐不過去：對
+  `~/.npm-global/bin/ccmem-backfill` 取 `dirname "${BASH_SOURCE[0]}"` 會落在 bin
+  目錄，而它要讀的 wrapper 和 prompt 檔都不在那裡，於是死在「wrapper not found」。
+  現在它會先把 symlink 鏈解開。從 checkout 跑——也就是它過去唯一被跑過的方式——
+  這兩個問題都碰不到，這正是它們能一路活到套件被裝起來的原因。
+
+---
+
 ## [0.8.1] — 2026-09-16
 
 ### 新增

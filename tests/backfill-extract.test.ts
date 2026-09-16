@@ -37,7 +37,7 @@
 // ever proving bash accepts it.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, rm, mkdir, writeFile, readFile, chmod, access } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile, readFile, chmod, access, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
@@ -218,6 +218,54 @@ describe('backfill-extract.sh', () => {
           'only manifests on bash 3.2 (macOS). This assertion was vacuous on this runner.',
       )
     }
+  })
+
+  it('finds its siblings when reached through a symlink, as an npm bin entry is', async () => {
+    // Installed from npm, this script is reached through ~/.npm-global/bin/
+    // ccmem-backfill — a symlink. `dirname "${BASH_SOURCE[0]}"` on a symlink
+    // lands in the bin directory, where post-session-extract.sh and
+    // extraction-prompt.md are not, so the script died at "wrapper not found"
+    // on the only path an installed user has. Running it from a checkout — the
+    // only way it had ever been run — never touches that.
+    //
+    // Asserted through a real invocation rather than by inspecting the path
+    // logic: reaching "no session ids given" proves it got past BOTH the
+    // wrapper check and the jq-filter scrape, each of which needs SCRIPT_DIR
+    // to be right.
+    const linkDir = path.join(home, 'fake-npm-bin')
+    await mkdir(linkDir)
+    const link = path.join(linkDir, 'ccmem-backfill')
+    await symlink(SCRIPT, link)
+
+    const r = spawnSync(STOCK_BASH, [link], {
+      encoding: 'utf8',
+      cwd: runFrom,
+      env: isolatedEnv(),
+      timeout: 60_000,
+      input: '',
+    })
+
+    const out = `${r.stdout}${r.stderr}`
+    expect(out, 'SCRIPT_DIR resolved to the symlink directory').not.toContain('wrapper not found')
+    expect(out).not.toContain('extraction-prompt.md not found')
+    expect(out).not.toContain('could not extract the jq transcript filter')
+    expect(out).toContain('no session ids given')
+  })
+
+  it('declares the script as a bin entry, which is what makes it executable once installed', async () => {
+    // Not cosmetic, and not something the repo's own file mode can cover:
+    // `pnpm publish` NORMALISES modes in the tarball — anything not in `bin`
+    // ships 644 no matter what git records, and `bin` paths ship 755. Verified
+    // against the published 0.8.1 tarball, where this script was 644 and
+    // unrunnable, while dist/index.js (a bin entry) was 755.
+    //
+    // So this one line in package.json is the entire mechanism. A static
+    // assertion is the right shape here precisely because the behaviour it
+    // guards happens inside npm, at install time, where a test cannot reach.
+    const pkg = JSON.parse(
+      await readFile(path.join(__dirname, '..', 'package.json'), 'utf8'),
+    ) as { bin?: Record<string, string> }
+    expect(pkg.bin?.['ccmem-backfill']).toBe('./scripts/backfill-extract.sh')
   })
 
   it('reads the database path from CCRECALL_DB_PATH, like the rest of the codebase', async () => {

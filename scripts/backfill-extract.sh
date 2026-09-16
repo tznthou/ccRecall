@@ -2,9 +2,11 @@
 # ccRecall backfill extraction — re-run memory extraction for sessions whose
 # original run never happened.
 #
-# Usage:
-#   scripts/backfill-extract.sh <session-id> [session-id...]
-#   scripts/backfill-extract.sh --from-log        # sessions this bug killed
+# Usage (installed from npm — the bin entry is what makes it executable):
+#   ccmem-backfill <session-id> [session-id...]
+#   ccmem-backfill --from-log                  # sessions this bug killed
+#   ccmem-backfill --from-log --dry-run
+# From a checkout, the same thing:
 #   scripts/backfill-extract.sh --from-log --dry-run
 #
 # Options:
@@ -40,7 +42,26 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve through symlinks before taking the directory. As an npm `bin` entry
+# this file is reached through ~/.npm-global/bin/ccmem-backfill, which is a
+# symlink — while the siblings it needs (post-session-extract.sh,
+# extraction-prompt.md) sit next to the REAL file, not next to the link. Taking
+# dirname of the link lands in the bin directory and the script dies at "wrapper
+# not found" the moment it is run the way it is installed.
+#
+# The loop rather than `readlink -f`: that flag is GNU-only and macOS readlink
+# does not have it. `cd -P` on top, because it resolves symlinked PARENT
+# directories too — a `npm link`-style install symlinks the whole package
+# directory, so the link chain has a component the readlink loop never sees.
+_bf_source="${BASH_SOURCE[0]}"
+while [ -L "$_bf_source" ]; do
+  _bf_dir="$(cd -P "$(dirname "$_bf_source")" && pwd)"
+  _bf_source="$(readlink "$_bf_source")"
+  [[ "$_bf_source" != /* ]] && _bf_source="${_bf_dir}/${_bf_source}"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_bf_source")" && pwd)"
+# The real file, for --help to read its own header out of.
+SELF="$_bf_source"
 WRAPPER="${SCRIPT_DIR}/post-session-extract.sh"
 PROMPT_FILE="${SCRIPT_DIR}/extraction-prompt.md"
 CLAUDE_DATA_DIR="${HOME}/.claude"
@@ -72,7 +93,7 @@ while [[ $# -gt 0 ]]; do
     --from-log-all) FROM_LOG=1; FROM_LOG_ALL=1 ;;
     # Usage + Options only. The rationale below it is for whoever reads the
     # source; printing half of it (the range has to stop somewhere) helps nobody.
-    -h|--help) sed -n '2,16p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$SELF"; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *) SESSION_IDS+=("$1") ;;
   esac
