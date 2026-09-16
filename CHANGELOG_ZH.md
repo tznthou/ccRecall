@@ -10,6 +10,23 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ## [未發布]
 
+### 新增
+
+- **`scripts/backfill-extract.sh`：把已經丟掉的 session 抽回來** — 下面那個修復只
+  保得住從現在開始的 session。已經失敗的那些其實救得回來：Claude Code 還留著它們
+  的 transcript，這支腳本就是拿它們重跑一次抽取，prompt 一樣走 stdin。`--from-log`
+  會讀 `~/.ccrecall/extract.log.jsonl`，挑出被這個 bug 殺掉的 session，而且兩種措辭
+  都認——shim 回的 `argument too large`，以及 Linux 核心回的 `Argument list too
+  long`。只認前者的話，在「所有使用者都中」的那個平台上反而會什麼都找不到。
+  `--dry-run` 只解析、報告，不執行；已經有記憶的 session 預設跳過，除非加
+  `--force`。
+
+  它報告的寫入筆數是查資料庫前後差值算出來的，不是看 exit code：乾淨退出卻零寫入
+  正是讓 #75 藏了好幾個月的那個形狀，所以它會被報成失敗，而不是讀成成功。jq 的
+  transcript filter 是執行時從 wrapper 裡抽出來的，不是複製一份，兩邊不會各自漂移。
+  第一次實跑救回四個 session、20 條記憶，每一條都標記成 `agent-inferred`，不會蓋掉
+  任何手寫的內容。
+
 ### 修復
 
 - **長 session 不再靜默地整場抽不到任何東西** — session 結束後的記憶抽取，是把
