@@ -44,7 +44,13 @@ WRAPPER="${SCRIPT_DIR}/post-session-extract.sh"
 PROMPT_FILE="${SCRIPT_DIR}/extraction-prompt.md"
 CLAUDE_DATA_DIR="${HOME}/.claude"
 CCRECALL_EXTRACT_LOG="${CCRECALL_EXTRACT_LOG:-$HOME/.ccrecall/extract.log.jsonl}"
-CCRECALL_DB="${CCRECALL_DB:-$HOME/.ccrecall/ccrecall.db}"
+# CCRECALL_DB_PATH, not CCRECALL_DB: six other places in this codebase read the
+# database path from CCRECALL_DB_PATH (src/mcp/server.ts, src/cli/cleanup.ts,
+# src/cli/daemon.ts, src/index.ts, scripts/l3-prescription-position.py). A second
+# spelling means anyone who points that variable at another database gets the
+# default here instead — and silently, since a missing file reads as "0 existing
+# memories" and then miscounts what this run wrote.
+CCRECALL_DB="${CCRECALL_DB_PATH:-$HOME/.ccrecall/ccrecall.db}"
 TRANSCRIPT_MAX_BYTES=200000
 
 DRY_RUN=0
@@ -184,7 +190,12 @@ for session_id in "${SESSION_IDS[@]}"; do
   # cwd for the run: read it off the transcript rather than decoding project_id
   # (that encoding is lossy). Take the mode — scratchpad paths appear too.
   # LC_ALL=C on sort: a CJK locale throws "Illegal byte sequence" here.
-  session_cwd=$(jq -r 'select(.cwd) | .cwd' "$jsonl_path" 2>/dev/null \
+  #
+  # `-R` + `fromjson?`, matching the transcript filter and the project's stated
+  # tolerant-parser rule. Without it jq aborts at the first unparseable line and
+  # every cwd AFTER that line is invisible — the run then falls back to $PWD and
+  # extracts a session against the wrong directory, reporting nothing amiss.
+  session_cwd=$(jq -R -r 'fromjson? // empty | select(.cwd) | .cwd' "$jsonl_path" 2>/dev/null \
     | LC_ALL=C sort | LC_ALL=C uniq -c | LC_ALL=C sort -rn | head -1 | sed -E 's/^ *[0-9]+ //')
   [[ -n "$session_cwd" && -d "$session_cwd" ]] || session_cwd="$PWD"
 
@@ -236,6 +247,12 @@ ${prompt}"
 
   declare -a budget_args=()
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && budget_args=(--max-budget-usd "${CCRECALL_EXTRACT_MAX_BUDGET_USD:-0.50}")
+  # Expanded below as ${budget_args[@]+"${budget_args[@]}"}, not "${budget_args[@]}".
+  # bash 3.2 — which is what /bin/bash still is on macOS — treats an EMPTY array's
+  # "${a[@]}" as an unbound variable under `set -u`, so with no ANTHROPIC_API_KEY
+  # set (the common case: most users are on a subscription, not an API key) this
+  # script aborted before claude ever ran. bash 4+ fixed that, which is why a
+  # `#!/usr/bin/env bash` resolving to a Homebrew bash 5 hides it completely.
 
   start=$(date +%s)
   # THE POINT OF THIS SCRIPT: the prompt goes over stdin. As an argv parameter
@@ -246,7 +263,7 @@ ${prompt}"
   extract_stderr=$(cd "$session_cwd" && printf '%s' "$full_prompt" | command claude -p \
     --no-session-persistence \
     --model haiku \
-    "${budget_args[@]}" \
+    ${budget_args[@]+"${budget_args[@]}"} \
     --max-turns 5 \
     --dangerously-skip-permissions 2>&1 1>/dev/null)
   extract_exit=$?
