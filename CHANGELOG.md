@@ -13,6 +13,28 @@ more like an iteration counter than a strict SemVer major).
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/backfill-extract.sh`, to recover the sessions already lost** — the
+  fix below only protects sessions from here on. The ones that already failed
+  are still recoverable: Claude Code keeps their transcripts, and this script
+  re-runs extraction against them, feeding the prompt over stdin the same way
+  the wrapper now does. `--from-log` reads `~/.ccrecall/extract.log.jsonl` and
+  selects the sessions this bug killed, matching both wordings it produces —
+  `argument too large` from a shim, `Argument list too long` from a Linux
+  kernel. Matching only the first would quietly find nothing on the platform
+  where every user was affected. `--dry-run` resolves and reports without
+  running anything, and a session that already holds memories is skipped
+  unless `--force` says otherwise.
+
+  It reports what it wrote by querying the database before and after, not by
+  trusting the exit code: a clean exit with zero writes is the exact shape of
+  the failure that hid #75 for months, and it is reported as a failure rather
+  than read as success. The jq transcript filter is pulled out of the wrapper
+  at runtime rather than copied, so the two cannot drift apart. Four sessions
+  recovered on the first real run — 20 memories, every one of them flagged
+  `agent-inferred`, so nothing written by hand could be overwritten.
+
 ### Fixed
 
 - **A long session no longer silently extracts nothing** — post-session
