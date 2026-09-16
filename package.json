@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "bin": {
     "ccmem": "./dist/index.js",
-    "ccmem-mcp": "./dist/mcp/server.js"
+    "ccmem-mcp": "./dist/mcp/server.js",
+    "ccmem-backfill": "./scripts/backfill-extract.sh"
   },
   "files": [
     "dist",

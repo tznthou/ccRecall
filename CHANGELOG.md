@@ -11,6 +11,29 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **`backfill-extract.sh` could not be run as installed** — the command its own
+  usage line gives was a permission error for anyone who installed from npm
+  rather than cloning. The file is `100755` in the repository and shipped
+  `-rw-r--r--`, because `pnpm publish` normalises modes in the tarball: paths
+  declared in `bin` ship 755, everything else ships 644 regardless of what git
+  records. The repository's own mode could never have fixed this. It is now a
+  `bin` entry, **`ccmem-backfill`**, which is both what sets the mode and what
+  puts it on `PATH` — so the recovery tool is now a command rather than a path
+  to go hunting for inside `node_modules`.
+
+  Being reached through a symlink is new for it, and it did not survive that:
+  `dirname "${BASH_SOURCE[0]}"` on `~/.npm-global/bin/ccmem-backfill` lands in
+  the bin directory, where the wrapper and prompt file it reads are not, and the
+  script died at "wrapper not found". It now resolves the link chain first.
+  Running it from a checkout — the only way it had ever been run — touches
+  neither problem, which is why both survived until the package was installed.
+
+---
+
 ## [0.8.1] — 2026-09-16
 
 ### Added
