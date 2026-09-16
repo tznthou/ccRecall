@@ -19,8 +19,9 @@
 # transcript as one argv parameter (capped at 200,000 bytes), and a single argv
 # parameter has a ceiling well below that cap:
 #
-#   - on Linux, the kernel's own MAX_ARG_STRLEN (32 pages = 131,072 bytes at a
-#     4kB page size), which fails execve with E2BIG — every Linux user, no
+#   - on Linux, the kernel's own MAX_ARG_STRLEN (32 PAGES — 131,072 bytes at a
+#     4kB page size, but 2 MiB at 64kB pages, so larger-page systems sit above
+#     our cap and were never affected), which fails execve with E2BIG. No
 #     wrapper involved;
 #   - on macOS, nothing by default, but cmux installs a `claude` shim first on
 #     PATH (CMUX_CLAUDE_WRAPPER_SHIM_ROOT) that rejects any single argument over
@@ -134,7 +135,7 @@ while i < len(s):
     # causes: cmux's shim says "argument too large", while a Linux kernel
     # refusing execve surfaces through the shell as "Argument list too long".
     # Matching only the first would quietly find nothing on Linux — the platform
-    # where every user was affected. Widening to every non-zero exit instead
+    # where the kernel enforces it directly. Widening to every non-zero exit instead
     # drags in years of max-turns and auth failures whose transcripts are long
     # gone, and 54 lines of "no transcript on disk" is how a real row gets missed.
     ARGV_SIGNATURES = ('argument too large', 'argument list too long')

@@ -17,7 +17,8 @@ ccRecall 的重要版本變更記錄在這裡。
   的 transcript，這支腳本就是拿它們重跑一次抽取，prompt 一樣走 stdin。`--from-log`
   會讀 `~/.ccrecall/extract.log.jsonl`，挑出被這個 bug 殺掉的 session，而且兩種措辭
   都認——shim 回的 `argument too large`，以及 Linux 核心回的 `Argument list too
-  long`。只認前者的話，在「所有使用者都中」的那個平台上反而會什麼都找不到。
+  long`。只認前者的話，在「核心自己就會擋、連 shim 都不需要」的那個平台上反而會
+  什麼都找不到。
   `--dry-run` 只解析、報告，不執行；已經有記憶的 session 預設跳過，除非加
   `--force`。
 
@@ -34,8 +35,10 @@ ccRecall 的重要版本變更記錄在這裡。
   但有兩道天花板比這個上限更低，撞到哪一道取決於你在哪裡跑：
   - **在 Linux 上是核心本身。** `execve` 會拒絕任何超過 `MAX_ARG_STRLEN` 的單一
     參數——32 個 page，在 4 kB page 的系統上就是 131,072 bytes——回 `E2BIG`。
-    這跟終端、wrapper、shim 都無關：**所有 Linux 使用者都中**，transcript 的實際
-    可用額度大約只有 123,000 bytes，而上限卻開到 200,000。
+    這跟終端、wrapper、shim 都無關，直接打到 Linux 使用者身上。但這個數字是跟著
+    page size 走的，不是固定值：常見的 4 kB page 下，transcript 的實際可用額度大約
+    只有 123,000 bytes，而上限卻開到 200,000；換成 64 kB page，天花板就變成 2 MiB，
+    遠高於上限。所以 page 較大的系統——部分 aarch64 發行版預設如此——從來不受影響。
   - **在 macOS 上是包住 `claude` 的終端。** macOS 自己沒有單一參數上限（實測：
     900,000 bytes 的參數照樣過，只受總量 `ARG_MAX` 1,048,576 限制），所以純
     macOS 從來不受影響——但自己裝一支 `claude` shim 的終端可以加上一道。cmux 對
