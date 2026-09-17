@@ -11,6 +11,50 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Extraction retries once when it produced nothing usable.** The silent-miss
+  marker shipped in 0.7.x could see the failure but did nothing about it, so a
+  run that printed `recall_save(...)` as text instead of invoking the tool left
+  its memories outside the database until somebody read the terminal. Re-running
+  one such session against the **same model** produced four memories on the
+  first attempt, which is what makes a retry worth spending: the failure is not
+  a capability ceiling, it was simply never retried. One retry, never a loop —
+  a second failure is a signal to surface, not something to keep paying for.
+
+### Fixed
+
+- **The extraction failure rate was being measured through a detector that saw
+  about one failure in eight.** The existing marker only recognises one shape:
+  the model printing the call syntax. The other shape — the model quietly doing
+  nothing at all — is byte-identical in telemetry to a session that genuinely
+  had nothing worth saving, which the code's own comment had said for months.
+
+  Joining 257 clean runs against the database put numbers on it: 19 wrote
+  nothing, and while 12 of those were thin or deleted transcripts where zero is
+  the correct answer, **7 held 52–200KB of real content and saved nothing**. The
+  marker had caught none of them. Extraction now queries how many
+  `agent-inferred` memories the run actually wrote and reports a zero-write
+  result on a substantial transcript as the suspected miss it is.
+
+  Counting rule worth stating, because getting it wrong is what hid this:
+  memories the user saved by hand mid-session are `explicit` and are **not**
+  extraction output. Counting them made a broken run look successful.
+
+  The database is opened read-only and the test suite asserts a write through
+  that handle fails, rather than trusting the intent — this is the wrapper's
+  first database access and ccRecall is read-only by contract. When the query
+  cannot run at all (no `sqlite3`, no database, a locked one) the result is
+  *unknown*, never zero: silence is not evidence of failure, and treating it as
+  one would retry every session on a machine without `sqlite3`.
+
+  Telemetry rows gain `retried`, `transcriptBytes` and `memoriesWritten` so the
+  next person to measure this does not have to reconstruct it from the database.
+
+---
+
 ## [0.8.2] — 2026-09-16
 
 ### Fixed
