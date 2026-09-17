@@ -80,6 +80,91 @@ _ccrecall_log_append() {
   { jq -n -c "$@" >> "$f"; } 2>/dev/null
 }
 
+# The wrapper's only database access, and the only one it may ever have:
+# ccRecall is read-only over ~/.claude and the extraction path has no business
+# writing to its own store either — the MCP server owns that. `-readonly` is
+# the enforcement; tests/extract-wrapper-retry.test.ts asserts a write through
+# this very handle fails rather than trusting the intent.
+#
+# `command sqlite3`, not a bare one: this file is sourced into an interactive
+# shell where an alias or function shadows an external command (#99), and a
+# hijacked sqlite3 here would decide whether a session gets retried.
+#
+# The busy timeout matters because the MCP server may be mid-write from another
+# session ending at the same time; without it a locked database reads as "no
+# rows" and a healthy run would be retried. A failure returns non-zero with no
+# output, which the caller reads as "unknown" — never as zero.
+_ccrecall_sqlite_ro() {
+  local db="$1" sql="$2"
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  [ -f "$db" ] || return 1
+  command sqlite3 -readonly -cmd '.timeout 2000' "$db" "$sql" 2>/dev/null
+}
+
+# How many memories THIS extraction wrote, which is not the same question as
+# how many memories the session has. A session the user saved into by hand
+# carries `explicit` rows, and counting those is exactly the error that made a
+# broken run look successful when this was first measured (a run reported as
+# 16/17 was really 9/11). Only `agent-inferred` rows come from extraction.
+#
+# Prints the count on success. On any failure — no sqlite3, no database, a
+# locked database, a schema that does not match — prints nothing and returns
+# non-zero, and the caller must treat that as unknown rather than as zero.
+_ccrecall_count_extracted() {
+  local sid="$1"
+  local db="${CCRECALL_DB_PATH:-$HOME/.ccrecall/ccrecall.db}"
+  # The caller validated this against a uuid pattern before any filesystem
+  # path was built from it; the same validation is what makes interpolating
+  # it into SQL safe here. Re-checked rather than assumed, because this
+  # function is also reachable directly.
+  case "$sid" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*) : ;;
+    *) return 1 ;;
+  esac
+  local n
+  n=$(_ccrecall_sqlite_ro "$db" \
+    "SELECT COUNT(*) FROM memories WHERE session_id='${sid}' AND origin='agent-inferred';") || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$n"
+}
+
+# Whether the run that just finished is worth spending one more extraction on.
+#
+# Returns 0 (retry) for the two shapes that mean the model did not do the job:
+# it printed the calls as text, or it wrote nothing while holding a transcript
+# with real content in it. Everything else returns non-zero.
+#
+# Measured 2026-09-18 over 257 clean runs: 19 wrote nothing, but only 7 of
+# those held a substantial transcript — the other 12 were thin sessions where
+# zero is the correct answer ("Save 0-5 insights" makes 0 legal) or transcripts
+# already deleted. Retrying the thin ones would spend quota to re-confirm
+# nothing, which is why the byte threshold exists rather than retrying every
+# zero.
+#
+# Arguments: exit_code text_count transcript_bytes extracted_count attempt
+# `extracted_count` is the empty string when it could not be determined.
+_ccrecall_should_retry() {
+  local exit_code="$1" text_count="$2" bytes="$3" extracted="$4" attempt="$5"
+  local min_bytes="${CCRECALL_ZERO_WRITE_MIN_BYTES:-20000}"
+
+  # One retry, never a loop: a second failure is a signal to surface, not to
+  # keep paying for.
+  [ "$attempt" -ge 2 ] 2>/dev/null && return 1
+  # A non-zero exit already carries its own diagnostic (argv limits, auth,
+  # budget) and none of those causes are transient.
+  [ "$exit_code" -eq 0 ] 2>/dev/null || return 1
+
+  # The text marker stands on its own — it needs no database, which is what
+  # makes it the only detector that works when sqlite3 is missing.
+  [ "$text_count" -gt 0 ] 2>/dev/null && return 0
+
+  # Everything below needs to know the write count really was zero.
+  [ -n "$extracted" ] || return 1
+  [ "$extracted" -eq 0 ] 2>/dev/null || return 1
+  [ "$bytes" -ge "$min_bytes" ] 2>/dev/null || return 1
+  return 0
+}
+
 # Resolve the directory containing this script (for prompt file).
 # zsh leaves BASH_SOURCE empty (the user's shell is zsh), so detect zsh and
 # use its %x prompt path; eval isolates the zsh-only ${(%):-%x} syntax from
@@ -298,6 +383,15 @@ ${prompt}"
   local extract_start
   extract_start=$(date +%s)
 
+  # Size of what the model is actually given, which is what separates "this
+  # session had nothing to say" from "the model did not do the job". Measured
+  # after the 200KB cap, in bytes: LC_ALL=C keeps wc byte-oriented so a CJK
+  # transcript is not undercounted by a third against the threshold.
+  local transcript_bytes
+  transcript_bytes=$(builtin printf '%s' "$session_transcript" \
+    | LC_ALL=C command wc -c | command tr -d ' ')
+  [[ "$transcript_bytes" =~ ^[0-9]+$ ]] || transcript_bytes=0
+
   # Spend cap only matters under API billing. With no ANTHROPIC_API_KEY,
   # `claude -p` runs on the Pro/Max subscription quota and --max-budget-usd
   # would gate on phantom API-equivalent cost — the root cause of the
@@ -417,6 +511,19 @@ ${prompt}"
   # right here — before the exit code is captured, before the capture file is
   # deleted, and before either the terminal notice or the telemetry row. The
   # failure reporting below is worth nothing in a shell it never reaches.
+  # One retry, at most (#75 follow-up). The loop exists because two failure
+  # shapes are both recoverable and both look like success from the outside:
+  # the model printing the calls as text, and the model doing nothing at all
+  # with a substantial transcript in hand. Re-running the 2026-09-17 miss with
+  # the SAME model produced four memories, so the failure is not a capability
+  # ceiling — it was simply never retried, and those memories sat outside the
+  # database until a human noticed a line of terminal output five hours later.
+  #
+  # `1>|` truncates $stdout_tmp on each pass, so the markers below always
+  # describe the attempt that just ran and never the previous one.
+  local attempt=1 extract_retried=0 extracted_count=""
+  local stdout_marker recall_save_text_count
+  while : ; do
   if extract_stderr=$(
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 130' INT
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 143' TERM
@@ -440,7 +547,6 @@ ${prompt}"
   # outcome here, and under a caller with errexit that ordinary outcome aborts
   # the shell — taking the terminal notice and the telemetry row with it. Same
   # reason the claude invocation above is wrapped in `if`.
-  local stdout_marker
   stdout_marker=$(grep -m1 -oE '^Error: Reached max turns \([0-9]+\)$' "$stdout_tmp" 2>/dev/null) || :
   # Second marker (#75): the model sometimes PRINTS `recall_save(...)` instead of
   # invoking the MCP tool. That run exits 0 with empty stderr and writes nothing,
@@ -460,11 +566,26 @@ ${prompt}"
   #
   # -c yields a bare count and never the matched line, so no session content can
   # reach the telemetry log — the same constraint that governs the stdout capture.
-  local recall_save_text_count
   recall_save_text_count=$(grep -cE '^[[:space:]]*recall_save[[:space:]]*\(' "$stdout_tmp" 2>/dev/null) || :
   # grep exits 1 with empty output on no match (and $stdout_tmp is /dev/null when
   # mktemp failed); --argjson would abort the whole telemetry write on a non-number.
   [[ "$recall_save_text_count" =~ ^[0-9]+$ ]] || recall_save_text_count=0
+
+  # Did this attempt actually put anything in the database? An empty result
+  # means undeterminable (no sqlite3, no database, a locked one) and is NOT
+  # read as zero — silence is not evidence of failure, and retrying on it
+  # would spend a second extraction every time the query simply could not run.
+  extracted_count=$(_ccrecall_count_extracted "$session_id") || extracted_count=""
+
+  if _ccrecall_should_retry "$extract_exit" "$recall_save_text_count" \
+       "$transcript_bytes" "$extracted_count" "$attempt"; then
+    attempt=$((attempt + 1))
+    extract_retried=1
+    printf '🔁 ccRecall: extraction produced nothing usable — retrying once...\n'
+    continue
+  fi
+  break
+  done
   command rm -f -- "$stdout_tmp" 2>/dev/null
   # Scrub common credential formats before stderr reaches the telemetry log.
   # claude echoes its own key (sk-ant-) in auth errors, and any MCP server
@@ -480,13 +601,25 @@ ${prompt}"
   local extract_duration=$(( extract_end - extract_start ))
 
   if [[ $extract_exit -eq 0 ]]; then
-    # A clean exit that printed call syntax is the silent-miss shape (#75): say so
-    # at the terminal, where it can still be acted on, instead of only in the log.
-    if [[ $recall_save_text_count -gt 0 ]]; then
-      printf '⚠️  ccRecall: extraction exited cleanly (%ds) but printed %d recall_save call(s) as text instead of invoking the tool — memories from this session may not have been saved.\n' \
-        "$extract_duration" "$recall_save_text_count"
+    # Three outcomes now, not two. The retry means a run that reaches here
+    # having written something is a success even if the first attempt printed
+    # call syntax — reporting that as a failure would train the reader to
+    # ignore the notice, which is how the original miss went unacted on.
+    local retry_note=""
+    [[ $extract_retried -eq 1 ]] && retry_note=" after one retry"
+    if [[ -n "$extracted_count" && "$extracted_count" -gt 0 ]] 2>/dev/null; then
+      printf '✅ ccRecall: extraction complete (%ds)%s — %d memories saved.\n' \
+        "$extract_duration" "$retry_note" "$extracted_count"
+    elif [[ $recall_save_text_count -gt 0 ]]; then
+      printf '⚠️  ccRecall: extraction exited cleanly (%ds)%s but printed %d recall_save call(s) as text instead of invoking the tool — memories from this session were not saved.\n' \
+        "$extract_duration" "$retry_note" "$recall_save_text_count"
+    elif [[ -n "$extracted_count" && "$extracted_count" -eq 0 && $transcript_bytes -ge ${CCRECALL_ZERO_WRITE_MIN_BYTES:-20000} ]] 2>/dev/null; then
+      # The shape the text marker never caught. Previously indistinguishable
+      # from "nothing worth saving" — 7 of these in 257 runs, none reported.
+      printf '⚠️  ccRecall: extraction exited cleanly (%ds)%s but saved nothing from a %dKB transcript — likely a silent miss.\n' \
+        "$extract_duration" "$retry_note" "$(( transcript_bytes / 1024 ))"
     else
-      printf '✅ ccRecall: extraction complete (%ds).\n' "$extract_duration"
+      printf '✅ ccRecall: extraction complete (%ds)%s.\n' "$extract_duration" "$retry_note"
     fi
   else
     # Carry the first line of stderr (#120). Without it the terminal said only
@@ -547,7 +680,10 @@ ${prompt}"
     --argjson exit "$extract_exit" \
     --argjson dur "$extract_duration" \
     --argjson textSaves "$recall_save_text_count" \
-    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker,recallSaveTextCount:$textSaves}' || :
+    --argjson retried "$extract_retried" \
+    --argjson trBytes "$transcript_bytes" \
+    --arg wrote "$extracted_count" \
+    '{ts:$ts,sessionId:$sid,projectId:$pid,mode:"jsonl",exitCode:$exit,durationSec:$dur,stderr:$stderr,stdoutMarker:$marker,recallSaveTextCount:$textSaves,retried:($retried==1),transcriptBytes:$trBytes,memoriesWritten:(if $wrote=="" then null else ($wrote|tonumber) end)}' || :
 
   return $claude_exit
 }

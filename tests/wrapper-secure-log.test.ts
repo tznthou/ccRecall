@@ -437,13 +437,24 @@ describe('extract wrapper: the guard cannot be bypassed or removed', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  it('defines exactly the three functions these assertions cover', () => {
-    // `declare -f` sees functions and nothing else, so a fourth one is a
-    // blind spot rather than a neutral addition. This fails until whoever
-    // adds it decides whether the scans below need to cover it.
+  it('defines exactly the functions these assertions cover', () => {
+    // `declare -f` sees functions and nothing else, so a new one is a blind
+    // spot rather than a neutral addition. This fails until whoever adds it
+    // decides whether the scans below need to cover it.
+    //
+    // 2026-09-18, the three retry functions (#75 follow-up): NOT covered by
+    // the scans in this file, deliberately. Everything here asserts a
+    // property of the telemetry log — its mode, its parents, its symlink
+    // refusal, its errexit tolerance — and none of the three touches that
+    // log. `_ccrecall_sqlite_ro` does open a file the others never do, so it
+    // carries its own equivalent guard (read-only handle, `command` prefix)
+    // in extract-wrapper-retry.test.ts rather than here.
     expect(definedFunctions(dir)).toEqual([
+      '_ccrecall_count_extracted',
       '_ccrecall_log_append',
       '_ccrecall_secure_log',
+      '_ccrecall_should_retry',
+      '_ccrecall_sqlite_ro',
       'ccrecall-extract',
     ])
   })
