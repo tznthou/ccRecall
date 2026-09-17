@@ -284,7 +284,7 @@ ${prompt}"
   # so a failure can say what it was.
   extract_stderr=$(cd "$session_cwd" && printf '%s' "$full_prompt" | command claude -p \
     --no-session-persistence \
-    --model haiku \
+    --model sonnet \
     ${budget_args[@]+"${budget_args[@]}"} \
     --max-turns 5 \
     --dangerously-skip-permissions 2>&1 1>/dev/null)

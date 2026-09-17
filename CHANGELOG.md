@@ -24,6 +24,38 @@ more like an iteration counter than a strict SemVer major).
   a capability ceiling, it was simply never retried. One retry, never a loop —
   a second failure is a signal to surface, not something to keep paying for.
 
+### Changed
+
+- **Extraction runs on Sonnet 5 instead of Haiku 4.5**, in both the live
+  wrapper and the backfill recovery script. The reason is memory quality, not
+  reliability.
+
+  Only the first 149 characters of a memory survive injection, so a memory that
+  opens by narrating the problem arrives unactionable — `extraction-prompt.md`
+  calls leading with the prescription its most important rule. Measured by blind
+  review over 11 real transcripts and 86 memories, with the rubric fixed in
+  writing before any data existed and the source revealed only after every
+  verdict was recorded: **Haiku led with a prescription 56% of the time, Sonnet
+  84%**. Paired per-transcript — the comparison that controls for one
+  transcript simply being harder than another — Sonnet won 7 of the 9 where
+  both produced output, averaging **+32 percentage points** (Wilcoxon
+  p = 0.0273; p = 0.0068 counting a whole-batch miss as 0%).
+
+  Reliability did **not** justify this and is not claimed as a reason: Haiku
+  produced nothing at all on 2 of 10 transcripts against Sonnet's 0, but at that
+  sample size the difference is not significant (Fisher p = 0.47), and the retry
+  above catches both of those cases anyway.
+
+  It costs 2.9× the wall time (927s → 2712s over 11 transcripts) and 2× the
+  per-token price. Extraction runs after the session ends, in the background,
+  with nobody waiting on it.
+
+  Worth recording honestly: a first batch of 4 transcripts showed 44% vs 90%,
+  and a second independent batch showed 65% vs 79% — not significant on its own
+  (p = 0.34) at that sample size. The first batch was a favourable draw. The
+  pooled and paired results are what this decision rests on, not that first
+  table.
+
 ### Fixed
 
 - **The extraction failure rate was being measured through a detector that saw
