@@ -529,7 +529,7 @@ ${prompt}"
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 143' TERM
     builtin printf '%s' "$full_prompt" | command claude -p \
       --no-session-persistence \
-      --model haiku \
+      --model sonnet \
       ${budget_args[@]+"${budget_args[@]}"} \
       --max-turns 5 \
       --dangerously-skip-permissions 2>&1 1>|"$stdout_tmp"
