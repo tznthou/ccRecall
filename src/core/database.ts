@@ -1349,25 +1349,66 @@ export class Database {
     return rows.map(mapSessionRow)
   }
 
-  getLastSession(projectId: string): SessionMeta | null {
-    // instr(id,'/') guards the registry-timing window (observed 2026-07-13):
-    // a subagent row can exist in sessions while its subagent_sessions row is
-    // momentarily absent, so EXCLUDE_SUBAGENTS alone lets "<parent>/agent-…"
-    // shadow the real last session. Composite ids are never main sessions —
-    // main ids come from top-level JSONL filenames, which cannot contain '/'.
-    // archived rows are excluded too: their JSONL is gone from disk, so they
-    // cannot be "the session that just closed" this endpoint exists to find.
+  /**
+   * The row filters every last-session lookup shares. Kept in one string so
+   * the case-insensitive fallback below cannot drift into a second, weaker
+   * copy of the guards — only the project_id comparison differs between them.
+   *
+   * instr(id,'/') guards the registry-timing window (observed 2026-07-13):
+   * a subagent row can exist in sessions while its subagent_sessions row is
+   * momentarily absent, so EXCLUDE_SUBAGENTS alone lets "<parent>/agent-…"
+   * shadow the real last session. Composite ids are never main sessions —
+   * main ids come from top-level JSONL filenames, which cannot contain '/'.
+   * archived rows are excluded too: their JSONL is gone from disk, so they
+   * cannot be "the session that just closed" this endpoint exists to find.
+   */
+  private static readonly LAST_SESSION_GUARDS = `
+    AND id ${Database.EXCLUDE_SUBAGENTS}
+    AND instr(id, '/') = 0
+    AND archived = 0`
+
+  private lastSessionFor(projectId: string): SessionMeta | null {
     const row = this.db.prepare(
       `SELECT ${SESSION_SELECT_COLUMNS}
        FROM sessions
        WHERE project_id = ?
-         AND id ${Database.EXCLUDE_SUBAGENTS}
-         AND instr(id, '/') = 0
-         AND archived = 0
+         ${Database.LAST_SESSION_GUARDS}
        ORDER BY started_at DESC
        LIMIT 1`,
     ).get(projectId) as SessionRow | undefined
     return row ? mapSessionRow(row) : null
+  }
+
+  getLastSession(projectId: string): SessionMeta | null {
+    const exact = this.lastSessionFor(projectId)
+    if (exact) return exact
+
+    // Case-insensitive fallback (2026-09-21). macOS APFS is case-insensitive,
+    // so `cd ~/notes` succeeds against a directory really named `Notes` and
+    // $PWD keeps what the user typed. Claude Code names its project folder
+    // from the real path, so the extraction wrapper derives `-Users-…-notes`
+    // while the indexed id is `-Users-…-Notes`.
+    // resolveProjectId is a pure encoder and cannot see the discrepancy; the
+    // exact match above then misses and the wrapper logs `reason=no-session-id`
+    // and skips extraction with nothing reporting an error. Half of the
+    // classifiable skips in the telemetry (7 of 14 carrying a cwd) were this.
+    //
+    // It stays a FALLBACK: on a case-sensitive filesystem `/foo` and `/Foo`
+    // are genuinely different projects, so an exact hit always wins and an
+    // ambiguous match resolves to nothing rather than extracting the wrong
+    // project's session. NOCASE folds ASCII only, which is all a project id
+    // can hold — resolveProjectId has already reduced every other character,
+    // CJK included, to '-'. The scan is unindexed (idx_sessions_project is
+    // BINARY), so it is deliberately confined to the miss path.
+    const variants = this.db.prepare(
+      `SELECT DISTINCT project_id
+       FROM sessions
+       WHERE project_id = ? COLLATE NOCASE
+         ${Database.LAST_SESSION_GUARDS}`,
+    ).all(projectId) as { project_id: string }[]
+
+    if (variants.length !== 1) return null
+    return this.lastSessionFor(variants[0].project_id)
   }
 
   getSessionById(sessionId: string): SessionMeta | null {
