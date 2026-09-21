@@ -8,6 +8,34 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [Unreleased]
+
+### 修正
+
+- **路徑大小寫跟索引裡不一樣時，抽取不會再整場跳過。** macOS 的檔案系統不分大小寫，
+  所以 `cd ~/notes` 進得去真名叫 `Notes` 的目錄，而 `$PWD` 留下的是你當下打的那個寫法。
+  Claude Code 是用真實路徑去命名 `~/.claude/projects/` 底下的資料夾的，於是 wrapper 拿
+  `-Users-…-notes` 去問 `/session/last`，索引裡的卻是 `-Users-…-Notes`。查不到，wrapper
+  就記下 `mode=skip reason=no-session-id`——那場 session 的抽取從頭到尾沒有跑過。
+
+  真正讓它藏起來的是：skip 記的 `exitCode` 是 `null`，所以它在哪裡都不算失敗——不算在
+  exit code 的遙測裡，不算在重試路徑裡（那條要求 exit 0），也不算在
+  `backfill --from-log-all` 裡（那個撈的是非零退出）。skip 一直都有連同 `cwd` 被記下來，
+  只是從來沒有人去讀它。
+
+  分得出成因的案例裡有一半是這個：帶著 `cwd` 的 14 筆 skip 中有 7 筆（另外 56 筆早於
+  `cwd` 這個欄位，無從分類）。其中四場 session 的逐字稿還留在磁碟上、各 575KB–1.7MB，
+  卻一筆記憶都沒抽出來，已用 `backfill-extract.sh` 補回。
+
+  現在精確比對查不到時，會退一步做不分大小寫的比對。它就只是 fallback：在分大小寫的
+  檔案系統上，`/foo` 跟 `/Foo` 是兩個不同的專案，所以精確命中永遠優先，而一種寫法同時
+  對上多個專案時寧可回空，也不去抽錯專案的 session。
+
+  影響範圍只有 `/session/last`。`/session/end` 認的是 session UUID，而記憶注入從來沒被
+  影響過——SessionStart hook 收到的是 Claude Code 自己的 `cwd`，不是 shell 的 `$PWD`。
+
+---
+
 ## [0.9.0] — 2026-09-18
 
 ### 新增

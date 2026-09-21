@@ -11,6 +11,41 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Extraction no longer skips a session whose path case differs from the
+  indexed one.** macOS filesystems are case-insensitive, so `cd ~/notes`
+  succeeds against a directory really named `Notes` — and `$PWD` keeps whatever
+  was typed. Claude Code names the folder under `~/.claude/projects/` from the
+  real path, so the wrapper asked `/session/last` for `-Users-…-notes` while the
+  indexed id was `-Users-…-Notes`. The lookup missed, and the wrapper logged
+  `mode=skip reason=no-session-id`. Extraction never ran for that session.
+
+  What kept this invisible is that a skip records `exitCode: null`, so it
+  counted as a failure nowhere — not in exit-code telemetry, not in the retry
+  path (which requires exit 0), and not in `backfill --from-log-all` (which
+  collects non-zero exits). The skip was being logged with its `cwd` the whole
+  time. Nothing read it.
+
+  Half the classifiable occurrences were this: 7 of the 14 skips carrying a
+  `cwd` (the other 56 predate that field). Four affected sessions still held
+  575KB–1.7MB transcripts with zero memories extracted, and were recovered with
+  `backfill-extract.sh`.
+
+  The lookup now falls back to a case-insensitive match when the exact one
+  misses. It stays a fallback: on a case-sensitive filesystem `/foo` and `/Foo`
+  are genuinely different projects, so an exact hit always wins, and a spelling
+  matching several projects resolves to nothing rather than extracting the wrong
+  project's session.
+
+  Scope is `/session/last` alone. `/session/end` keys on the session UUID, and
+  memory injection was never affected — the SessionStart hook receives Claude
+  Code's own `cwd` rather than the shell's `$PWD`.
+
+---
+
 ## [0.9.0] — 2026-09-18
 
 ### Added
