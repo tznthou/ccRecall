@@ -22,7 +22,12 @@ function sanitizeForLog(s) {
 
 function postSessionEnd(sessionId) {
   return new Promise((resolve) => {
-    const payload = JSON.stringify({ sessionId })
+    // wait:false — never block on the daemon's rescue reindex. Claude Code
+    // aborts SessionEnd hooks ~1.3-1.6s into its exit path, and a rescue
+    // reindex takes ~1.55s, so blocking got this hook killed ("Hook
+    // cancelled") on every one-shot session and threw away the diagnostics
+    // below. The daemon still reindexes; /session/last joins that same run.
+    const payload = JSON.stringify({ sessionId, wait: false })
     const req = http.request({
       hostname: HOST,
       port: PORT,
@@ -37,6 +42,13 @@ function postSessionEnd(sessionId) {
       let body = ''
       res.on('data', (c) => { body += c })
       res.on('end', () => {
+        // 202 = session wasn't indexed yet and the daemon queued a reindex for
+        // it. Expected on one-shot sessions, not a failure.
+        if (res.statusCode === 202) {
+          console.error('[ccRecall] reindex queued (session not indexed yet; /session/last will join that run)')
+          resolve()
+          return
+        }
         if (res.statusCode !== 200) {
           console.error(`[ccRecall] harvest failed ${res.statusCode}: ${sanitizeForLog(body.slice(0, 200))}`)
           resolve()

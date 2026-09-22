@@ -59,17 +59,23 @@ function memorySource(m: Memory): string {
 
 type SessionEndBody = {
   sessionId?: unknown
+  wait?: unknown
 }
 
 function validateSessionEndBody(
   raw: unknown,
-): { sessionId: string } | { error: string } {
+): { sessionId: string; wait: boolean } | { error: string } {
   if (!raw || typeof raw !== 'object') return { error: 'body must be JSON object' }
   const b = raw as SessionEndBody
   if (typeof b.sessionId !== 'string' || b.sessionId.trim() === '') {
     return { error: 'sessionId must be non-empty string' }
   }
-  return { sessionId: b.sessionId }
+  if (b.wait !== undefined && typeof b.wait !== 'boolean') {
+    return { error: 'wait must be boolean' }
+  }
+  // Defaults to the original blocking contract, so callers that don't opt out
+  // (manual curl, hooks from an older install) see unchanged 200/404 behaviour.
+  return { sessionId: b.sessionId, wait: b.wait ?? true }
 }
 
 const startTime = Date.now()
@@ -427,6 +433,21 @@ export function createRequestHandler(
       }
       let session = db.getSessionById(v.sessionId)
       if (!session && opts.rescueReindex) {
+        if (!v.wait) {
+          // Caller opted out of blocking (the SessionEnd hook does). Claude
+          // Code aborts SessionEnd hooks ~1.3-1.6s into its exit path, which is
+          // less than a rescue reindex takes (~1.55s measured locally), so
+          // awaiting here killed the hook on every one-shot session
+          // (`claude -p`, `claude update`) and lost its stderr diagnostics.
+          // The indexing guarantee survives: coalesceRescue never drops a
+          // joiner, so the extraction wrapper's /session/last miss shares THIS
+          // in-flight run and awaits its completion before giving up.
+          void opts.rescueReindex().catch((err) => {
+            console.warn('[session-end] background rescue reindex failed:', scrubErrorMessage(err))
+          })
+          sendJson(res, 202, { ok: true, sessionId: v.sessionId, reindex: 'queued' })
+          return
+        }
         // Fresh-session race: hook fires before the daemon has indexed the
         // JSONL. Run one reindex and retry — watcher will catch subsequent
         // changes but the extraction wrapper polling /session/last can't wait
