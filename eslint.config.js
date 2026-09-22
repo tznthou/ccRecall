@@ -16,6 +16,11 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['dist/', 'node_modules/'],
+    // .claude/ is Claude Code's local working directory — gitignored, never
+    // part of the package, and holding one-off analysis harnesses rather than
+    // project source. Linting it reported 16 errors nobody could act on, since
+    // fixing throwaway scratch files benefits no one and the next session
+    // writes new ones.
+    ignores: ['dist/', 'node_modules/', '.claude/'],
   },
 )
