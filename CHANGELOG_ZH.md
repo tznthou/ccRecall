@@ -34,6 +34,24 @@ ccRecall 的重要版本變更記錄在這裡。
   影響範圍只有 `/session/last`。`/session/end` 認的是 session UUID，而記憶注入從來沒被
   影響過——SessionStart hook 收到的是 Claude Code 自己的 `cwd`，不是 shell 的 `$PWD`。
 
+- **SessionEnd hook 不再在每個 one-shot session 以 `Hook cancelled` 收場。**
+  `claude -p` 和 `claude update` 跑完都會在終端留下
+  `SessionEnd hook [...session-end.mjs] failed: Hook cancelled`。Claude Code 在退出路徑上
+  約 1.3–1.6 秒就會 abort SessionEnd hook（用階梯 `sleep` hook 二分實測：1.3s 過、
+  1.6s 被砍），而 `/session/end` 當時阻塞在一個實測 ~1.55s 的 rescue reindex 上——
+  每次都在終點線前一步被殺掉。
+
+  真正損失的是 hook 自己的診斷訊息，不是記憶：rescue reindex 跑在 **daemon** 進程裡，
+  殺掉 hook 從來不會取消它，session 一直都有被索引（已對一次被 abort 的 one-shot
+  run 查 `sessions` 資料列驗證）。可見代價是每次 headless 調用都出現一行紅字錯誤，
+  外加 hook 印到 stderr 的內容永久遺失——而那正是它報告 skip 原因與失敗模式的地方。
+
+  現在 hook 送 `{ sessionId, wait: false }`，endpoint 在 miss 時不 await 就啟動 rescue，
+  直接回 `202 { reindex: 'queued' }`。索引保證不是消失、是往下游移了一站：
+  `coalesceRescue` 從不丟棄 joiner，所以 extraction wrapper 的 `/session/last` miss 會
+  join 同一個 in-flight run 並為它阻塞——而 wrapper 不是 hook，沒有 abort window 可被砍。
+  `wait` 預設 `true`，手動 caller 與舊版安裝的 hook 維持原本阻塞式的 200/404 契約。
+
 ---
 
 ## [0.9.0] — 2026-09-18

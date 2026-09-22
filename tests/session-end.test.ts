@@ -76,6 +76,25 @@ describe('POST /session/end — indexed session', () => {
     expect((body as { error: string }).error).toMatch(/not found/)
   })
 
+  it('rejects a non-boolean wait with 400', async () => {
+    const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId,
+      wait: 'nope',
+    })
+    expect(status).toBe(400)
+    expect((body as { error: string }).error).toMatch(/wait/)
+  })
+
+  it('returns 200 for an already-indexed session even with wait:false', async () => {
+    // wait only governs the rescue path; a hit never needed to block.
+    const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId,
+      wait: false,
+    })
+    expect(status).toBe(200)
+    expect((body as { ok: boolean }).ok).toBe(true)
+  })
+
   it('returns 200 { ok, sessionId } for an indexed session with no side effects', async () => {
     const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
       sessionId,
@@ -164,5 +183,106 @@ describe('POST /session/end — rescue reindex (fresh session race)', () => {
       sessionId: freshSessionId,
     })
     expect(status).toBe(404)
+  })
+})
+
+describe('POST /session/end — non-blocking opt-out (wait:false)', () => {
+  let tmpDir: string
+  let db: Database
+  let server: http.Server
+  let port: number
+  let rescueRun: Promise<void> | null
+  const freshSessionId = 'fresh-session-nonblocking-001'
+  // Long enough that a blocking implementation cannot come in under it.
+  const RESCUE_DELAY_MS = 500
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-nonblock-'))
+    const projectsDir = path.join(tmpDir, 'projects')
+    const projectDir = path.join(projectsDir, '-test-nonblock')
+    await mkdir(projectDir, { recursive: true })
+    await writeFile(
+      path.join(projectDir, `${freshSessionId}.jsonl`),
+      sampleSession.map(l => JSON.stringify(l)).join('\n'),
+    )
+
+    db = new Database(path.join(tmpDir, 'test.db'))
+    rescueRun = null
+
+    server = createServer(db, {
+      // Deliberately slow, standing in for the ~1.55s real rescue reindex that
+      // outlived Claude Code's SessionEnd hook abort window.
+      rescueReindex: () => {
+        rescueRun = (async () => {
+          await new Promise(resolve => setTimeout(resolve, RESCUE_DELAY_MS))
+          await runIndexer(db, undefined, projectsDir)
+        })()
+        return rescueRun
+      },
+    })
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        port = (server.address() as { port: number }).port
+        resolve()
+      })
+    })
+  })
+
+  afterEach(async () => {
+    // Let the queued run settle first, or it writes into a closed DB handle.
+    if (rescueRun) await rescueRun.catch(() => {})
+    server.close()
+    db.close()
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('returns 202 without waiting for the reindex, which still lands', async () => {
+    expect(db.getSessionById(freshSessionId)).toBeNull()
+
+    const t0 = Date.now()
+    const { status, body } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId: freshSessionId,
+      wait: false,
+    })
+    const elapsed = Date.now() - t0
+
+    expect(status).toBe(202)
+    const b = body as { ok: boolean; sessionId: string; reindex: string }
+    expect(b.ok).toBe(true)
+    expect(b.sessionId).toBe(freshSessionId)
+    expect(b.reindex).toBe('queued')
+    // Regression guard: re-adding `await` to this path pushes the response
+    // past RESCUE_DELAY_MS and fails here.
+    expect(elapsed).toBeLessThan(RESCUE_DELAY_MS)
+
+    // Queued, not dropped — this is the run /session/last joins via coalesceRescue.
+    expect(rescueRun).not.toBeNull()
+    await rescueRun
+    expect(db.getSessionById(freshSessionId)).not.toBeNull()
+  })
+
+  it('still answers 202 when the queued reindex fails', async () => {
+    server.close()
+    await new Promise(resolve => server.on('close', resolve))
+    rescueRun = null
+    server = createServer(db, {
+      rescueReindex: () => {
+        rescueRun = (async () => { throw new Error('indexer failed') })()
+        return rescueRun
+      },
+    })
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        port = (server.address() as { port: number }).port
+        resolve()
+      })
+    })
+
+    const { status } = await postJson(`http://127.0.0.1:${port}/session/end`, {
+      sessionId: freshSessionId,
+      wait: false,
+    })
+    // A background failure must not turn into a hook-visible error.
+    expect(status).toBe(202)
   })
 })

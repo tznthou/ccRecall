@@ -121,9 +121,17 @@ const server = createServer(db, {
 })
 ```
 
-`coalesceRescue` shares (never drops) the run when `/session/end` and `/session/last` both miss during the same session close. `watcher.runNow()` would respect the watcher's single-flight — meaning if a scheduled scan is already in flight, the rescue gets silently dropped (just flips `dirty`). That's exactly what we *don't* want for a blocking confirm: the client is waiting on a 200, and the extraction wrapper is about to ask `/session/last` for this very session. Calling `runIndexer(db)` directly sidesteps the single-flight and gives the caller deterministic execution.
+`coalesceRescue` shares (never drops) the run when `/session/end` and `/session/last` both miss during the same session close. `watcher.runNow()` would respect the watcher's single-flight — meaning if a scheduled scan is already in flight, the rescue gets silently dropped (just flips `dirty`). That's exactly what we *don't* want here: the extraction wrapper is about to ask `/session/last` for this very session. Calling `runIndexer(db)` directly sidesteps the single-flight and gives the caller deterministic execution.
 
 The tradeoff: two concurrent `runIndexer` runs can contend for the writer. In practice they don't corrupt — SQLite WAL serializes writes — and the window is narrow (rescue only runs on cache miss).
+
+### Why the hook doesn't wait for its own rescue
+
+`/session/end` used to block until the rescue finished, so the hook's 200 *was* the indexing confirmation. That cost more than it bought. Claude Code aborts SessionEnd hooks roughly 1.3–1.6s into its exit path (measured by bisecting `sleep` hooks: 1.3s survives, 1.6s doesn't), while a rescue reindex here takes ~1.55s. Every one-shot session — `claude -p`, `claude update` — therefore ended with `SessionEnd hook ... failed: Hook cancelled`, and because the kill lands on the hook's stderr, every diagnostic it prints was lost with it.
+
+So the hook now posts `{ sessionId, wait: false }`, and on a miss the endpoint fires the rescue without awaiting it and answers `202 { reindex: 'queued' }`. `wait` defaults to `true`, so manual callers and older installed hooks keep the original 200/404 contract.
+
+Nothing is lost by not waiting, and this is the load-bearing part: the reindex runs in the *daemon* process, so killing the hook never cancelled it — even before this change the session still got indexed. The confirmation the hook gave up is still enforced one step later, because `coalesceRescue` never drops a joiner: the extraction wrapper's `/session/last` miss joins *this* in-flight run and awaits its completion. The wrapper is not a Claude Code hook, so it has no abort window to lose. Net effect: the rescue starts earlier and the only caller that actually needs the guarantee is the one that blocks for it.
 
 ---
 

@@ -44,6 +44,31 @@ more like an iteration counter than a strict SemVer major).
   memory injection was never affected — the SessionStart hook receives Claude
   Code's own `cwd` rather than the shell's `$PWD`.
 
+- **The SessionEnd hook no longer dies with `Hook cancelled` on every one-shot
+  session.** `claude -p` and `claude update` both ended with
+  `SessionEnd hook [...session-end.mjs] failed: Hook cancelled` in the terminal.
+  Claude Code aborts SessionEnd hooks about 1.3–1.6s into its exit path
+  (bisected with staged `sleep` hooks: 1.3s survives, 1.6s does not), and
+  `/session/end` was blocking on a rescue reindex that measures ~1.55s — so the
+  hook was killed just short of the finish line, every time.
+
+  What was actually lost was the hook's own diagnostics, not any memory: the
+  rescue reindex runs inside the **daemon** process, so killing the hook never
+  cancelled it, and the session was being indexed all along (verified by
+  querying the `sessions` row for an aborted one-shot run). The visible cost was
+  a red error line on every headless invocation plus the permanent loss of
+  whatever the hook printed to stderr — which is where its skip reasons and
+  failure modes were reported.
+
+  The hook now posts `{ sessionId, wait: false }`, and on a miss the endpoint
+  starts the rescue without awaiting it, answering `202 { reindex: 'queued' }`.
+  The indexing guarantee moves one step downstream rather than disappearing:
+  `coalesceRescue` never drops a joiner, so the extraction wrapper's
+  `/session/last` miss joins that same in-flight run and blocks for it — and the
+  wrapper, not being a hook, has no abort window to lose. `wait` defaults to
+  `true`, so manual callers and hooks from an older install keep the original
+  blocking 200/404 contract.
+
 ---
 
 ## [0.9.0] — 2026-09-18

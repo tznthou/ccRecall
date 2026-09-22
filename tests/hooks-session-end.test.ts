@@ -12,7 +12,10 @@ const SCRIPT_PATH = path.resolve(
 
 type Received = { path: string | undefined; method: string | undefined; body: string }
 
-function startMockServer(): Promise<{ server: http.Server; port: number; received: Received[] }> {
+function startMockServer(
+  status = 200,
+  respBody: unknown = { ok: true, sessionId: 'mock' },
+): Promise<{ server: http.Server; port: number; received: Received[] }> {
   return new Promise((resolve) => {
     const received: Received[] = []
     const server = http.createServer((req, res) => {
@@ -20,9 +23,9 @@ function startMockServer(): Promise<{ server: http.Server; port: number; receive
       req.on('data', (c: Buffer) => { body += c.toString() })
       req.on('end', () => {
         received.push({ path: req.url, method: req.method, body })
-        res.statusCode = 200
+        res.statusCode = status
         res.setHeader('Content-Type', 'application/json')
-        res.end(JSON.stringify({ ok: true, sessionId: 'mock' }))
+        res.end(JSON.stringify(respBody))
       })
     })
     server.listen(0, '127.0.0.1', () => {
@@ -80,8 +83,27 @@ describe('hooks/session-end.mjs', () => {
     expect(received).toHaveLength(1)
     expect(received[0].path).toBe('/session/end')
     expect(received[0].method).toBe('POST')
-    expect(JSON.parse(received[0].body)).toEqual({ sessionId: 'abc-123' })
+    // wait:false is part of the contract — the hook must never block on the
+    // daemon's rescue reindex or Claude Code's exit path aborts it.
+    expect(JSON.parse(received[0].body)).toEqual({ sessionId: 'abc-123', wait: false })
     expect(stderr).toContain('harvest start (reason: logout)')
+  })
+
+  it('treats 202 as success: logs the queued reindex, reports no failure', async () => {
+    server.close()
+    await new Promise<void>((resolve) => server.on('close', () => resolve()))
+    const ctx = await startMockServer(202, { ok: true, sessionId: 'mock', reindex: 'queued' })
+    server = ctx.server
+
+    const { code, stderr } = await runHook(ctx.port, JSON.stringify({
+      session_id: 'fresh-1',
+      reason: 'other',
+      hook_event_name: 'SessionEnd',
+    }))
+    expect(code).toBe(0)
+    expect(stderr).toContain('reindex queued')
+    expect(stderr).not.toContain('harvest failed')
+    expect(JSON.parse(ctx.received[0].body)).toEqual({ sessionId: 'fresh-1', wait: false })
   })
 
   it('skips POST when reason is "resume" and logs the skip', async () => {

@@ -120,9 +120,17 @@ const server = createServer(db, {
 })
 ```
 
-`coalesceRescue` 在 `/session/end` 和 `/session/last` 同一次 session close 都 miss 時共用（而非丟棄）同一次 run。`watcher.runNow()` 會尊重 watcher 的 single-flight——也就是已經有 scan 在跑時 rescue 會被默默 drop（只翻 `dirty`）。那是我們**不**想要的：client 正在等 200 回來，而 extraction wrapper 馬上就要用 `/session/last` 查這個 session。直接呼 `runIndexer(db)` 繞過 single-flight，給 caller 確定性的執行。
+`coalesceRescue` 在 `/session/end` 和 `/session/last` 同一次 session close 都 miss 時共用（而非丟棄）同一次 run。`watcher.runNow()` 會尊重 watcher 的 single-flight——也就是已經有 scan 在跑時 rescue 會被默默 drop（只翻 `dirty`）。那是我們**不**想要的：extraction wrapper 馬上就要用 `/session/last` 查這個 session。直接呼 `runIndexer(db)` 繞過 single-flight，給 caller 確定性的執行。
 
 取捨：兩個 `runIndexer` 同時跑可能 writer 爭用。實際上不會 corrupt——SQLite WAL 會 serialize write——而且 window 很窄（rescue 只在 cache miss 時跑）。
+
+### 為什麼 hook 不等自己觸發的 rescue
+
+`/session/end` 原本會阻塞到 rescue 跑完，所以 hook 收到的 200 **就是**索引完成的確認。那個代價不划算。Claude Code 在退出路徑上約 **1.3–1.6 秒**就會 abort SessionEnd hook（用階梯 `sleep` hook 二分實測：1.3s 過、1.6s 被砍），而這裡的 rescue reindex 要 **~1.55s**。結果是每個 one-shot session——`claude -p`、`claude update`——都以 `SessionEnd hook ... failed: Hook cancelled` 收場；而且 kill 打在 hook 的 stderr 上，它印的所有診斷訊息一併陪葬。
+
+所以現在 hook 送 `{ sessionId, wait: false }`，endpoint 在 miss 時**不 await** 就把 rescue 丟出去、直接回 `202 { reindex: 'queued' }`。`wait` 預設 `true`，手動 caller 與舊版安裝的 hook 維持原本的 200/404 契約。
+
+不等並沒有損失，這是承重的部分：reindex 跑在 **daemon 進程**裡，殺掉 hook 從來不會取消它——即使在這個修正之前，session 照樣被索引。Hook 放棄的那個確認，被下一站接住了：`coalesceRescue` 從不丟棄 joiner，extraction wrapper 的 `/session/last` miss 會 join **同一個** in-flight run 並等它完成。而 wrapper 不是 Claude Code hook，沒有 abort window 可以被砍。淨效果：rescue 更早開始，而真正需要那個保證的 caller 才是會為它阻塞的那個。
 
 ---
 
