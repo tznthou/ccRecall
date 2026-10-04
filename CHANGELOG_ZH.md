@@ -8,6 +8,30 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [Unreleased]
+
+### 修正
+
+- **抽取不會再被注入記憶。** 抽取這一步本身就是一場 headless 的 `claude -p` session，
+  Claude Code 會像對待其他 session 一樣執行使用者的全域 hooks，所以 ccRecall 自己的
+  SessionStart 和 UserPromptSubmit hook 每次都把記憶注入給抽取模型。這些內容沒有人會讀，
+  卻照樣算成「被喚醒」：`access_count` 加一、`injection_log` 多一筆，還把 startup 選擇
+  留給「從沒被喚醒過」的記憶的那個優先席位用掉了。
+
+  截至 2026-10-04 的一週內，SessionStart 的 294 次注入有 134 次、prompt 的 204 次注入有
+  50 次是送進抽取 run 的。2026-09-14 到 27 日建立的 297 筆記憶裡，38% 第一次被喚醒就是在
+  抽取 run 裡，而這批記憶寫入後一週內，只有 24% 曾出現在互動 session 中。
+
+  現在 wrapper 和 `backfill-extract.sh` 啟動抽取時，會帶上
+  `CCRECALL_SESSION_START_STRATEGY=off` 與 `CCRECALL_PROMPT_RECALL=off`。這兩個賦值只加在
+  那一條指令前面，所以 source 這支 wrapper 的 shell 會保留它原本的設定，wrapper 啟動的互動
+  session 也不受影響。抽取模型自己想查的時候，照樣可以用 `recall_query` 查記憶。
+
+  跨過這次變更比較遙測數字時，有兩件事要注意。第一，抽取 run 不會再往
+  `startup-recall.log.jsonl` 寫一列，因為關掉的 hook 在記錄之前就返回了；量測的那一週，
+  這類列佔 61 列中的 28 列。第二，抽取模型用 `recall_query` 查到的記憶仍然會算成被喚醒，
+  那條路是 MCP 工具呼叫，不經過 hook。
+
 ## [0.9.1] — 2026-09-22
 
 ### 修正

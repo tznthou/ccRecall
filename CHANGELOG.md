@@ -11,6 +11,36 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Extraction no longer gets memories injected into it.** The extraction step
+  is a headless `claude -p` session, and Claude Code runs the user's global
+  hooks for it like any other session — so ccRecall's own SessionStart and
+  UserPromptSubmit hooks injected memories into the extraction model on every
+  run. Nobody read them, but each one still counted as surfaced: it bumped
+  `access_count`, stamped `injection_log`, and used up the priority slot that
+  startup selection gives a memory that has never been surfaced.
+
+  In the week to 2026-10-04, extraction runs received 134 of 294 SessionStart
+  injections and 50 of 204 prompt injections. Of 297 memories created
+  2026-09-14..27, 38% were first surfaced in an extraction run, and only 24% of
+  those reached an interactive session within a week of being written.
+
+  The wrapper and `backfill-extract.sh` now start that run with
+  `CCRECALL_SESSION_START_STRATEGY=off` and `CCRECALL_PROMPT_RECALL=off`. They
+  are prefix assignments on that one command, so the shell the wrapper is
+  sourced into keeps its own values, and the interactive session the wrapper
+  launches is unchanged. The extraction model can still look memories up with
+  `recall_query` when it chooses to.
+
+  Two things to keep in mind when comparing telemetry across this change. The
+  extraction run no longer writes a row to `startup-recall.log.jsonl`, because
+  the switched-off hook returns before logging; in the week measured those rows
+  were 28 of 61. And lookups the extraction model makes with `recall_query` are
+  still counted as surfaced — that is an MCP tool call, not a hook.
+
 ## [0.9.1] — 2026-09-22
 
 ### Fixed

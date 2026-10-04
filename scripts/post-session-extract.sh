@@ -521,13 +521,28 @@ ${prompt}"
   #
   # `1>|` truncates $stdout_tmp on each pass, so the markers below always
   # describe the attempt that just ran and never the previous one.
+  #
+  # Both of ccRecall's own memory hooks are switched off for this run. It is a
+  # Claude Code session in its own right, so the user's global hooks fire for it
+  # like any other: SessionStart would inject up to five memories, and
+  # UserPromptSubmit, handed this whole prompt as if a person had typed it, up
+  # to two more — into a model that only writes. Each injection is a write as
+  # well. It bumps access_count and stamps injection_log, and startup selection
+  # reads both, so a memory first surfaced here loses the priority slot a
+  # never-surfaced memory gets, without a person ever seeing it. Measured
+  # 2026-10-04: 38% of new memories were first surfaced in an extraction run,
+  # and 24% of those reached an interactive session within a week of being
+  # written. Prefix assignments, so they reach this command only — an export
+  # would persist in the shell this file is sourced into and switch prompt
+  # recall off for every later session.
   local attempt=1 extract_retried=0 extracted_count=""
   local stdout_marker recall_save_text_count
   while : ; do
   if extract_stderr=$(
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 130' INT
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 143' TERM
-    builtin printf '%s' "$full_prompt" | command claude -p \
+    builtin printf '%s' "$full_prompt" |
+      CCRECALL_SESSION_START_STRATEGY=off CCRECALL_PROMPT_RECALL=off command claude -p \
       --no-session-persistence \
       --model sonnet \
       ${budget_args[@]+"${budget_args[@]}"} \

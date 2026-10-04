@@ -281,8 +281,12 @@ ${prompt}"
   # it hits cmux's 122,880-byte shim limit and dies at exit 2 in 0 seconds.
   # stdout is discarded for the same reason the wrapper discards it (a model
   # that echoes transcript content could spill session secrets); stderr is kept
-  # so a failure can say what it was.
-  extract_stderr=$(cd "$session_cwd" && printf '%s' "$full_prompt" | command claude -p \
+  # so a failure can say what it was. Both memory hooks are switched off for the
+  # same reason as in the wrapper: this is a headless Claude Code session of its
+  # own, and ccRecall's hooks would otherwise inject memories into it — and
+  # count each one as surfaced.
+  extract_stderr=$(cd "$session_cwd" && printf '%s' "$full_prompt" |
+    CCRECALL_SESSION_START_STRATEGY=off CCRECALL_PROMPT_RECALL=off command claude -p \
     --no-session-persistence \
     --model sonnet \
     ${budget_args[@]+"${budget_args[@]}"} \
