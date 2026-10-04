@@ -67,17 +67,20 @@ function bashMajor(binary: string): number {
 /**
  * Stub `claude`, first on PATH.
  *
- * Records the three things the tests assert on: that it ran at all (defect 1),
- * the directory it ran in (defect 3), and its argv (so a budget flag added by a
- * leaked ANTHROPIC_API_KEY would be visible rather than silently changing the
- * shape under test). It then writes a memory row itself, because the script
- * counts writes by querying the database before and after — a stub that wrote
- * nothing would make every run report "exited cleanly but wrote 0 memories".
+ * Records the things the tests assert on: that it ran at all (defect 1), the
+ * directory it ran in (defect 3), its argv (so a budget flag added by a leaked
+ * ANTHROPIC_API_KEY would be visible rather than silently changing the shape
+ * under test), and the two memory-hook switches it was started with. It then
+ * writes a memory row itself, because the script counts writes by querying the
+ * database before and after — a stub that wrote nothing would make every run
+ * report "exited cleanly but wrote 0 memories".
  */
 const STUB_CLAUDE = `#!/bin/sh
 printf 'ran\\n' > "\${STUB_OUT}/ran.txt"
 pwd > "\${STUB_OUT}/pwd.txt"
 printf '%s\\0' "$@" > "\${STUB_OUT}/argv.nul"
+printf '%s\\t%s\\n' "\${CCRECALL_SESSION_START_STRATEGY-<unset>}" "\${CCRECALL_PROMPT_RECALL-<unset>}" \\
+  > "\${STUB_OUT}/hooks.env"
 cat > "\${STUB_OUT}/stdin.txt"
 if [ -n "\${STUB_DB:-}" ]; then
   sqlite3 "\${STUB_DB}" \\
@@ -218,6 +221,26 @@ describe('backfill-extract.sh', () => {
           'only manifests on bash 3.2 (macOS). This assertion was vacuous on this runner.',
       )
     }
+  })
+
+  it('runs extraction with both memory hooks switched off, whatever the caller exported', async () => {
+    // A backfill run is a headless Claude Code session like the wrapper's, so
+    // without the switches ccRecall's own hooks inject memories into it. The
+    // caller exports other values to prove the script overrides them rather
+    // than happening to inherit an unset variable.
+    await writeTranscript([msg('a session to backfill', runFrom)])
+
+    const r = runScript(
+      [SESSION_ID],
+      isolatedEnv({ CCRECALL_SESSION_START_STRATEGY: 'startup-v1', CCRECALL_PROMPT_RECALL: 'on' }),
+    )
+    expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0)
+
+    const [strategy, promptRecall] = (await readFile(path.join(stubOut, 'hooks.env'), 'utf8'))
+      .trim()
+      .split('\t')
+    expect(strategy).toBe('off')
+    expect(promptRecall).toBe('off')
   })
 
   it('finds its siblings when reached through a symlink, as an npm bin entry is', async () => {
