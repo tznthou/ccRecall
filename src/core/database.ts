@@ -2050,7 +2050,15 @@ export class Database {
         )
         return Number(info.lastInsertRowid)
       })
-      return upsert()
+      // 2026-10-14: IMMEDIATE, not the default DEFERRED. The daemon writes this
+      // same file and holds the write lock for seconds while it re-indexes a
+      // session. A deferred transaction starts with the SELECT above, and SQLite
+      // does not run the busy handler when a read transaction upgrades to a
+      // write, so the save failed with SQLITE_BUSY in 0 ms and busy_timeout
+      // never applied. Every branch above writes anyway, so taking the write
+      // lock up front costs nothing — and it is what actually closes the
+      // TOCTOU window the v0.4.1 note above is about.
+      return upsert.immediate()
     }
 
     const info = this.db.prepare(`
