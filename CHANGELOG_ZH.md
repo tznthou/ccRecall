@@ -32,6 +32,13 @@ ccRecall 的重要版本變更記錄在這裡。
   這類列佔 61 列中的 28 列。第二，抽取模型用 `recall_query` 查到的記憶仍然會算成被喚醒，
   那條路是 MCP 工具呼叫，不經過 hook。
 
+- **daemon 重新索引 session 時，`recall_save` 不會再因為 "database is locked" 失敗。** daemon 和
+  MCP server 寫的是同一個 SQLite 檔，daemon 重新索引大型 session 時，會持有寫入鎖好幾秒。帶 key
+  存記憶會跑一段 upsert，它用的是 deferred transaction，第一步是讀取；SQLite 在讀取交易升級成
+  寫入時不會呼叫 busy handler，所以存檔在 0 ms 內就失敗，`busy_timeout` 完全沒派上用場。只要
+  存檔剛好落在重新索引的期間就會失敗，新 key、既有 key 都一樣。現在 upsert 一開始就用
+  `BEGIN IMMEDIATE`，在讀取之前先拿寫入鎖，這一步會等 busy handler，存檔會等 daemon 放鎖。
+
 ## [0.9.1] — 2026-09-22
 
 ### 修正

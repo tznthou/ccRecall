@@ -41,6 +41,17 @@ more like an iteration counter than a strict SemVer major).
   were 28 of 61. And lookups the extraction model makes with `recall_query` are
   still counted as surfaced — that is an MCP tool call, not a hook.
 
+- **`recall_save` no longer fails with "database is locked" while the daemon
+  re-indexes a session.** The daemon and the MCP server write the same SQLite
+  file, and the daemon holds the write lock for seconds while it re-indexes a
+  large session. Saving a memory with a key runs an upsert, and it ran in a
+  deferred transaction, which starts with a read. SQLite does not call the busy
+  handler when a read transaction upgrades to a write, so the save failed in
+  0 ms and `busy_timeout` never applied: any save that landed inside a
+  re-index window failed, for a new key and an existing one alike. The upsert
+  now opens with `BEGIN IMMEDIATE`, which takes the write lock before the read
+  and does wait on the busy handler, so the save waits for the daemon instead.
+
 ## [0.9.1] — 2026-09-22
 
 ### Fixed
