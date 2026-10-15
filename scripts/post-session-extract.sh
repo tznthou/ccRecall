@@ -260,7 +260,7 @@ ccrecall-extract() {
     # below against token-budget.ts, in both copies. 🔴 Until 2026-09-08 this
     # comment already said that while no test read this line's number at all:
     # it could say 999 and stay green. Verified by mutation, both directions.
-    prompt="You are a memory extraction agent. Save 0-5 lasting insights via recall_save. Each memory must be self-contained with a key slug for dedup. Only the first 149 characters survive injection into a future session, so lead with what a future reader should DO and put the evidence, file names and war story after it. Set projectId to \"${project_id}\" for project-specific knowledge; omit for cross-project knowledge. Always pass origin=\"agent-inferred\": you are reading a finished transcript with nobody watching, and that flag is what stops your save from overwriting a memory the user wrote by hand under the same key. Pass messageId: the uuid in the \"--- human [<uuid>] ---\" header of the one message a memory came from, copied verbatim — omit it when no single message is the source, and never guess a uuid."
+    prompt="You are a memory extraction agent. Save 0-5 lasting insights via recall_save. Each memory must be self-contained with a key slug for dedup. Only the first 149 characters survive injection into a future session, so lead with what a future reader should DO and put the evidence, file names and war story after it. Set projectId to \"${project_id}\" for project-specific knowledge; omit for cross-project knowledge. Always pass origin=\"agent-inferred\": you are reading a finished transcript with nobody watching, and that flag is what stops your save from overwriting a memory the user wrote by hand under the same key. Pass messageId: the uuid in the \"--- human [<uuid>] ---\" header of the one message a memory came from, copied verbatim — omit it when no single message is the source, and never guess a uuid. Turns headed \"--- side-agent note [<uuid>] ---\" or \"--- peer session [<uuid>] ---\" are a note the user forwarded or a message from another Claude session, not the user's own words: never save what they say as the user's decision."
   fi
 
   # Append runtime context (projectId) to the prompt
@@ -311,25 +311,45 @@ ccrecall-extract() {
       # matching a uuid shape is deliberate — a format gate would stop printing
       # citations the day Claude Code changes its id format, silently. A value
       # mangled by gsub simply fails verification on the write side.
+      #
+      # 2026-10-15: a message sent while Claude is working is queued, and if the
+      # turn makes another API call it is absorbed into that call and written
+      # only as a `queued_command` attachment, never as a `user` record. Reading
+      # just user/assistant records dropped every one: 254 over the 198
+      # transcripts on disk that day, 221 in sessions extracted afterwards, 143
+      # of those the user's own words. Task notifications travel as
+      # queued_command too (commandMode "task-notification") and stay out, as
+      # do the queue-operation records, which repeat the same words.
+      #
+      # Turns that are not the user speaking get their own header, whichever
+      # record they arrive in: a forwarded side-agent note, and a message from
+      # another Claude session (origin.kind "peer"). A note's origin says
+      # "human" like the user's own words, so it is recognised by the sentence
+      # Claude Code opens every note with (118 of 118 that day); if that wording
+      # changes, notes fall back to the human header and only the label is lost.
       session_transcript=$(jq -R -r '
         fromjson? // empty |
         (((.uuid | strings) // "") | gsub("[^A-Za-z0-9-]"; "")) as $u |
         (if $u == "" then "" else " [" + $u + "]" end) as $cite |
-        if .type == "user" and .message then
-          .message.content |
-          if type == "array" then
-            [.[] | select(.type == "text") | .text // empty] | join("\n") |
-            if . != "" then "--- human" + $cite + " ---\n" + . else empty end
-          elif type == "string" then
-            if . != "" then "--- human" + $cite + " ---\n" + . else empty end
-          else empty end
-        elif .type == "assistant" and .message then
-          .message.content |
-          if type == "array" then
-            [.[] | select(.type == "text") | .text // empty] | join("\n") |
-            if . != "" then "--- assistant" + $cite + " ---\n" + . else empty end
-          else empty end
-        else empty end
+        if .type == "assistant" then
+          ["assistant", (.message | objects | .content | arrays)]
+        elif .type == "user" then
+          [(if ((.origin | objects | .kind) // "") == "peer" then "peer session" else "human" end),
+           (.message | objects | .content)]
+        elif .type == "attachment"
+             and ((.attachment | objects | .type) // "") == "queued_command"
+             and ((.attachment | objects | .commandMode) // "") == "prompt" then
+          [(if ((.attachment.origin | objects | .kind) // "") == "peer" then "peer session" else "human" end),
+           .attachment.prompt]
+        else empty end |
+        .[0] as $who |
+        (.[1] | if type == "array" then [.[] | objects | select(.type == "text") | .text | strings] | join("\n")
+                elif type == "string" then .
+                else "" end) |
+        if . == "" then empty
+        elif $who == "human" and startswith("Here is a note offered by a side agent") then
+          "--- side-agent note" + $cite + " ---\n" + .
+        else "--- " + $who + $cite + " ---\n" + . end
       ' "$jsonl_path" 2>/dev/null | head -c 200000 | iconv -c -f utf-8 -t utf-8)
 
       if [[ -n "$session_transcript" ]]; then

@@ -341,4 +341,36 @@ describe('backfill-extract.sh', () => {
     expect(ranIn).toBe(resolved.stdout.trim())
     expect(ranIn).not.toBe(runFrom)
   })
+
+  it('sends the transcript the wrapper builds, absorbed messages and side-agent notes included', async () => {
+    // The script has no filter of its own: it lifts the wrapper's with
+    // `declare -f`. A fixture whose only distinctive turns go through the
+    // branches added 2026-10-15 shows the lifted copy is the current one, end
+    // to end, rather than merely that the lift did not fail.
+    await writeTranscript([
+      msg('first turn', runFrom),
+      JSON.stringify({
+        type: 'attachment',
+        uuid: 'aaaaaaaa-bbbb-cccc-dddd-000000000002',
+        attachment: { type: 'queued_command', commandMode: 'prompt', prompt: 'sent while busy', origin: { kind: 'human' } },
+      }),
+      JSON.stringify({
+        type: 'attachment',
+        uuid: 'aaaaaaaa-bbbb-cccc-dddd-000000000003',
+        attachment: {
+          type: 'queued_command',
+          commandMode: 'prompt',
+          prompt: 'Here is a note offered by a side agent:\n\n> check the locale',
+          origin: { kind: 'human' },
+        },
+      }),
+    ])
+
+    const r = runScript([SESSION_ID], isolatedEnv())
+    expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0)
+
+    const sent = await readFile(path.join(stubOut, 'stdin.txt'), 'utf8')
+    expect(sent).toContain('--- human [aaaaaaaa-bbbb-cccc-dddd-000000000002] ---\nsent while busy')
+    expect(sent).toContain('--- side-agent note [aaaaaaaa-bbbb-cccc-dddd-000000000003] ---')
+  })
 })

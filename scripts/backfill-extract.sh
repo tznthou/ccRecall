@@ -121,7 +121,10 @@ TRANSCRIPT_FILTER=$(
   | sed -n "/session_transcript=\$(jq -R -r '/,/^      ' /p" \
   | sed -e "1s/.*jq -R -r '//" -e "\$s/^      '.*//"
 )
-[[ -n "$TRANSCRIPT_FILTER" && "$TRANSCRIPT_FILTER" == *"--- human"* ]] \
+# The marker is the header prefix every speaker label is printed after. It was
+# `--- human` until 2026-10-15, when the filter began composing the label
+# (human / side-agent note / peer session) instead of spelling each one out.
+[[ -n "$TRANSCRIPT_FILTER" && "$TRANSCRIPT_FILTER" == *'"--- "'* ]] \
   || die "could not extract the jq transcript filter from $WRAPPER
    (the wrapper changed shape — fix this extraction rather than pasting a copy)"
 
