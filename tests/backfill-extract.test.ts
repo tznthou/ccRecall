@@ -81,6 +81,7 @@ pwd > "\${STUB_OUT}/pwd.txt"
 printf '%s\\0' "$@" > "\${STUB_OUT}/argv.nul"
 printf '%s\\t%s\\n' "\${CCRECALL_SESSION_START_STRATEGY-<unset>}" "\${CCRECALL_PROMPT_RECALL-<unset>}" \\
   > "\${STUB_OUT}/hooks.env"
+printf '%s\\n' "\${CLAUDE_CODE_EFFORT_LEVEL-<unset>}" > "\${STUB_OUT}/effort.env"
 cat > "\${STUB_OUT}/stdin.txt"
 if [ -n "\${STUB_DB:-}" ]; then
   sqlite3 "\${STUB_DB}" \\
@@ -162,6 +163,10 @@ describe('backfill-extract.sh', () => {
     delete env.ENV
     delete env.NODE_OPTIONS
     delete env.CCRECALL_DB
+    // Applied before `extra`'s values would be, so a test can still set it. A
+    // Claude Code session's Bash tool passes its own effort down, and that
+    // inherited value must not decide the effort assertions below.
+    if (!('CLAUDE_CODE_EFFORT_LEVEL' in extra)) delete env.CLAUDE_CODE_EFFORT_LEVEL
     for (const k of Object.keys(env)) if (k.startsWith('BASH_FUNC_')) delete env[k]
     return env
   }
@@ -241,6 +246,43 @@ describe('backfill-extract.sh', () => {
       .split('\t')
     expect(strategy).toBe('off')
     expect(promptRecall).toBe('off')
+  })
+
+  it('runs extraction at high effort, whatever the caller exported', async () => {
+    // CLAUDE_CODE_EFFORT_LEVEL outranks --effort, so a caller exporting max
+    // (as one user's ~/.zshrc did) ran every extraction at max: 261-355 s of
+    // mostly thinking, against 26-40 s at high for the same transcripts.
+    await writeTranscript([msg('a session to backfill', runFrom)])
+
+    const r = runScript([SESSION_ID], isolatedEnv({ CLAUDE_CODE_EFFORT_LEVEL: 'max' }))
+    expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0)
+
+    expect((await readFile(path.join(stubOut, 'effort.env'), 'utf8')).trim()).toBe('high')
+  })
+
+  it("starts extraction with only ccRecall's MCP server and the two tools it uses", async () => {
+    // Same shape as the wrapper's run: no --dangerously-skip-permissions, no
+    // built-in tools, no other MCP server, and anything off the allowlist
+    // refused rather than prompted for.
+    await writeTranscript([msg('a session to backfill', runFrom)])
+
+    const r = runScript([SESSION_ID], isolatedEnv())
+    expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0)
+
+    // The file ends in a NUL, so the last split element is not an argument.
+    const argv = (await readFile(path.join(stubOut, 'argv.nul'), 'utf8')).split('\0').slice(0, -1)
+    const after = (flag: string) => {
+      const i = argv.indexOf(flag)
+      expect(i, `${flag} missing from argv: ${JSON.stringify(argv)}`).toBeGreaterThanOrEqual(0)
+      return argv[i + 1]
+    }
+    expect(argv).not.toContain('--dangerously-skip-permissions')
+    expect(argv).toContain('--strict-mcp-config')
+    expect(Object.keys(JSON.parse(after('--mcp-config')).mcpServers)).toEqual(['ccrecall'])
+    expect(after('--tools')).toBe('')
+    expect(after('--allowedTools')).toBe('mcp__ccrecall__recall_save,mcp__ccrecall__recall_query')
+    expect(after('--permission-mode')).toBe('dontAsk')
+    expect(argv).toContain('--disable-slash-commands')
   })
 
   it('finds its siblings when reached through a symlink, as an npm bin entry is', async () => {

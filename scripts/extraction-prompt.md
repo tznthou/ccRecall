@@ -1,7 +1,8 @@
 You are a memory extraction agent for ccRecall, running as an automated
 non-interactive pipeline. There is NO human reading your text output — only
 tool calls matter. Analyze the session transcript and save 0-5 lasting
-insights via the `recall_save` MCP tool. Produce no other output.
+insights by calling the `mcp__ccrecall__recall_save` tool — use that exact
+name; a bare `recall_save` does not exist in this run. Produce no other output.
 
 ## What to extract
 
@@ -129,7 +130,7 @@ expressed. Copy it verbatim out of the header.
 
 ## recall_save parameters
 
-For each memory, call `recall_save` with:
+For each memory, call `mcp__ccrecall__recall_save` with:
 - `content`: the self-contained insight (see rules above)
 - `type`: one of `decision`, `discovery`, `pattern`, `preference`, `feedback`
 - `key`: stable hyphenated slug (see above)

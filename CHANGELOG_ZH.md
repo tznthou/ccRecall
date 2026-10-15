@@ -8,6 +8,36 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [Unreleased]
+
+### 修正
+
+- **就算 shell 設了高 effort，抽取也只要幾十秒。** `CLAUDE_CODE_EFFORT_LEVEL` 的優先序
+  高於 `--effort` 和所有 `effortLevel` 設定，抽取又會繼承 shell 的環境變數，所以為互動
+  session export `max` 的人，每一次抽取也都跑在 max。拿兩場真實 session 量測，每次抽取
+  有 90–95% 的時間花在存下第一筆記憶之前的思考，全程 261–355 秒。wrapper 與
+  `ccmem-backfill` 現在把抽取固定在 `high`：用出貨的腳本對同樣兩場跑了九次，每次 25–42
+  秒，每次存 3 到 5 筆，平均跟 max 時一樣多。互動 session 仍照你自己設的 effort。
+
+  wrapper 是開 shell 時 source 進來的，要重開終端機或重新 source 才會生效。
+
+### 安全
+
+- **抽取只拿得到它用得到的工具。** 抽取讀的 transcript 連它自己的 prompt 都當成不受信任
+  的資料，過去卻是在 `--dangerously-skip-permissions` 下、帶著你登記的所有 MCP server
+  執行：Bash，還有你接上的 Gmail、Google Drive、Calendar connector，全程不會先問一聲。
+  現在只啟動 ccRecall 自己的 MCP server（`--strict-mcp-config`），不給內建工具
+  （`--tools ""`），白名單只放 `recall_save` 和 `recall_query`，並以
+  `--permission-mode dontAsk` 直接拒絕其他工具、不再詢問；skill 也一併關掉。沒有
+  ToolSearch 時，模型是照 prompt 寫的名字呼叫工具，測試中有一次猜了裸名 `recall_save`
+  而失敗，所以 prompt 改寫完整名稱 `mcp__ccrecall__recall_save`；偵測「把呼叫印成文字」
+  的 marker（#75）也同時認得完整名稱。
+
+  啟動的 server 是跟 wrapper 一起出貨的那份（已安裝套件或你的 checkout 裡的
+  `dist/mcp/server.js`），找不到才退回 `ccmem-mcp`，並繼承 shell 的環境變數。如果你只透過
+  `claude mcp add -e` 設定 `CCRECALL_DB_PATH`，請也在 shell 裡 export；daemon 安裝程式
+  本來就是從 shell 讀這個值。
+
 ## [0.9.2] — 2026-10-15
 
 ### 修正
