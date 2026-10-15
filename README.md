@@ -7,7 +7,7 @@
 
 [中文版](README_ZH.md)
 
-A local memory service for Claude Code — indexes your conversation history, recalls relevant context on demand, and injects it into future sessions. Zero API cost for the core service; optional post-session extraction via Haiku adds ~$0.001/session.
+A local memory service for Claude Code — indexes your conversation history, recalls relevant context on demand, and injects it into future sessions. Zero API cost for the core service. Optional post-session extraction runs on Sonnet: plan usage on a Claude subscription, or $0.21–0.39 per extraction (measured) with an API key.
 
 ---
 
@@ -18,7 +18,7 @@ Five stances, non-negotiable:
 1. **Local-first.** Your machine, your data. No cloud, no accounts, no services beyond localhost.
 2. **SQLite is the API.** One `.db` file. `sqlite3` to inspect anything. Your memories are never a black box.
 3. **FTS5, not vectors.** Code conversations search for file paths, error messages, tool names — keywords, not vibes. At hundreds of sessions, embeddings solve a problem that doesn't exist.
-4. **LLM distills, human curates.** Haiku extracts post-session (~$0.001). Auto memory holds decisions you name. ccRecall holds the long tail no one writes down by hand.
+4. **LLM distills, human curates.** Sonnet extracts post-session (plan usage on a subscription, $0.21–0.39 a run on an API key). Auto memory holds decisions you name. ccRecall holds the long tail no one writes down by hand.
 5. **Read-only toward `~/.claude/`.** Reads your JSONL logs, never writes to Claude Code's state. Worst case: bad search results. Never: a broken setup.
 
 ---
@@ -281,7 +281,7 @@ ccRecall lives alongside Claude Code's built-in auto memory (`~/.claude/projects
 
 |  | auto memory | ccRecall |
 |---|---|---|
-| **Write path** | Claude curates by hand — new `.md` file + MEMORY.md index line | Two tracks: rule-based session summaries (automatic, free) + opt-in Haiku extraction (~$0.001/session, where most searchable memories come from) |
+| **Write path** | Claude curates by hand — new `.md` file + MEMORY.md index line | Two tracks: rule-based session summaries (automatic, free) + opt-in Sonnet extraction (plan usage, or $0.21–0.39 a run on an API key; where most searchable memories come from) |
 | **Read path** | Always in session context (MEMORY.md loads at session start) | On-demand MCP query when auto memory has no entry |
 | **Signal density** | High — facts worth naming | Long tail — everything the hook can extract |
 | **Typical use** | "Remember X" / "always Y" — durable preferences, decisions | "Didn't we fix that?" / "last time" — cross-session recall |
@@ -458,6 +458,11 @@ The code reading the transcript was right for the format it assumed. Both gaps t
 | **v0.5.0** | The knife field: journal/scorer/harvester pipelines removed (zero promotions ever), endpoints 13 → 5, `message_uuids` dual-hash rebuild (DB 114MB → 42MB) | Released |
 | **v0.5.2** | Recall weighting: log-compressed half-life decay, FTS relevance-first ranking via `(-rank)*sqrt(EC)` | Released |
 | **v0.5.3** | CJK topic alignment: Han-aware topic extraction (`\p{Script=Han}` tokenizer + 32 Chinese stopwords + particle split), session-less rebuild fix | Released |
+| **v0.5.4–v0.5.6** | Measuring injection: an `injection_log` table records every memory surfaced (#71), Tier 0 startup slots rotate instead of showing the same three memories every session, `/health` reports `mainSessionCount` | Released |
+| **v0.6.0** | Mid-conversation recall: a `UserPromptSubmit` hook surfaces memories while you work, injected lines carry their key, and extraction flags runs that printed `recall_save` instead of calling it | Released |
+| **v0.7.x** | CJK word segmentation via `Intl.Segmenter` (#80); the `cwd` → project id encoding drift that silently skipped extraction for whole projects (#89); English function words no longer run the topic index (#84); the telemetry log guard's leaks closed | Released |
+| **v0.8.x** | Provenance: a memory records the message it came from and who wrote it, so extraction can't overwrite one you saved by hand; prescription-first extraction; Tier 0 picks other projects' memories per project instead of by confidence alone. Long sessions go to extraction over stdin instead of failing silently, and `backfill-extract.sh` recovers the ones already lost | Released |
+| **v0.9.x** | Extraction on Sonnet, retried once when a run produces nothing usable; no more skipped sessions when a path's letter case differs (#131); Claude Code 2.1.300's request-replay records skipped, and messages sent mid-turn now reach extraction; extraction runs without memories injected into it; `recall_save` no longer hits "database is locked" | Released |
 
 Tracked in [GitHub Issues](https://github.com/tznthou/ccRecall/issues).
 
