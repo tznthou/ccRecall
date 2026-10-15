@@ -67,6 +67,19 @@ ccRecall 的重要版本變更記錄在這裡。
   一遍。前提是 transcript 還在：Claude Code 預設 30 天後刪除 transcript，檔案已經不在的 session
   會停在灌水後的數字。
 
+  升級的順序很重要：升級完立刻重啟 daemon，之後才開任何 Claude Code session，包括 wrapper 在
+  session 結束時啟動的那次抽取。v27 由第一個用新版打開資料庫的 ccRecall 程序執行，新 session 的
+  MCP server 也算在內。如果那時舊 daemon 還在跑，它最晚十分鐘內就會用舊 parser 把那些 session
+  重讀一遍，而 v27 已經記成跑過，不會再跑。要補救，就清掉存下來的 mtime，再重啟一次 daemon：
+
+  ```sh
+  sqlite3 -cmd ".timeout 5000" ~/.ccrecall/ccrecall.db \
+    "UPDATE sessions SET file_mtime = NULL WHERE ended_at >= '2026-10-14';
+     UPDATE subagent_sessions SET file_mtime = NULL WHERE ended_at >= '2026-10-14';"
+  ```
+
+  `~/.ccrecall/ccrecall.db` 是預設路徑；有設 `CCRECALL_DB_PATH` 的話，改用那個路徑。
+
 - **Claude 工作中途送出的訊息，抽取現在看得到了。** Claude 忙的時候打的訊息會先排進佇列；如果這一輪
   結束前 Claude 還會再呼叫一次 API，Claude Code 就把訊息併進那次呼叫，transcript 裡只留一筆
   `queued_command` attachment，不會有使用者訊息的紀錄。抽取用的 transcript 只讀 user 和 assistant

@@ -96,7 +96,7 @@ flowchart TB
 
     subgraph Consumers["Consumers"]
         Hook["Claude Code Hooks<br/>SessionStart / UserPromptSubmit / SessionEnd"]
-        Wrapper["Extraction wrapper<br/>post-session Haiku pass"]
+        Wrapper["Extraction wrapper<br/>post-session Sonnet pass"]
         MCP["MCP Server<br/>recall_query / recall_save"]
     end
 
@@ -119,7 +119,7 @@ sequenceDiagram
     participant H as Hooks
     participant R as ccRecall
     participant W as Wrapper
-    participant X as Haiku extractor
+    participant X as Sonnet extractor
 
     rect rgb(235, 244, 255)
     Note over CC,R: Session start
@@ -426,7 +426,7 @@ The real trigger was simpler: I kept re-explaining the same architecture to Clau
 
 Each flows from the manifesto. Each was a conscious choice against a popular alternative.
 
-**Rule-based, with a ceiling.** The daemon uses heuristic extraction (regex patterns, tool usage analysis, outcome inference) for session summaries — zero API cost. For that job, "Edit x8, 5 files, committed" is more useful than a paragraph of prose. But rule-based has a ceiling: it handles structured signals (tool calls, file edits, commit messages) well; it misses discussion-only decisions, nuanced trade-offs, and anything that lives in natural language. That ceiling is why v0.4.1 added post-session Haiku extraction (~$0.001/session) — an LLM pass that catches what heuristics can't. In practice, the memories I actually search for mostly come from Haiku extraction or manual `recall_save`, not the rule-based layer. The daemon itself never calls an LLM; the LLM pass is opt-in and runs outside the daemon as a separate process.
+**Rule-based, with a ceiling.** The daemon uses heuristic extraction (regex patterns, tool usage analysis, outcome inference) for session summaries — zero API cost. For that job, "Edit x8, 5 files, committed" is more useful than a paragraph of prose. But rule-based has a ceiling: it handles structured signals (tool calls, file edits, commit messages) well; it misses discussion-only decisions, nuanced trade-offs, and anything that lives in natural language. That ceiling is why v0.4.1 added post-session Haiku extraction (~$0.001/session) — an LLM pass that catches what heuristics can't. In practice, the memories I actually search for mostly come from that post-session pass (on Sonnet since v0.9.0) or manual `recall_save`, not the rule-based layer. The daemon itself never calls an LLM; the LLM pass is opt-in and runs outside the daemon as a separate process.
 
 **FTS5, not vector search.** Semantic search sounds better on paper, but for conversation logs — specific tools, file paths, error messages — keyword matching wins. FTS5 queries run in <10ms locally. No embedding model, no Chroma, no Docker container. At hundreds of sessions (not millions of documents), Karpathy's own analysis confirms: "plain index + keyword search is already sufficient under 500 sources."
 
@@ -437,6 +437,15 @@ Each flows from the manifesto. Each was a conscious choice against a popular alt
 **The excluded stack.** No Docker — deployment friction for what should be a `pnpm dev` experience. No Electron — ccRecall has no UI (that's ccRewind's job). No vector database — solves a problem we don't have at this scale. These are deliberate exclusions, not missing features.
 
 **No opinionated injection.** ccRecall doesn't decide what Claude should remember. It provides a search API — the injection layer presents results, Claude integrates them. Opinionated memory selection is a premature optimization that would be wrong in ways we can't predict.
+
+### What the transcript doesn't say
+
+ccRecall knows only what Claude Code writes to disk, and the transcript is not quite the conversation. Neither of the gaps v0.9.2 closed ever raised an error:
+
+- A message typed while Claude is working usually gets folded into Claude's next API call and stored as an attachment, with no user message on record. The extraction transcript never read those — 254 of them in a month of one person's sessions — until v0.9.2.
+- Claude Code 2.1.300 began writing a copy of each API request into the transcript, and the parser counted those records as messages until v0.9.2.
+
+The code reading the transcript was right for the format it assumed. Both gaps turned up by counting what the file holds against what was really said.
 
 ---
 
