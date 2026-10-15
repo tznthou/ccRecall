@@ -52,6 +52,44 @@ more like an iteration counter than a strict SemVer major).
   now opens with `BEGIN IMMEDIATE`, which takes the write lock before the read
   and does wait on the busy handler, so the save waits for the daemon instead.
 
+- **Request-replay records from Claude Code 2.1.300 are no longer indexed as
+  messages.** Starting with 2.1.300, Claude Code writes three new record types
+  into session transcripts so that a shared transcript can reproduce each API
+  request exactly: `api-request` (request parameters), `api-request-shape`
+  (system prompt and tool definitions) and `api-request-blob` (a copy of a
+  message as it was sent). `parseLine` turned every record it could parse into
+  a message, so all three were counted. A blob also carries `role` and
+  `content`, so the tool calls and text of the message it copies were counted
+  a second time; and since it copies the request as sent, it brought in text
+  the transcript never records as a message, such as system-role messages and
+  the context Claude Code attaches to a user turn. Blobs have no `uuid`, so the
+  UUID de-duplication that drops replayed entries never caught them.
+
+  Measured on 2026-10-15 on seven 2.1.300 transcripts, parsed with and without
+  the fix:
+
+  - These records made up 16–28% of each session's message count.
+  - Tool counts were inflated up to 2x (one session: `Edit` 144 instead of
+    72), and with them the activity line of the session summary and the
+    per-file operation counts in `session_files`.
+  - Tag detection scans all message text, and the extra text tripped nearly
+    every rule: two finished sessions carried 21 and 22 tags, against 15 and
+    19 with these records skipped. Tags become `session_topics`, which build
+    each project's `knowledge_map`, and Tier 0 startup selection ranks
+    cross-project memories by the share of their topics found in that map.
+    Three of the four projects already held every extra topic; the fourth
+    gained three, one of them carried by 70 cross-project memories.
+  - The intent line of the summary did not change in any of the seven.
+
+  Subagent transcripts get no summary, so only their message count was wrong.
+
+  `parseLine` now returns `null` for these three types. Migration v27 clears
+  the stored mtime of every session and subagent that ended on or after
+  2026-10-14, the day 2.1.300 was published, so the next index pass re-reads
+  them with the fixed parser. That only works while a transcript still exists:
+  Claude Code deletes transcripts after 30 days by default, and a session whose
+  file is gone keeps its inflated numbers.
+
 ## [0.9.1] — 2026-09-22
 
 ### Fixed

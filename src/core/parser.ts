@@ -103,7 +103,15 @@ function parseUsage(message: Record<string, unknown>): {
   }
 }
 
-/** 解析單行 JSONL，失敗回傳 null */
+/**
+ * Claude Code 2.1.300 起寫進 transcript、用來重現 API 請求的紀錄，不是對話內容：
+ * api-request（請求參數）、api-request-shape（system prompt + tools）、api-request-blob（送出的訊息副本）。
+ * 照一般紀錄解析，三種都會算進 session 的訊息數；blob 還帶 message.role/content，會把複製的訊息
+ * 再算一次，連 system 角色的內容也會進摘要的 tag 偵測。所以 parseLine 直接略過。
+ */
+const SKIPPED_RECORD_TYPES = new Set(['api-request', 'api-request-shape', 'api-request-blob'])
+
+/** 解析單行 JSONL；格式錯誤或屬於 SKIPPED_RECORD_TYPES 時回傳 null */
 export function parseLine(line: string): ParsedLine | null {
   if (!line.trim()) return null
 
@@ -117,6 +125,7 @@ export function parseLine(line: string): ParsedLine | null {
   if (typeof obj !== 'object' || obj === null) return null
 
   const type = typeof obj.type === 'string' ? obj.type : 'unknown'
+  if (SKIPPED_RECORD_TYPES.has(type)) return null
   const rawUuid = typeof obj.uuid === 'string' ? obj.uuid.trim() : null
   const uuid = rawUuid && rawUuid.length <= 128 ? rawUuid : null
   const parentUuid = typeof obj.parentUuid === 'string' ? obj.parentUuid : null
