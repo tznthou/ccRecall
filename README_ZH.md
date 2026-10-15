@@ -161,7 +161,7 @@ sequenceDiagram
 | FTS5 | 全文搜尋 | SQLite 內建、trigram tokenizer，短 token / 中英混合查詢透過 LIKE fallback 補齊 |
 | 原生 `http` | HTTP 伺服器 | 不用 Express——最小表面積、僅 localhost |
 | chokidar | 檔案系統 watcher | 跨平台 JSONL 變動偵測，2 秒 debounce + single-flight |
-| vitest | 測試 | 651 個測試（40 檔案）、整合式風格 |
+| vitest | 測試 | 858 個測試（54 檔案）、整合式風格 |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport，透過 WAL 共用 SQLite |
 
 ---
@@ -385,7 +385,7 @@ ccRecall/
 │   ├── tutorial_zh.md                # 使用者教學（安裝 → MCP → 日常使用）
 │   ├── architecture_zh.md            # Daemon 設計取捨（給 contributor 看）
 │   └── launchd.md                    # macOS LaunchAgent 安裝/troubleshoot
-├── tests/                            # 651 個測試橫跨 40 檔案（parser、scanner、
+├── tests/                            # 858 個測試橫跨 54 檔案（parser、scanner、
 │   │                                 # summarizer、database、indexer、e2e、MCP、
 │   │                                 # memories、hooks、watcher、CLI、migrations、
 │   │                                 # FTS5 CJK edge cases、integrity monitor 等）

@@ -163,7 +163,7 @@ The `notBefore` gate keeps a stale session from being extracted twice; the subag
 | FTS5 | Full-text search | Built into SQLite, trigram tokenizer with LIKE fallback for short CJK / mixed-script queries |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
 | chokidar | Filesystem watcher | Cross-platform JSONL change detection with 2 s debounce + single-flight |
-| vitest | Testing | 651 tests across 40 files, integration-style |
+| vitest | Testing | 858 tests across 54 files, integration-style |
 | `@modelcontextprotocol/sdk` | MCP server | stdio transport, shared SQLite via WAL |
 
 ---
@@ -395,7 +395,7 @@ ccRecall/
 │   ├── tutorial.md               # End-user walkthrough (install → MCP → usage)
 │   ├── architecture.md           # Daemon design rationale (contributor-oriented)
 │   └── launchd.md                # macOS LaunchAgent install/troubleshoot
-├── tests/                        # 651 tests across 40 files (parser, scanner,
+├── tests/                        # 858 tests across 54 files (parser, scanner,
 │   │                             # summarizer, database, indexer, e2e, MCP,
 │   │                             # memories, hooks, watcher, CLI, migrations,
 │   │                             # FTS5 CJK edge cases, integrity monitor, ...)
