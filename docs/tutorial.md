@@ -83,7 +83,7 @@ After the three setup steps you might reasonably wonder: does it just keep runni
 4. **Hooks**
    The next section walks you through wiring these up. Once configured, Claude Code calls ccRecall at two moments automatically:
    - **SessionStart**: relevant memories are injected into Claude's context *before* your first prompt — you never have to ask it to "look something up"
-   - **SessionEnd**: the hook confirms the just-finished session is indexed (triggering a rescue reindex if the daemon hasn't seen the JSONL yet). Memory *writing* happens separately: the optional post-session extraction wrapper distills the session via Haiku into keyed memories, and manual `recall_save` works any time.
+   - **SessionEnd**: the hook confirms the just-finished session is indexed (triggering a rescue reindex if the daemon hasn't seen the JSONL yet). Memory *writing* happens separately: the optional post-session extraction wrapper distills the session via Sonnet into keyed memories, and manual `recall_save` works any time.
 
 The takeaway: **install + hooks = set and forget**. ccRecall accumulates on its own.
 
@@ -128,7 +128,7 @@ written by the post-session extraction wrapper or a manual `recall_save`.
 
 ## Enabling Automatic Memory Extraction (Optional)
 
-Steps 1–3 plus hooks give you memory **injection** and manual `recall_save`. To also get **automatic** memory extraction — where Haiku distills each session into keyed memories after it ends (~$0.001/session) — source the extraction wrapper in your shell:
+Steps 1–3 plus hooks give you memory **injection** and manual `recall_save`. To also get **automatic** memory extraction — where Sonnet distills each session into keyed memories after it ends — source the extraction wrapper in your shell:
 
 ```bash
 # Add to ~/.zshrc or ~/.bashrc (adjust if you used pnpm/yarn)
@@ -145,7 +145,7 @@ ccrecall-extract --resume   # all claude flags work
 After each session ends, the wrapper automatically:
 1. Queries the daemon for the just-ended session's metadata
 2. Builds a text-only transcript from the JSONL (~50x smaller than the raw file)
-3. Sends it to Haiku to extract 0–5 lasting memories via `recall_save`
+3. Sends it to Sonnet to extract 0–5 lasting memories via `recall_save`
 
 Most users alias it:
 
@@ -158,7 +158,9 @@ alias ccdm='ccrecall-extract'
 
 **Skip extraction for a single session:** `CCRECALL_SKIP_EXTRACT=1 ccrecall-extract`
 
-**Choose the extraction's effort:** add `export CCRECALL_EXTRACT_EFFORT=medium` to your shell profile (`low`, `medium`, `high`, `xhigh` or `max`; the default is `high`). Lower levels run faster and saved fewer memories when we measured them. If you extract with an `ANTHROPIC_API_KEY`, raise `CCRECALL_EXTRACT_MAX_BUDGET_USD` (a per-run cap, default `0.50`) before choosing `max`: every run we measured at `max` cost more than that.
+**Choose the extraction's effort:** add `export CCRECALL_EXTRACT_EFFORT=medium` to your shell profile (`low`, `medium`, `high`, `xhigh` or `max`; the default is `high`). Lower levels run faster and saved fewer memories when we measured them.
+
+**What extraction costs:** each extraction is a short Sonnet session. On a Claude subscription it counts against your plan's usage like any other session. With an `ANTHROPIC_API_KEY` it is billed, and each run is capped at `CCRECALL_EXTRACT_MAX_BUDGET_USD` (default `0.50`). The runs we measured cost $0.16–0.39 at `high` and $0.64–0.97 at `max`, so raise the cap before choosing `max`.
 
 **Without this step**, memories only accumulate when you explicitly call `recall_save` during a session. The extraction wrapper is what makes the memory layer grow automatically.
 
