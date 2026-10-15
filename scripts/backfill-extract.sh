@@ -105,6 +105,9 @@ done
 # shellcheck source=/dev/null
 source "$WRAPPER" >/dev/null 2>&1 || die "failed to source $WRAPPER"
 declare -F _ccrecall_log_append >/dev/null || die "_ccrecall_log_append not defined by $WRAPPER"
+# The MCP configuration too, so a backfill run starts the same single server
+# the wrapper's run does rather than a second copy of how to find it.
+declare -F _ccrecall_extract_mcp_config >/dev/null || die "_ccrecall_extract_mcp_config not defined by $WRAPPER"
 
 [[ -f "$PROMPT_FILE" ]] || die "extraction-prompt.md not found: $PROMPT_FILE
    (the wrapper's inline fallback is deliberately not duplicated here — a second
@@ -288,13 +291,25 @@ ${prompt}"
   # same reason as in the wrapper: this is a headless Claude Code session of its
   # own, and ccRecall's hooks would otherwise inject memories into it — and
   # count each one as surfaced.
+  #
+  # Effort and permissions match the wrapper's run too, for the reasons given
+  # there: CLAUDE_CODE_EFFORT_LEVEL is pinned as a prefix because it outranks
+  # --effort (a caller exporting max ran each extraction at max, mostly
+  # thinking), and the run gets ccRecall's own MCP server, no built-in tools and
+  # an allowlist instead of --dangerously-skip-permissions.
+  mcp_config=$(_ccrecall_extract_mcp_config)
   extract_stderr=$(cd "$session_cwd" && printf '%s' "$full_prompt" |
-    CCRECALL_SESSION_START_STRATEGY=off CCRECALL_PROMPT_RECALL=off command claude -p \
+    CCRECALL_SESSION_START_STRATEGY=off CCRECALL_PROMPT_RECALL=off CLAUDE_CODE_EFFORT_LEVEL=high \
+    command claude -p \
     --no-session-persistence \
     --model sonnet \
     ${budget_args[@]+"${budget_args[@]}"} \
     --max-turns 5 \
-    --dangerously-skip-permissions 2>&1 1>/dev/null)
+    --strict-mcp-config --mcp-config "$mcp_config" \
+    --tools "" \
+    --allowedTools "mcp__ccrecall__recall_save,mcp__ccrecall__recall_query" \
+    --permission-mode dontAsk \
+    --disable-slash-commands 2>&1 1>/dev/null)
   extract_exit=$?
   duration=$(( $(date +%s) - start ))
 

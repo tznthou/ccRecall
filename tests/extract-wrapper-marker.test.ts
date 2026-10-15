@@ -82,6 +82,18 @@ describe('extract wrapper: recall_save text-shape marker (#75)', () => {
       )
       expect(countMatches(pattern, f)).toBe(3)
     })
+
+    it('matches the full MCP tool name the prompt now teaches', async () => {
+      // The prompt names `mcp__ccrecall__recall_save`, because a run without
+      // ToolSearch called the bare name and failed. A model that prints its calls
+      // instead will print the name it was taught — a marker that only knew the
+      // bare one would go blind to #75 exactly when the prompt changed.
+      const f = await fixture(
+        'full-name.txt',
+        '```\nmcp__ccrecall__recall_save(\n  {}\n)\n    mcp__ccrecall__recall_save (\n  {}\n)\n```\n',
+      )
+      expect(countMatches(pattern, f)).toBe(2)
+    })
   })
 
   describe('true negatives — prose that merely mentions the tool', () => {
@@ -100,6 +112,11 @@ describe('extract wrapper: recall_save text-shape marker (#75)', () => {
 
     it('does not match a different tool with a similar suffix', async () => {
       const f = await fixture('other-tool.txt', 'my_recall_save(\n)\nnot_recall_save(\n)\n')
+      expect(countMatches(pattern, f)).toBe(0)
+    })
+
+    it("does not match another MCP server's tool of the same name", async () => {
+      const f = await fixture('other-server.txt', 'mcp__other__recall_save(\n)\n')
       expect(countMatches(pattern, f)).toBe(0)
     })
 

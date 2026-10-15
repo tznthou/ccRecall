@@ -11,6 +11,46 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Extraction takes seconds, not minutes, when your shell exports a high
+  effort.** `CLAUDE_CODE_EFFORT_LEVEL` outranks `--effort` and every
+  `effortLevel` setting, and the extraction run inherits your shell's
+  environment, so anyone who exports `max` for their interactive sessions ran
+  every extraction at max as well. Measured on two real sessions, 90–95% of
+  each run went to thinking before the first memory was saved, for 261–355
+  seconds end to end. The wrapper and `ccmem-backfill` now pin extraction to
+  `high`. Over nine runs of the shipped scripts on the same two sessions,
+  extraction took 25–42 seconds and saved three to five memories a run, on
+  average as many as max had. Your interactive sessions keep whatever effort
+  you gave them.
+
+  The wrapper is sourced when a shell starts, so the change reaches a terminal
+  only once it is reopened or the wrapper is sourced again.
+
+### Security
+
+- **Extraction runs with only the tools it uses.** It reads a transcript that
+  its own prompt treats as untrusted, and it used to do so under
+  `--dangerously-skip-permissions` with every MCP server you had registered:
+  Bash, and any Gmail, Google Drive or Calendar connector you had linked, with
+  nothing asking first. It now starts ccRecall's own MCP server and no other
+  (`--strict-mcp-config`), gets no built-in tools (`--tools ""`), has
+  `recall_save` and `recall_query` on an allowlist, and runs under
+  `--permission-mode dontAsk`, which refuses anything else instead of asking.
+  Skills are switched off too. Without ToolSearch the model takes tool names
+  from the prompt, and one test run that guessed the bare `recall_save` failed,
+  so the prompt now spells the full name, `mcp__ccrecall__recall_save`. The
+  detector for calls printed as text (#75) recognises the full name as well.
+
+  The server it starts is the one shipped next to the wrapper
+  (`dist/mcp/server.js`, in the installed package or your checkout), with the
+  `ccmem-mcp` bin as the fallback, and it inherits your shell's environment. If
+  you set `CCRECALL_DB_PATH` only through `claude mcp add -e`, export it in your
+  shell as well; the daemon installer already reads it from there.
+
 ## [0.9.2] — 2026-10-15
 
 ### Fixed
