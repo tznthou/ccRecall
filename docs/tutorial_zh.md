@@ -83,7 +83,7 @@ claude mcp add ccrecall --scope user -- ccmem-mcp
 4. **Hooks（Claude Code 生命週期鉤子）**
    下一節會教你設 hook。設好之後 Claude Code 會在兩個時機自動叫 ccRecall：
    - **SessionStart**：開新 session 前，把相關記憶注入 context（Claude 不用自己決定要不要查）
-   - **SessionEnd**：hook 確認剛結束的 session 已被索引（daemon 還沒看到 JSONL 時觸發 rescue reindex）。記憶的**寫入**另有管道：可選的 post-session extraction wrapper 用 Haiku 把 session 蒸餾成 keyed 記憶，manual `recall_save` 隨時可用
+   - **SessionEnd**：hook 確認剛結束的 session 已被索引（daemon 還沒看到 JSONL 時觸發 rescue reindex）。記憶的**寫入**另有管道：可選的 post-session extraction wrapper 用 Sonnet 把 session 蒸餾成 keyed 記憶，manual `recall_save` 隨時可用
 
 一句話：**裝完 + 配好 hook，之後就不用管，它自己累積。**
 
@@ -128,7 +128,7 @@ wrapper 或 manual `recall_save` 寫入。
 
 ## 啟用自動記憶萃取（可選）
 
-前面三步加 hooks 讓你有記憶**注入**和手動 `recall_save`。要讓記憶**自動累積**——每次 session 結束後由 Haiku 蒸餾出 keyed 記憶（約 $0.001/session）——把 extraction wrapper 加進你的 shell：
+前面三步加 hooks 讓你有記憶**注入**和手動 `recall_save`。要讓記憶**自動累積**——每次 session 結束後由 Sonnet 蒸餾出 keyed 記憶——把 extraction wrapper 加進你的 shell：
 
 ```bash
 # 加到 ~/.zshrc 或 ~/.bashrc（pnpm/yarn 路徑自行調整）
@@ -145,7 +145,7 @@ ccrecall-extract --resume   # 所有 claude 參數照傳
 Session 結束後 wrapper 自動：
 1. 向 daemon 查詢剛結束的 session metadata
 2. 從 JSONL 建立純文字 transcript（比原始檔小約 50 倍）
-3. 送給 Haiku 萃取 0–5 筆記憶，經 `recall_save` 寫入
+3. 送給 Sonnet 萃取 0–5 筆記憶，經 `recall_save` 寫入
 
 大多數人會設 alias：
 
@@ -158,7 +158,9 @@ alias ccdm='ccrecall-extract'
 
 **單次跳過萃取：** `CCRECALL_SKIP_EXTRACT=1 ccrecall-extract`
 
-**調整萃取的 effort：** 在 shell 設定檔加上 `export CCRECALL_EXTRACT_EFFORT=medium`（可選 `low`、`medium`、`high`、`xhigh`、`max`，預設 `high`）。等級越低跑得越快，我們量測時存下的記憶也比較少。如果你用 `ANTHROPIC_API_KEY` 付費，選 `max` 之前請先調高 `CCRECALL_EXTRACT_MAX_BUDGET_USD`（每次抽取的費用上限，預設 `0.50` 美元）：我們量到的 `max` 每一次都超過這個數字。
+**調整萃取的 effort：** 在 shell 設定檔加上 `export CCRECALL_EXTRACT_EFFORT=medium`（可選 `low`、`medium`、`high`、`xhigh`、`max`，預設 `high`）。等級越低跑得越快，我們量測時存下的記憶也比較少。
+
+**萃取的花費：** 每次萃取都是一場簡短的 Sonnet session。用 Claude 訂閱方案的話，跟其他 session 一樣算進方案用量；用 `ANTHROPIC_API_KEY` 則會實際計費，每次另有 `CCRECALL_EXTRACT_MAX_BUDGET_USD` 這道費用上限（預設 `0.50` 美元）。我們量到的每次花費是 `high` 0.16–0.39 美元、`max` 0.64–0.97 美元，所以選 `max` 之前請先調高上限。
 
 **不裝這步的話**，記憶只在你 session 中手動呼叫 `recall_save` 時才會增長。Extraction wrapper 是讓記憶層自動成長的關鍵。
 

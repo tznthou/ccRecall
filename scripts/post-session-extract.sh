@@ -5,7 +5,7 @@
 #
 # Usage: ccrecall-extract [claude args...]
 #   Runs Claude Code with ccRecall startup injection, then extracts
-#   memories via Haiku after the session ends.
+#   memories with Sonnet after the session ends.
 #
 # Environment:
 #   CCRECALL_PORT           — daemon port (default 7749)
