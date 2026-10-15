@@ -90,6 +90,24 @@ more like an iteration counter than a strict SemVer major).
   Claude Code deletes transcripts after 30 days by default, and a session whose
   file is gone keeps its inflated numbers.
 
+  The upgrade order matters. Restart the daemon as soon as the upgrade
+  finishes, before any Claude Code session starts, including the extraction
+  run the wrapper launches when a session ends. v27 runs in whichever ccRecall
+  process is first to open the database on the new version, and a new
+  session's MCP server counts. If that happens while the old daemon is still
+  running, the old daemon re-reads those sessions with the old parser within
+  ten minutes, and v27, already recorded as done, never runs again. To recover,
+  clear the stored mtimes and restart the daemon once more:
+
+  ```sh
+  sqlite3 -cmd ".timeout 5000" ~/.ccrecall/ccrecall.db \
+    "UPDATE sessions SET file_mtime = NULL WHERE ended_at >= '2026-10-14';
+     UPDATE subagent_sessions SET file_mtime = NULL WHERE ended_at >= '2026-10-14';"
+  ```
+
+  `~/.ccrecall/ccrecall.db` is the default location; use your
+  `CCRECALL_DB_PATH` if you set one.
+
 - **Messages sent while Claude is working now reach extraction.** A message
   typed while Claude is busy is queued, and if the turn makes another API call
   before it ends, Claude Code folds the message into that call and records it

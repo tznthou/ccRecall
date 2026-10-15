@@ -94,7 +94,7 @@ flowchart TB
 
     subgraph Consumers["使用端"]
         Hook["Claude Code Hooks<br/>SessionStart / UserPromptSubmit / SessionEnd"]
-        Wrapper["Extraction wrapper<br/>session 結束後的 Haiku 抽取"]
+        Wrapper["Extraction wrapper<br/>session 結束後的 Sonnet 抽取"]
         MCP["MCP Server<br/>recall_query / recall_save"]
     end
 
@@ -117,7 +117,7 @@ sequenceDiagram
     participant H as Hooks
     participant R as ccRecall
     participant W as Wrapper
-    participant X as Haiku 抽取器
+    participant X as Sonnet 抽取器
 
     rect rgb(235, 244, 255)
     Note over CC,R: Session 開始
@@ -416,7 +416,7 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 
 每一條都從宣言延伸。每一條都是對流行做法的刻意拒絕。
 
-**規則式，有天花板。** daemon 用 heuristic 萃取（regex 模式、工具使用分析、outcome 推斷）做 session 摘要——零 API 成本。做這件事，「Edit×8, 5 files, committed」比一段散文更有用。但 rule-based 有天花板：結構化訊號（tool call、檔案編輯、commit message）抓得到；討論中的決策、微妙的取捨、任何活在自然語言裡的東西，它抓不到。這就是 v0.4.1 加入 post-session Haiku extraction（~$0.001/session）的原因——用一次 LLM pass 補上 heuristic 的盲區。實際上，我真正會搜到的記憶大多來自 Haiku extraction 或手動 `recall_save`，不是規則式那層。daemon 本體永遠不呼叫 LLM；LLM pass 是選配的，作為獨立進程在 daemon 之外執行。
+**規則式，有天花板。** daemon 用 heuristic 萃取（regex 模式、工具使用分析、outcome 推斷）做 session 摘要——零 API 成本。做這件事，「Edit×8, 5 files, committed」比一段散文更有用。但 rule-based 有天花板：結構化訊號（tool call、檔案編輯、commit message）抓得到；討論中的決策、微妙的取捨、任何活在自然語言裡的東西，它抓不到。這就是 v0.4.1 加入 post-session Haiku extraction（~$0.001/session）的原因——用一次 LLM pass 補上 heuristic 的盲區。實際上，我真正會搜到的記憶大多來自 session 結束後的那次抽取（v0.9.0 起改用 Sonnet）或手動 `recall_save`，不是規則式那層。daemon 本體永遠不呼叫 LLM；LLM pass 是選配的，作為獨立進程在 daemon 之外執行。
 
 **FTS5，不用向量搜尋。** 語義搜尋聽起來更高級，但對話記錄搜的是具體的工具名、檔案路徑、錯誤訊息——關鍵詞匹配就夠了。FTS5 查詢在本地 <10ms。不需要 embedding model、不需要 Chroma、不需要 Docker container。在我們的規模（數百個 session，不是百萬文件），Karpathy 自己的分析也確認：「500 個來源以下，樸素索引 + 關鍵詞搜尋已經夠用。」
 
@@ -427,6 +427,15 @@ Anthropic Claude Code 團隊的 Thariq 在 2026 年 4 月[發表了 context 管�
 **刻意排除的技術棧。** 不用 Docker——`pnpm dev` 就能跑的東西不需要部署摩擦。不用 Electron——ccRecall 沒有 UI（那是 ccRewind 的事）。不用向量資料庫——在我們的規模解決的是不存在的問題。這些是立場，不是缺失。
 
 **不做帶偏見的注入。** ccRecall 不替 Claude 決定該記住什麼。它提供搜尋 API——注入層呈現結果，Claude 自己整合。帶偏見的記憶篩選是過早優化，而且會以我們無法預測的方式出錯。
+
+### transcript 沒說的事
+
+ccRecall 能知道的，只有 Claude Code 寫進硬碟的東西；可是 transcript 跟真正發生過的對話，並不完全是同一回事。v0.9.2 補上的兩個洞，都不曾報過錯：
+
+- Claude 還在忙的時候打進去的訊息，多半會被併進它下一次的 API 呼叫，存成 attachment，不會留下使用者訊息的紀錄。抽取用的 transcript 一直沒讀到這些——光是一個人一個月的 session，就有 254 則——到 v0.9.2 才補上。
+- Claude Code 2.1.300 開始把每次 API 請求的副本寫進 transcript，parser 一直把這些紀錄當成訊息算，到 v0.9.2 才擋掉。
+
+讀 transcript 的程式碼，照它假設的格式來看並沒有寫錯；兩個洞都是拿檔案裡實際存了什麼，去對照實際說過什麼，一筆一筆數出來的。
 
 ---
 
