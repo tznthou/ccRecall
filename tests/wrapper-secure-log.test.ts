@@ -454,8 +454,14 @@ describe('extract wrapper: the guard cannot be bypassed or removed', () => {
     // writes nothing and opens nothing — one `[ -f ]` test, then JSON on
     // stdout — so it has no log property to assert. What it returns is
     // asserted in extract-wrapper-run-config.test.ts.
+    //
+    // 2026-10-15, `_ccrecall_extract_effort`: NOT covered either, for the same
+    // reason. It reads one variable and prints a level, plus a warning on
+    // stderr; it opens no file. What it prints, and that it holds up under
+    // errexit and nounset callers, is asserted in extract-wrapper-run-config.test.ts.
     expect(definedFunctions(dir)).toEqual([
       '_ccrecall_count_extracted',
+      '_ccrecall_extract_effort',
       '_ccrecall_extract_mcp_config',
       '_ccrecall_log_append',
       '_ccrecall_secure_log',

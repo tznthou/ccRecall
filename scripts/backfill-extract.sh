@@ -17,6 +17,13 @@
 #   --from-log-all  every non-zero exit in the log — mostly ancient sessions
 #                   whose transcript Claude Code has since deleted
 #
+# Environment:
+#   CCRECALL_EXTRACT_EFFORT          effort for each run, as for ccrecall-extract:
+#                                    low, medium, high, xhigh or max (default high)
+#   CCRECALL_EXTRACT_MAX_BUDGET_USD  spend cap per run, applied only when
+#                                    ANTHROPIC_API_KEY is set (default 0.50);
+#                                    raise it to run at max
+#
 # Why this exists (2026-09-15): post-session-extract.sh used to pass the whole
 # transcript as one argv parameter (capped at 200,000 bytes), and a single argv
 # parameter has a ceiling well below that cap:
@@ -91,9 +98,10 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE=1 ;;
     --from-log) FROM_LOG=1 ;;
     --from-log-all) FROM_LOG=1; FROM_LOG_ALL=1 ;;
-    # Usage + Options only. The rationale below it is for whoever reads the
-    # source; printing half of it (the range has to stop somewhere) helps nobody.
-    -h|--help) sed -n '2,17p' "$SELF"; exit 0 ;;
+    # Usage, Options and Environment only. The rationale below them is for
+    # whoever reads the source; printing half of it (the range has to stop
+    # somewhere) helps nobody.
+    -h|--help) sed -n '2,25p' "$SELF"; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *) SESSION_IDS+=("$1") ;;
   esac
@@ -108,6 +116,8 @@ declare -F _ccrecall_log_append >/dev/null || die "_ccrecall_log_append not defi
 # The MCP configuration too, so a backfill run starts the same single server
 # the wrapper's run does rather than a second copy of how to find it.
 declare -F _ccrecall_extract_mcp_config >/dev/null || die "_ccrecall_extract_mcp_config not defined by $WRAPPER"
+# And the effort, read from CCRECALL_EXTRACT_EFFORT the way the wrapper reads it.
+declare -F _ccrecall_extract_effort >/dev/null || die "_ccrecall_extract_effort not defined by $WRAPPER"
 
 [[ -f "$PROMPT_FILE" ]] || die "extraction-prompt.md not found: $PROMPT_FILE
    (the wrapper's inline fallback is deliberately not duplicated here — a second
@@ -181,8 +191,11 @@ fi
 
 [[ ${#SESSION_IDS[@]} -gt 0 ]] || die "no session ids given (pass ids, or --from-log)"
 
-printf '\n🧠 ccRecall backfill — %d session(s)%s\n\n' \
-  "${#SESSION_IDS[@]}" "$([[ $DRY_RUN -eq 1 ]] && printf ' [DRY RUN]')"
+# Once for the whole batch, so a value that is not a level is warned about once.
+EFFORT=$(_ccrecall_extract_effort)
+
+printf '\n🧠 ccRecall backfill — %d session(s) (effort %s)%s\n\n' \
+  "${#SESSION_IDS[@]}" "$EFFORT" "$([[ $DRY_RUN -eq 1 ]] && printf ' [DRY RUN]')"
 
 ok=0; skipped=0; failed=0
 
@@ -293,13 +306,13 @@ ${prompt}"
   # count each one as surfaced.
   #
   # Effort and permissions match the wrapper's run too, for the reasons given
-  # there: CLAUDE_CODE_EFFORT_LEVEL is pinned as a prefix because it outranks
+  # there: CLAUDE_CODE_EFFORT_LEVEL is set as a prefix because it outranks
   # --effort (a caller exporting max ran each extraction at max, mostly
   # thinking), and the run gets ccRecall's own MCP server, no built-in tools and
   # an allowlist instead of --dangerously-skip-permissions.
   mcp_config=$(_ccrecall_extract_mcp_config)
   extract_stderr=$(cd "$session_cwd" && printf '%s' "$full_prompt" |
-    CCRECALL_SESSION_START_STRATEGY=off CCRECALL_PROMPT_RECALL=off CLAUDE_CODE_EFFORT_LEVEL=high \
+    CCRECALL_SESSION_START_STRATEGY=off CCRECALL_PROMPT_RECALL=off CLAUDE_CODE_EFFORT_LEVEL="$EFFORT" \
     command claude -p \
     --no-session-persistence \
     --model sonnet \

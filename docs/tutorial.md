@@ -158,6 +158,8 @@ alias ccdm='ccrecall-extract'
 
 **Skip extraction for a single session:** `CCRECALL_SKIP_EXTRACT=1 ccrecall-extract`
 
+**Choose the extraction's effort:** add `export CCRECALL_EXTRACT_EFFORT=medium` to your shell profile (`low`, `medium`, `high`, `xhigh` or `max`; the default is `high`). Lower levels run faster and saved fewer memories when we measured them. If you extract with an `ANTHROPIC_API_KEY`, raise `CCRECALL_EXTRACT_MAX_BUDGET_USD` (a per-run cap, default `0.50`) before choosing `max`: every run we measured at `max` cost more than that.
+
 **Without this step**, memories only accumulate when you explicitly call `recall_save` during a session. The extraction wrapper is what makes the memory layer grow automatically.
 
 ---

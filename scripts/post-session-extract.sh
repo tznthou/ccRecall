@@ -8,9 +8,16 @@
 #   memories via Haiku after the session ends.
 #
 # Environment:
-#   CCRECALL_PORT         — daemon port (default 7749)
-#   CCRECALL_SKIP_EXTRACT — set to 1 to skip post-session extraction
-#   CCRECALL_EXTRACT_LOG  — telemetry log path (default ~/.ccrecall/extract.log.jsonl)
+#   CCRECALL_PORT           — daemon port (default 7749)
+#   CCRECALL_SKIP_EXTRACT   — set to 1 to skip post-session extraction
+#   CCRECALL_EXTRACT_LOG    — telemetry log path (default ~/.ccrecall/extract.log.jsonl)
+#   CCRECALL_EXTRACT_EFFORT — effort for the extraction run: low, medium, high,
+#                             xhigh or max (default high). Your interactive
+#                             session keeps its own effort either way.
+#   CCRECALL_EXTRACT_MAX_BUDGET_USD — spend cap per extraction run, applied only
+#                             when ANTHROPIC_API_KEY is set (default 0.50).
+#                             Measured runs at max cost 0.64-0.97, so raise it
+#                             along with the effort.
 
 CCRECALL_PORT="${CCRECALL_PORT:-7749}"
 CCRECALL_EXTRACT_LOG="${CCRECALL_EXTRACT_LOG:-$HOME/.ccrecall/extract.log.jsonl}"
@@ -200,6 +207,42 @@ _ccrecall_extract_mcp_config() {
   else
     jq -nc '{mcpServers:{ccrecall:{type:"stdio",command:"ccmem-mcp",args:[]}}}'
   fi
+}
+
+# The effort an extraction run starts at: the level CCRECALL_EXTRACT_EFFORT
+# names, or high when it names none. backfill-extract.sh sources this file for
+# it too, so a backfill starts at the level the run it stands in for would have.
+#
+# The extraction gets a variable of its own because CLAUDE_CODE_EFFORT_LEVEL
+# cannot be the knob: that is the caller's interactive setting, the very value
+# this run has to override (see the effort comment in ccrecall-extract).
+#
+# Checked against the levels rather than passed on as given. Claude Code takes
+# any value without complaint: on 2.1.300 `bogus` exited 0 with nothing on
+# stderr and ran at whatever the settings or the model default said (medium,
+# for Sonnet 5.5 with no settings; read off the Stop hook's effort.level). What
+# this prints is also what the start message names, so an unchecked typo would
+# be reported as the run's level while the run got another. Anything else
+# becomes high, with a warning that leaves the value out: it goes to a
+# terminal, and nothing has vetted what the environment holds.
+#
+# `auto` is left out although Claude Code documents it for this variable as
+# "use the model default". On 2.1.300 it ran Sonnet 5.5 at high every time,
+# with and without settings, where the model default is medium, so a start
+# message saying "auto" would hide the level the run actually got.
+#
+# Always returns 0. The callers assign its output, and this file is sourced
+# into shells that set errexit, where a non-zero status here would abort the
+# caller's shell at that assignment, before extraction ever ran.
+_ccrecall_extract_effort() {
+  case "${CCRECALL_EXTRACT_EFFORT:-}" in
+    low|medium|high|xhigh|max) builtin printf '%s' "$CCRECALL_EXTRACT_EFFORT" ;;
+    '') builtin printf 'high' ;;
+    *)
+      builtin printf '\n⚠️  ccRecall: CCRECALL_EXTRACT_EFFORT must be one of low, medium, high, xhigh, max — extracting at high.\n' >&2
+      builtin printf 'high'
+      ;;
+  esac
 }
 
 ccrecall-extract() {
@@ -422,7 +465,11 @@ ${prompt}"
     return $claude_exit
   fi
 
-  printf '\n🧠 ccRecall: extracting memories from session...\n'
+  # Named in the start message because the level is now a setting: the line
+  # that says extraction began is where a run at the wrong one shows.
+  local effort
+  effort=$(_ccrecall_extract_effort)
+  printf '\n🧠 ccRecall: extracting memories from session (effort %s)...\n' "$effort"
 
   local extract_start
   extract_start=$(date +%s)
@@ -580,15 +627,16 @@ ${prompt}"
   # would persist in the shell this file is sourced into and switch prompt
   # recall off for every later session.
   #
-  # The effort is pinned the same way, and it has to be a prefix:
+  # The effort is set the same way, and it has to be a prefix:
   # CLAUDE_CODE_EFFORT_LEVEL outranks --effort, /effort and every effortLevel
   # setting, so a user who exports `max` for their interactive sessions ran
   # every extraction at max, and an --effort flag here would change nothing.
   # Measured 2026-10-15 on two real transcripts: at max, 90-95% of a run was
   # thinking — 32-46K tokens before the first save, 261-355 s end to end. At
   # high the same two runs took 26-40 s and saved five memories each, where max
-  # saved four or five. medium and low were faster still, but saved one or two
-  # fewer per session.
+  # saved four or five. medium and low were faster still, but saved one to
+  # three fewer per session. So $effort is high unless CCRECALL_EXTRACT_EFFORT
+  # names another level (see _ccrecall_extract_effort).
   #
   # And the run gets only what it uses. It reads a transcript this prompt calls
   # untrusted, and used to do so under --dangerously-skip-permissions with every
@@ -612,7 +660,7 @@ ${prompt}"
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 130' INT
     trap 'command rm -f -- "$stdout_tmp" 2>/dev/null; exit 143' TERM
     builtin printf '%s' "$full_prompt" |
-      CCRECALL_SESSION_START_STRATEGY=off CCRECALL_PROMPT_RECALL=off CLAUDE_CODE_EFFORT_LEVEL=high \
+      CCRECALL_SESSION_START_STRATEGY=off CCRECALL_PROMPT_RECALL=off CLAUDE_CODE_EFFORT_LEVEL="$effort" \
       command claude -p \
       --no-session-persistence \
       --model sonnet \

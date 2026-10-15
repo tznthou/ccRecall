@@ -10,6 +10,22 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ## [Unreleased]
 
+### 新增
+
+- **用 `CCRECALL_EXTRACT_EFFORT` 決定抽取跑在哪個 effort，開始訊息也會寫出來。** 可選
+  `low`、`medium`、`high`、`xhigh`、`max`，預設 `high`。在 shell 設定檔裡 export 就好，
+  `ccmem-backfill` 是另外啟動的程序，同樣讀這個變數。抽取開始時會印出
+  `🧠 ccRecall: extracting memories from session (effort high)...`，`ccmem-backfill` 的
+  標題列也會寫出等級。設了清單以外的值，不會原樣交給 Claude Code（它收到什麼值都照單全
+  收，不會報錯），而是照 `high` 跑，並印出警告。Claude Code 本身也接受的 `auto` 同樣不收：
+  在 Claude Code 2.1.300 上，它每一次都讓 Sonnet 5.5 跑在 `high`，而不是文件說的模型預設。
+  互動 session 的 effort 不受影響。
+
+  如果你是用 `ANTHROPIC_API_KEY` 付費，每次抽取都有 `CCRECALL_EXTRACT_MAX_BUDGET_USD`
+  這道費用上限（預設 `0.50` 美元）。我們拿兩場 session 量測，`max` 跑四次，每次折合 API
+  價格 0.64–0.97 美元；`high` 四次是 0.16–0.39 美元。所以要選 `max`，請一併調高上限。
+  `xhigh` 沒有量過。
+
 ### 修正
 
 - **就算 shell 設了高 effort，抽取也只要幾十秒。** `CLAUDE_CODE_EFFORT_LEVEL` 的優先序
@@ -18,6 +34,13 @@ ccRecall 的重要版本變更記錄在這裡。
   有 90–95% 的時間花在存下第一筆記憶之前的思考，全程 261–355 秒。wrapper 與
   `ccmem-backfill` 現在把抽取固定在 `high`：用出貨的腳本對同樣兩場跑了九次，每次 25–42
   秒，每次存 3 到 5 筆，平均跟 max 時一樣多。互動 session 仍照你自己設的 effort。
+
+  這個固定值會蓋過你原本的 effort，不管是 export 的、寫在 settings 的，還是根本沒設，所以
+  沒設過的人，抽取的 effort 反而比以前高。什麼都沒設時，Claude Code 跑 Sonnet 5.5（在
+  Anthropic API 上 `--model sonnet` 就是它）用的是 medium。同樣兩場 session 各跑一次：
+  medium 花了 15 秒和 20 秒、存下 2 筆和 4 筆；high 是 40 秒和 26 秒、各存 5 筆，輸出
+  token 是 medium 的 1.1 到 2.9 倍。想回到 medium，設 `CCRECALL_EXTRACT_EFFORT=medium`
+  （見「新增」）。
 
   wrapper 是開 shell 時 source 進來的，要重開終端機或重新 source 才會生效。
 

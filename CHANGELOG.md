@@ -13,6 +13,27 @@ more like an iteration counter than a strict SemVer major).
 
 ## [Unreleased]
 
+### Added
+
+- **`CCRECALL_EXTRACT_EFFORT` sets the effort extraction runs at, and the start
+  message names it.** The levels are `low`, `medium`, `high`, `xhigh` and
+  `max`; the default is `high`. Export it from your shell profile, which also
+  reaches `ccmem-backfill`, a separate process that reads the same variable.
+  Extraction now opens with `🧠 ccRecall: extracting memories from session
+  (effort high)...`, and `ccmem-backfill` names the level in its header. A
+  value that is not one of those levels is never passed on to Claude Code,
+  which would accept it without a word: the run goes ahead at `high`, with a
+  warning. That includes `auto`, which Claude Code also takes: on Claude Code
+  2.1.300 it ran Sonnet 5.5 at `high` every time we tried, not at the model
+  default its documentation describes. Your interactive sessions keep their
+  own effort.
+
+  If you extract with an `ANTHROPIC_API_KEY`, each run is capped at
+  `CCRECALL_EXTRACT_MAX_BUDGET_USD` (default `0.50`). On the two sessions we
+  measured, four runs at `max` cost $0.64–0.97 each in API terms and four at
+  `high` $0.16–0.39, so raise the cap along with the effort before choosing
+  `max`. `xhigh` was not measured.
+
 ### Fixed
 
 - **Extraction takes seconds, not minutes, when your shell exports a high
@@ -26,6 +47,15 @@ more like an iteration counter than a strict SemVer major).
   extraction took 25–42 seconds and saved three to five memories a run, on
   average as many as max had. Your interactive sessions keep whatever effort
   you gave them.
+
+  The pin overrides whatever effort you had, exported, in your settings or
+  none at all, so if you never set one, extraction now runs higher than it
+  did. With nothing set, Claude Code runs Sonnet 5.5, which `--model sonnet`
+  selects on the Anthropic API, at medium. On the same two sessions, one run
+  each at medium took 15 and 20 seconds and saved two and four memories; at
+  high, 40 and 26 seconds and five each, with 1.1 to 2.9 times the output
+  tokens. To go back to medium, set `CCRECALL_EXTRACT_EFFORT=medium` (see
+  Added).
 
   The wrapper is sourced when a shell starts, so the change reaches a terminal
   only once it is reopened or the wrapper is sourced again.

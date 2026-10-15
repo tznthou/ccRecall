@@ -165,8 +165,10 @@ describe('backfill-extract.sh', () => {
     delete env.CCRECALL_DB
     // Applied before `extra`'s values would be, so a test can still set it. A
     // Claude Code session's Bash tool passes its own effort down, and that
-    // inherited value must not decide the effort assertions below.
+    // inherited value must not decide the effort assertions below. Nor must a
+    // CCRECALL_EXTRACT_EFFORT the developer set for their own extractions.
     if (!('CLAUDE_CODE_EFFORT_LEVEL' in extra)) delete env.CLAUDE_CODE_EFFORT_LEVEL
+    if (!('CCRECALL_EXTRACT_EFFORT' in extra)) delete env.CCRECALL_EXTRACT_EFFORT
     for (const k of Object.keys(env)) if (k.startsWith('BASH_FUNC_')) delete env[k]
     return env
   }
@@ -252,12 +254,43 @@ describe('backfill-extract.sh', () => {
     // CLAUDE_CODE_EFFORT_LEVEL outranks --effort, so a caller exporting max
     // (as one user's ~/.zshrc did) ran every extraction at max: 261-355 s of
     // mostly thinking, against 26-40 s at high for the same transcripts.
+    //
+    // CCRECALL_EXTRACT_EFFORT is unset here, and the script runs under its own
+    // `set -u`, so this is also the case that reads an unset variable.
     await writeTranscript([msg('a session to backfill', runFrom)])
 
     const r = runScript([SESSION_ID], isolatedEnv({ CLAUDE_CODE_EFFORT_LEVEL: 'max' }))
     expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0)
 
     expect((await readFile(path.join(stubOut, 'effort.env'), 'utf8')).trim()).toBe('high')
+    expect(r.stdout).toMatch(/ccRecall backfill — 1 session\(s\) \(effort high\)/)
+  })
+
+  it('runs extraction at the level CCRECALL_EXTRACT_EFFORT names, and says which', async () => {
+    // The same knob the wrapper reads, through the same helper, so a backfill
+    // and the run it stands in for start at the same level.
+    await writeTranscript([msg('a session to backfill', runFrom)])
+
+    const r = runScript(
+      [SESSION_ID],
+      isolatedEnv({ CLAUDE_CODE_EFFORT_LEVEL: 'max', CCRECALL_EXTRACT_EFFORT: 'medium' }),
+    )
+    expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0)
+
+    expect((await readFile(path.join(stubOut, 'effort.env'), 'utf8')).trim()).toBe('medium')
+    expect(r.stdout).toMatch(/ccRecall backfill — 1 session\(s\) \(effort medium\)/)
+  })
+
+  it('falls back to high, and says so, when CCRECALL_EXTRACT_EFFORT is not a level', async () => {
+    await writeTranscript([msg('a session to backfill', runFrom)])
+
+    const r = runScript([SESSION_ID], isolatedEnv({ CCRECALL_EXTRACT_EFFORT: 'hgih' }))
+    expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0)
+
+    expect((await readFile(path.join(stubOut, 'effort.env'), 'utf8')).trim()).toBe('high')
+    expect(r.stdout).toMatch(/\(effort high\)/)
+    expect(r.stderr).toContain('CCRECALL_EXTRACT_EFFORT must be one of ')
+    expect(r.stderr).not.toContain('hgih')
   })
 
   it("starts extraction with only ccRecall's MCP server and the two tools it uses", async () => {
@@ -315,6 +348,26 @@ describe('backfill-extract.sh', () => {
     expect(out).not.toContain('extraction-prompt.md not found')
     expect(out).not.toContain('could not extract the jq transcript filter')
     expect(out).toContain('no session ids given')
+  })
+
+  it('prints the whole of Usage, Options and Environment for --help, and none of the rationale', () => {
+    // --help prints a fixed line range of the script's own header, so a header
+    // line added or removed shifts what it shows. The first version of the
+    // Environment block was cut off mid-entry by exactly that.
+    const r = spawnSync(STOCK_BASH, [SCRIPT, '--help'], {
+      encoding: 'utf8',
+      cwd: runFrom,
+      env: isolatedEnv(),
+      timeout: 30_000,
+      input: '',
+    })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout).toContain('# Usage')
+    expect(r.stdout).toContain('--from-log-all')
+    expect(r.stdout).toContain('CCRECALL_EXTRACT_EFFORT')
+    expect(r.stdout).toContain('CCRECALL_EXTRACT_MAX_BUDGET_USD')
+    expect(r.stdout.trimEnd()).toMatch(/raise it to run at max$/)
+    expect(r.stdout).not.toContain('Why this exists')
   })
 
   it('declares the script as a bin entry, which is what makes it executable once installed', async () => {
