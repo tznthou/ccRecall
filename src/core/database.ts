@@ -923,6 +923,25 @@ const migrations: Migration[] = [
       db.exec(`UPDATE memories SET origin = 'agent-inferred' WHERE session_id IS NOT NULL;`)
     },
   },
+  {
+    version: 27,
+    description: 'force re-index of sessions active since Claude Code 2.1.300 (request-replay records were indexed as messages)',
+    up: (db) => {
+      // Claude Code 2.1.300 (published to npm 2026-10-14T14:27Z) writes
+      // api-request, api-request-shape and api-request-blob records into
+      // transcripts, and the parser counted every one of them as a message.
+      // Only a session written to after that release can hold them, so
+      // ended_at bounds the repair; cutting at the start of the release day
+      // costs a few extra re-indexes and nothing else. A session whose
+      // transcript Claude Code has since deleted keeps its inflated counts:
+      // the DB holds no messages to recount.
+      //
+      // Both tables, because subagents are re-indexed off
+      // subagent_sessions.file_mtime, not off their row in sessions.
+      db.exec("UPDATE sessions SET file_mtime = NULL WHERE ended_at >= '2026-10-14'")
+      db.exec("UPDATE subagent_sessions SET file_mtime = NULL WHERE ended_at >= '2026-10-14'")
+    },
+  },
 ]
 
 export class Database {

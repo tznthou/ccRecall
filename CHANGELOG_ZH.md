@@ -39,6 +39,34 @@ ccRecall 的重要版本變更記錄在這裡。
   存檔剛好落在重新索引的期間就會失敗，新 key、既有 key 都一樣。現在 upsert 一開始就用
   `BEGIN IMMEDIATE`，在讀取之前先拿寫入鎖，這一步會等 busy handler，存檔會等 daemon 放鎖。
 
+- **Claude Code 2.1.300 新增的請求重放紀錄，不再被當成訊息索引。** 從 2.1.300 起，Claude Code
+  會在 session transcript 寫入三種新紀錄，讓分享出去的 transcript 能完整重現每一次 API 請求：
+  `api-request`（請求參數）、`api-request-shape`（system prompt 和工具定義）、
+  `api-request-blob`（送出當下的訊息副本）。`parseLine` 會把每一筆能解析的紀錄都當成訊息，
+  所以三種全被算了進去。blob 還帶有 `role` 和 `content`，它複製的那則訊息，工具呼叫和文字因此
+  又被算了一次；而且 blob 複製的是實際送出的請求，system 角色的訊息、Claude Code 附加在使用者
+  發言上的 context 這類 transcript 不會記成訊息的文字，也跟著被帶進來。blob 沒有 `uuid`，
+  專門用來剔除重播紀錄的 UUID 去重擋不到它。
+
+  2026-10-15 拿七份 2.1.300 的 transcript，各用修正前後的 parser 解析一次比對：
+
+  - 每個 session 的訊息數裡，有 16–28% 是這三種紀錄。
+  - 工具次數最多被灌成兩倍（其中一場的 `Edit` 從 72 次變成 144 次），session 摘要的活動描述、
+    `session_files` 裡每個檔案的操作次數也跟著灌水。
+  - tag 偵測會掃過所有訊息文字，多出來的文字讓幾乎每條規則都命中：兩場已結束的 session 分別
+    標了 21 和 22 個 tag，略過這些紀錄後是 15 和 19 個。tag 會變成 `session_topics`，組成各專案的
+    `knowledge_map`；Tier 0 的 startup 選擇，是看一則跨專案記憶有多少比例的 topic 出現在這張表裡
+    來排序。四個專案裡有三個本來就有這些多出來的 topic，第四個多了三個，其中一個有 70 則跨專案
+    記憶帶著。
+  - 摘要的 intent 那一行，七份都沒有變。
+
+  subagent 的 transcript 不產生摘要，所以只有訊息數算錯。
+
+  現在 `parseLine` 遇到這三種類型會直接回傳 `null`。migration v27 會清掉 2026-10-14（2.1.300
+  發布當天）以後結束的 session 和 subagent 存下來的 mtime，讓下一輪索引用修好的 parser 重讀
+  一遍。前提是 transcript 還在：Claude Code 預設 30 天後刪除 transcript，檔案已經不在的 session
+  會停在灌水後的數字。
+
 ## [0.9.1] — 2026-09-22
 
 ### 修正

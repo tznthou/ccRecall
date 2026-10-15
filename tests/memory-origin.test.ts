@@ -215,7 +215,7 @@ describe('migration v26 backfill', () => {
               VALUES ('s1', 'from a session', 'discovery', 0.8)`)
     raw.exec(`INSERT INTO memories (session_id, content, type, confidence)
               VALUES (NULL, 'written by hand', 'preference', 1.0)`)
-    raw.exec('DELETE FROM schema_version WHERE version = 26')
+    raw.exec('DELETE FROM schema_version WHERE version >= 26')
     raw.close()
 
     const migrated = new Database(legacyPath)
