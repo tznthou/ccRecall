@@ -90,6 +90,29 @@ more like an iteration counter than a strict SemVer major).
   Claude Code deletes transcripts after 30 days by default, and a session whose
   file is gone keeps its inflated numbers.
 
+- **Messages sent while Claude is working now reach extraction.** A message
+  typed while Claude is busy is queued, and if the turn makes another API call
+  before it ends, Claude Code folds the message into that call and records it
+  only as a `queued_command` attachment, never as a user message. The
+  extraction transcript read user and assistant records only, so every message
+  folded in this way was invisible to it: 254 over the 198 transcripts on disk
+  on 2026-10-15, 221 of them in sessions that were extracted afterwards, 143 of
+  those the user's own words, for instance a correction made mid-task.
+
+  The transcript now includes these messages under a `--- human [<uuid>] ---`
+  header, at the point where they reached Claude. Task notifications, which
+  Claude Code queues the same way, stay out. Two kinds of turn that are not the
+  user speaking now carry their own header wherever they appear: a side-agent
+  note the user forwarded (`--- side-agent note [<uuid>] ---`) and a message
+  from another Claude session (`--- peer session [<uuid>] ---`). The extraction
+  prompt tells the model that neither is the user's own decision.
+  `backfill-extract.sh` lifts the same filter, so backfilled sessions get the
+  same transcript.
+
+  Re-running the filter over those 198 transcripts, 252 of the 254 messages now
+  appear; the other two sit past the 200KB transcript cap. Outside the sessions
+  that hit the cap, every segment the old filter produced is still there.
+
 ## [0.9.1] — 2026-09-22
 
 ### Fixed

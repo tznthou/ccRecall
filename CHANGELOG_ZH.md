@@ -67,6 +67,22 @@ ccRecall 的重要版本變更記錄在這裡。
   一遍。前提是 transcript 還在：Claude Code 預設 30 天後刪除 transcript，檔案已經不在的 session
   會停在灌水後的數字。
 
+- **Claude 工作中途送出的訊息，抽取現在看得到了。** Claude 忙的時候打的訊息會先排進佇列；如果這一輪
+  結束前 Claude 還會再呼叫一次 API，Claude Code 就把訊息併進那次呼叫，transcript 裡只留一筆
+  `queued_command` attachment，不會有使用者訊息的紀錄。抽取用的 transcript 只讀 user 和 assistant
+  紀錄，這樣被併進去的訊息因此全部看不到：2026-10-15 磁碟上的 198 份 transcript 裡有 254 則，其中
+  221 則所在的 session 事後有被抽取，這 221 則裡有 143 則是使用者自己打的話，例如做到一半時給的更正。
+
+  現在 transcript 會在訊息送到 Claude 的那個位置，用 `--- human [<uuid>] ---` 收錄它們。Claude Code
+  用同一套佇列送來的背景任務通知，仍然不收。另外兩種不是使用者在說話的 turn，不管出現在哪種紀錄裡，
+  都改用自己的 header：使用者轉進來的 side agent note（`--- side-agent note [<uuid>] ---`），以及
+  其他 Claude session 傳來的訊息（`--- peer session [<uuid>] ---`）。抽取的 prompt 也告訴模型，這兩種
+  都不是使用者自己的決定。`backfill-extract.sh` 抽的是同一份 filter，補抽的 session 拿到的
+  transcript 也一樣。
+
+  拿同樣那 198 份 transcript 重跑，254 則裡有 252 則現在看得到，另外 2 則落在 200KB 上限之後。
+  沒有撞到上限的 session，舊 filter 產出的每一段都還在。
+
 ## [0.9.1] — 2026-09-22
 
 ### 修正
