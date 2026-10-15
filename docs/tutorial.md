@@ -160,7 +160,7 @@ alias ccdm='ccrecall-extract'
 
 **Choose the extraction's effort:** add `export CCRECALL_EXTRACT_EFFORT=medium` to your shell profile (`low`, `medium`, `high`, `xhigh` or `max`; the default is `high`). Lower levels run faster and saved fewer memories when we measured them.
 
-**What extraction costs:** each extraction is a short Sonnet session. On a Claude subscription it counts against your plan's usage like any other session. With an `ANTHROPIC_API_KEY` it is billed, and each run is capped at `CCRECALL_EXTRACT_MAX_BUDGET_USD` (default `0.50`). The runs we measured cost $0.16–0.39 at `high` and $0.64–0.97 at `max`, so raise the cap before choosing `max`.
+**What extraction costs:** each extraction is a short Sonnet session. On a Claude subscription it counts against your plan's usage like any other session. With an `ANTHROPIC_API_KEY` it is billed, and each run is capped at `CCRECALL_EXTRACT_MAX_BUDGET_USD` (default `0.50`). The runs we measured cost $0.21–0.39 at `high` and $0.64–0.97 at `max`, so raise the cap before choosing `max`.
 
 **Without this step**, memories only accumulate when you explicitly call `recall_save` during a session. The extraction wrapper is what makes the memory layer grow automatically.
 
