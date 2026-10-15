@@ -7,7 +7,7 @@
 
 [English](README.md)
 
-Claude Code 的本地記憶服務——索引你的對話歷史，按需召回相關 context，注入到未來的 session。核心服務零 API 成本；選配的 post-session extraction 透過 Haiku 約 $0.001/session。
+Claude Code 的本地記憶服務——索引你的對話歷史，按需召回相關 context，注入到未來的 session。核心服務零 API 成本。選配的 post-session extraction 跑在 Sonnet 上：用 Claude 訂閱方案就算進方案用量；用 API key 的話，我們實測每次抽取 0.21–0.39 美元。
 
 ---
 
@@ -18,7 +18,7 @@ Claude Code 的本地記憶服務——索引你的對話歷史，按需召回�
 1. **本地優先。** 你的機器，你的資料。不上雲、不開帳號、不信任 localhost 以外的任何服務。
 2. **SQLite 就是 API。** 一個 `.db` 檔案。`sqlite3` 隨時可查。你的記憶從不是黑箱。
 3. **FTS5，不用向量。** 程式碼對話搜的是檔案路徑、錯誤訊息、工具名稱——關鍵詞就夠了。幾百個 session 的規模，embedding 解決的是不存在的問題。
-4. **LLM 蒸餾，人類策展。** Haiku 在 session 結束後自動萃取（~$0.001）。auto memory 存你親手命名的決策。ccRecall 存沒人會手寫的長尾。
+4. **LLM 蒸餾，人類策展。** Sonnet 在 session 結束後自動萃取（訂閱方案吃方案用量，API key 實測每次 0.21–0.39 美元）。auto memory 存你親手命名的決策。ccRecall 存沒人會手寫的長尾。
 5. **對 `~/.claude/` 唯讀。** 讀 JSONL 記錄，從不寫入 Claude Code 的狀態。最壞情況：搜尋結果不好。永遠不會：搞壞你的設定。
 
 ---
@@ -276,7 +276,7 @@ ccRecall 和 Claude Code 內建的 auto memory（`~/.claude/projects/*/memory/`�
 
 |  | auto memory | ccRecall |
 |---|---|---|
-| **寫入路徑** | Claude 手動策展——新開一個 `.md` 檔 + 更新 MEMORY.md index | 雙軌：規則式 session 摘要（自動、免費）+ 選配 Haiku extraction（~$0.001/session，可搜尋的記憶主要來自這條路） |
+| **寫入路徑** | Claude 手動策展——新開一個 `.md` 檔 + 更新 MEMORY.md index | 雙軌：規則式 session 摘要（自動、免費）+ 選配 Sonnet extraction（訂閱方案算進用量，API key 實測每次 0.21–0.39 美元；可搜尋的記憶主要來自這條路） |
 | **讀取路徑** | 永遠在 session context（MEMORY.md 啟動時就載入） | auto memory 沒答案時，才用 MCP 查詢 |
 | **訊號密度** | 高——值得被命名的決策和偏好 | 長尾——hook 能抓到的都留著 |
 | **適用情境** | 「記住 X」「以後都 Y」——重要偏好、明確決策 | 「上次那個怎麼修的？」——跨多個 session 的回憶 |
@@ -448,6 +448,11 @@ ccRecall 能知道的，只有 Claude Code 寫進硬碟的東西；可是 transc
 | **v0.5.0** | 砍刀場：journal/scorer/harvester 管線移除（史上零 promotion）、端點 13 → 5、`message_uuids` 雙 hash 重建（DB 114MB → 42MB） | 已釋出 |
 | **v0.5.2** | 召回權重：對數壓縮 half-life decay、FTS relevance-first 排序 `(-rank)*sqrt(EC)` | 已釋出 |
 | **v0.5.3** | CJK topic 對齊：Han-aware topic 抽取（`\p{Script=Han}` tokenizer + 中文 stopwords 32 條 + 助詞分割）、session-less rebuild 修正 | 已釋出 |
+| **v0.5.4–v0.5.6** | 量測注入：`injection_log` 記下每一次送出的記憶（#71）；Tier 0 的 startup 名額開始輪替，不再每場都是同樣三條；`/health` 改回報 `mainSessionCount` | 已釋出 |
+| **v0.6.0** | 對話中召回：`UserPromptSubmit` hook 在對話進行中帶出相關記憶；注入的每一行都附上 key；抽取會標出「把 `recall_save` 印成文字、沒有真的呼叫」的 run | 已釋出 |
+| **v0.7.x** | 用 `Intl.Segmenter` 做中文斷詞（#80）；修掉 `cwd` → project id 的編碼漂移，這個 bug 讓整個專案的抽取被靜默跳過（#89）；英文虛詞不再把持 topic 索引（#84）；補上 telemetry log 防護的漏洞 | 已釋出 |
+| **v0.8.x** | 出處與作者：記憶會記下出自哪則訊息、是誰寫的，自動抽取不會再蓋掉你手寫的記憶；抽取改成處方先行；Tier 0 挑別專案的記憶改依專案挑選，不再只看信心分數。長 session 改從 stdin 送進抽取，不再靜默失敗，另附 `backfill-extract.sh` 把已經漏掉的補回來 | 已釋出 |
+| **v0.9.x** | 抽取改用 Sonnet，沒產出可用結果時自動重試一次；路徑大小寫不同也不會再跳過（#131）；跳過 Claude Code 2.1.300 寫進 transcript 的請求副本，對話中途插打的訊息也讀得到了；抽取不再被注入記憶；`recall_save` 不再撞上「database is locked」 | 已釋出 |
 
 追蹤於 [GitHub Issues](https://github.com/tznthou/ccRecall/issues)。
 
