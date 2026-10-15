@@ -30,9 +30,9 @@ more like an iteration counter than a strict SemVer major).
 
   If you extract with an `ANTHROPIC_API_KEY`, each run is capped at
   `CCRECALL_EXTRACT_MAX_BUDGET_USD` (default `0.50`). On the two sessions we
-  measured, four runs at `max` cost $0.64–0.97 each in API terms and four at
-  `high` $0.16–0.39, so raise the cap along with the effort before choosing
-  `max`. `xhigh` was not measured.
+  measured, four runs at `max` cost $0.64–0.97 each in API terms, and the two
+  at `high` with the shipped settings $0.21 and $0.39, so raise the cap along
+  with the effort before choosing `max`. `xhigh` was not measured.
 
 ### Fixed
 
