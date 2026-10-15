@@ -12,6 +12,12 @@
 // took 26-40 s and wrote five memories each, no fewer than at max. Passing
 // --effort cannot fix this; only the variable itself outranks the variable.
 //
+// High is a default, not a ceiling: CCRECALL_EXTRACT_EFFORT picks another
+// level for the run, and the start message names the level used. A value
+// that is not a level falls back to high with a warning, rather than
+// reaching Claude Code as CLAUDE_CODE_EFFORT_LEVEL, where the message would
+// then name a level the run did not get.
+//
 // Permissions. The run used to start with --dangerously-skip-permissions and
 // every MCP server the user had configured, so a model reading a transcript the
 // prompt itself calls untrusted held Bash and, on that machine, Gmail, Google
@@ -41,6 +47,10 @@ const PROJECT_ID = '-tmp-ccrecall-run-config-fixture'
 /** How the stub records a variable that is not set at all. */
 const UNSET = '<unset>'
 const ALLOWED_TOOLS = 'mcp__ccrecall__recall_save,mcp__ccrecall__recall_query'
+/** The levels CLAUDE_CODE_EFFORT_LEVEL accepts, per the Claude Code docs. */
+const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+/** Where the warning for a value that is not a level starts. */
+const NOT_A_LEVEL = 'CCRECALL_EXTRACT_EFFORT must be one of '
 
 const HAS_ZSH = spawnSync('sh', ['-c', 'command -v zsh'], { encoding: 'utf8' }).status === 0
 /** zsh is what users source this into; bash is what it is written against. */
@@ -179,8 +189,10 @@ describe('extract wrapper: effort and permissions of the extraction run', () => 
    * CLAUDE_CODE_EFFORT_LEVEL is deleted, not inherited. This suite is usually
    * run from inside a Claude Code session, whose Bash tool passes its own value
    * down — exactly the leak under test — so inheriting it would let the
-   * developer's session decide these assertions. Tests that need it set do so
-   * in the caller shell.
+   * developer's session decide these assertions. CCRECALL_EXTRACT_EFFORT goes
+   * for the same reason: a developer who sets it for their own extractions
+   * would otherwise move every default these tests pin. Tests that need either
+   * set do so in the caller shell.
    */
   function isolatedEnv(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
@@ -193,6 +205,7 @@ describe('extract wrapper: effort and permissions of the extraction run', () => 
       STUB_CLAUDE_OUT: stubOut,
     }
     delete env.CLAUDE_CODE_EFFORT_LEVEL
+    delete env.CCRECALL_EXTRACT_EFFORT
     delete env.ANTHROPIC_API_KEY
     delete env.BASH_ENV
     delete env.ENV
@@ -203,7 +216,8 @@ describe('extract wrapper: effort and permissions of the extraction run', () => 
 
   /**
    * Source the shipped wrapper into `shell` and run it after `prelude`, the
-   * caller's own setup. The CALLER line is what that shell holds afterwards.
+   * caller's own setup. The CALLER line is what that shell holds afterwards:
+   * its CLAUDE_CODE_EFFORT_LEVEL, then its CCRECALL_EXTRACT_EFFORT.
    * zsh gets `-f` so no startup file runs; the timeout is required because
    * spawnSync blocks Vitest's own timers while it waits.
    */
@@ -212,7 +226,7 @@ describe('extract wrapper: effort and permissions of the extraction run', () => 
     const script = [
       prelude,
       `source "${WRAPPER}" && ccrecall-extract`,
-      `printf 'CALLER\\t%s\\n' "\${CLAUDE_CODE_EFFORT_LEVEL-${UNSET}}"`,
+      `printf 'CALLER\\t%s\\t%s\\n' "\${CLAUDE_CODE_EFFORT_LEVEL-${UNSET}}" "\${CCRECALL_EXTRACT_EFFORT-${UNSET}}"`,
     ].join('\n')
     return spawnSync(shell, [...flags, script], {
       encoding: 'utf8',
@@ -238,10 +252,20 @@ describe('extract wrapper: effort and permissions of the extraction run', () => 
     return raw.split('\0').slice(0, -1)
   }
 
-  function callerAfter(stdout: string): string {
+  /** What the caller shell holds after the wrapper returns. */
+  function callerAfter(stdout: string): { effort: string; extractEffort: string } {
     const line = stdout.split('\n').find((l) => l.startsWith('CALLER\t'))
     expect(line, `no CALLER line in:\n${stdout}`).toBeDefined()
-    return line!.split('\t')[1]
+    const [, effort, extractEffort] = line!.split('\t')
+    return { effort, extractEffort }
+  }
+
+  /** The levels a not-a-level warning offers, read back off the warning itself. */
+  function levelsOffered(stderr: string): string[] {
+    const line = stderr.split('\n').find((l) => l.includes(NOT_A_LEVEL))
+    expect(line, `no not-a-level warning in:\n${stderr}`).toBeDefined()
+    const list = line!.slice(line!.indexOf(NOT_A_LEVEL) + NOT_A_LEVEL.length).split(' — ')[0]
+    return list.split(', ')
   }
 
   describe.each(SHELLS)('sourced into %s', (shell) => {
@@ -258,14 +282,60 @@ describe('extract wrapper: effort and permissions of the extraction run', () => 
     })
 
     it('runs extraction at high effort when the caller set no effort at all', async () => {
-      runExtract(shell)
+      const r = runExtract(shell)
       for (const effort of await effortSeen('extract')) expect(effort).toBe('high')
+      expect(r.stdout).toContain('extracting memories from session (effort high)')
+      expect(r.stderr).not.toContain(NOT_A_LEVEL)
     })
 
     it("leaves the interactive session and the caller shell at the caller's effort", async () => {
       const r = runExtract(shell, 'export CLAUDE_CODE_EFFORT_LEVEL=max')
       expect(await effortSeen('interactive')).toEqual(['max'])
-      expect(callerAfter(r.stdout)).toBe('max')
+      expect(callerAfter(r.stdout).effort).toBe('max')
+    })
+
+    it('runs extraction at the level CCRECALL_EXTRACT_EFFORT names, over the caller exporting max', async () => {
+      // Without its own variable the only way to move the extraction effort
+      // was editing the wrapper. CLAUDE_CODE_EFFORT_LEVEL cannot be the knob:
+      // it is the caller's interactive setting, the very value the pin exists
+      // to override.
+      const r = runExtract(
+        shell,
+        'export CLAUDE_CODE_EFFORT_LEVEL=max\nexport CCRECALL_EXTRACT_EFFORT=medium',
+      )
+      for (const effort of await effortSeen('extract')) expect(effort).toBe('medium')
+      expect(r.stdout).toContain('extracting memories from session (effort medium)')
+      expect(await effortSeen('interactive')).toEqual(['max'])
+      expect(callerAfter(r.stdout)).toEqual({ effort: 'max', extractEffort: 'medium' })
+    })
+
+    it('falls back to high, and says so, when CCRECALL_EXTRACT_EFFORT is not a level', async () => {
+      // Passed on unchecked, a typo would reach Claude Code as its own effort
+      // setting, and the start message would name a level the run never got.
+      const r = runExtract(shell, 'export CCRECALL_EXTRACT_EFFORT=hgih')
+      for (const effort of await effortSeen('extract')) expect(effort).toBe('high')
+      expect(r.stdout).toContain('extracting memories from session (effort high)')
+      expect(levelsOffered(r.stderr)).toEqual(LEVELS)
+      // The value itself is not echoed: it goes to a terminal, and nothing
+      // has vetted what a variable from the environment holds.
+      expect(r.stderr).not.toContain('hgih')
+    })
+
+    it('reaches extraction under a caller with errexit and a value that is not a level', async () => {
+      // This file is sourced into the user's shell and runs under its options.
+      // Under errexit, a helper that reported the bad value through a non-zero
+      // status would abort the shell at the assignment, before extraction.
+      runExtract(shell, 'set -o errexit\nexport CCRECALL_EXTRACT_EFFORT=hgih')
+      for (const effort of await effortSeen('extract')) expect(effort).toBe('high')
+    })
+
+    it('reaches extraction under a caller with nounset and CCRECALL_EXTRACT_EFFORT unset', async () => {
+      // The ordinary install sets no CCRECALL_EXTRACT_EFFORT at all, and under
+      // nounset a bare $CCRECALL_EXTRACT_EFFORT aborts the substitution that
+      // reads it: claude then gets an empty effort, not high.
+      const r = runExtract(shell, 'set -o nounset')
+      for (const effort of await effortSeen('extract')) expect(effort).toBe('high')
+      expect(r.stderr).not.toMatch(/unbound variable|parameter not set/)
     })
 
     it("starts extraction with only ccRecall's MCP server and the two tools it uses", async () => {
@@ -277,6 +347,30 @@ describe('extract wrapper: effort and permissions of the extraction run', () => 
       runExtract(shell)
       expect(await argvSeen('interactive')).toContain('--dangerously-skip-permissions')
     })
+  })
+
+  it.each(LEVELS)('passes CCRECALL_EXTRACT_EFFORT=%s through to the run', async (level) => {
+    // Every level the warning offers must be one the check accepts. bash only:
+    // the check is a literal `case`, which reads the same in zsh, while the
+    // shell-dependent parts — prefix assignment, errexit, nounset — are
+    // covered under both shells above.
+    const r = runExtract('bash', `export CCRECALL_EXTRACT_EFFORT=${level}`)
+    for (const effort of await effortSeen('extract')) expect(effort).toBe(level)
+    expect(r.stdout).toContain(`extracting memories from session (effort ${level})`)
+    expect(r.stderr).not.toContain(NOT_A_LEVEL)
+  })
+
+  it('does not take auto, which Claude Code runs at high rather than the model default', async () => {
+    // Claude Code documents `auto` for CLAUDE_CODE_EFFORT_LEVEL as "use the
+    // model default". Read off the Stop hook's effort.level on 2.1.300, it ran
+    // Sonnet 5.5 at high three times out of three, with user settings, without
+    // them, and with settings saying low, while an unset variable ran at the
+    // model default, medium. Passed through, the start message would say
+    // "auto" for a run at high. If a later Claude Code makes `auto` mean what
+    // it says, this is the test to revisit.
+    const r = runExtract('bash', 'export CCRECALL_EXTRACT_EFFORT=auto')
+    for (const effort of await effortSeen('extract')) expect(effort).toBe('high')
+    expect(r.stderr).toContain(NOT_A_LEVEL)
   })
 
   it('names, in both copies of the prompt, the exact tools the run allows', async () => {

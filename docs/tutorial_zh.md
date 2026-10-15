@@ -158,6 +158,8 @@ alias ccdm='ccrecall-extract'
 
 **單次跳過萃取：** `CCRECALL_SKIP_EXTRACT=1 ccrecall-extract`
 
+**調整萃取的 effort：** 在 shell 設定檔加上 `export CCRECALL_EXTRACT_EFFORT=medium`（可選 `low`、`medium`、`high`、`xhigh`、`max`，預設 `high`）。等級越低跑得越快，我們量測時存下的記憶也比較少。如果你用 `ANTHROPIC_API_KEY` 付費，選 `max` 之前請先調高 `CCRECALL_EXTRACT_MAX_BUDGET_USD`（每次抽取的費用上限，預設 `0.50` 美元）：我們量到的 `max` 每一次都超過這個數字。
+
 **不裝這步的話**，記憶只在你 session 中手動呼叫 `recall_save` 時才會增長。Extraction wrapper 是讓記憶層自動成長的關鍵。
 
 ---
