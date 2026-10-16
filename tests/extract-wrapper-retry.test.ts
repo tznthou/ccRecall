@@ -25,7 +25,7 @@ import os from 'node:os'
 const WRAPPER = path.join(__dirname, '..', 'scripts', 'post-session-extract.sh')
 const HAS_SQLITE = spawnSync('sh', ['-c', 'command -v sqlite3'], { encoding: 'utf8' }).status === 0
 
-const SID = '170347d4-b2ba-4659-849a-7e9d14acc301'
+const SID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 const OTHER_SID = '99999999-1111-2222-3333-444444444444'
 
 function cleanEnv(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
