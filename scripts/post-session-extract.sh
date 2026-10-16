@@ -501,7 +501,7 @@ ${prompt}"
   # zsh and bash 4+ are both fine with the bare form, which is why this only
   # shows up for a bash-3.2 caller who sets -u. Verified across all three.
 
-  # Haiku is prompted to emit NO text — only its recall_save MCP tool calls
+  # The model is prompted to emit NO text — only its recall_save MCP tool calls
   # carry the result, and those travel over MCP, never through stdout. Small
   # models sometimes ignore that and print a stray summary that can even drift
   # to an unrelated language (a Korean report was observed 2026-06-27), which
@@ -522,7 +522,7 @@ ${prompt}"
   # SIGKILL/crash is bounded by the age sweep below (a capture older than 60
   # minutes cannot be live — extraction runs take minutes — so sweeping is
   # concurrency-safe where a blanket rm of a fixed name was not). No byte cap
-  # on the capture: model output is already bounded by Haiku's output-token
+  # on the capture: model output is already bounded by its output-token
   # ceiling. Only stderr — claude's own diagnostics — is captured, scrubbed,
   # and logged.
   #
