@@ -98,7 +98,7 @@ sweep journal 表；那條管線已移除。）
 
 `src/api/routes.ts`
 
-Memory 不是 watcher 建的。Watcher 把 **session summary** 寫進 `sessions` 表；memory 由 post-session extraction wrapper（Haiku → MCP `recall_save`）與手動 `recall_save` 寫入。`/session/end` 做的事更窄但承重：確認剛結束的 session 已被索引，miss 時觸發 rescue reindex。這 endpoint 由 SessionEnd hook `hooks/session-end.mjs` 觸發。
+Memory 不是 watcher 建的。Watcher 把 **session summary** 寫進 `sessions` 表；memory 由 post-session extraction wrapper（`claude -p` → MCP `recall_save`）與手動 `recall_save` 寫入。`/session/end` 做的事更窄但承重：確認剛結束的 session 已被索引，miss 時觸發 rescue reindex。這 endpoint 由 SessionEnd hook `hooks/session-end.mjs` 觸發。
 
 （歷史：v0.3.0 到 v0.4.x 這個 endpoint 還會把規則計分的候選 harvest 進 `session_journal` 審閱佇列。佇列史上零 promotion，post-session extraction 又讓它徹底多餘——v0.5.0 整條管線移除。下方「Trust grade」一節留了墓誌銘。）
 

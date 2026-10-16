@@ -99,7 +99,7 @@ It does *not* share the watcher's single-flight. Here's why: the watcher writes 
 
 `src/api/routes.ts`
 
-Memories don't get created by the watcher. The watcher writes **session summaries** (into the `sessions` table); memories are written by the post-session extraction wrapper (Haiku → MCP `recall_save`) and by manual `recall_save` calls. What `/session/end` does is narrower and load-bearing: confirm the just-ended session is indexed, running a rescue reindex on a miss. That endpoint is driven by the SessionEnd hook `hooks/session-end.mjs`.
+Memories don't get created by the watcher. The watcher writes **session summaries** (into the `sessions` table); memories are written by the post-session extraction wrapper (`claude -p` → MCP `recall_save`) and by manual `recall_save` calls. What `/session/end` does is narrower and load-bearing: confirm the just-ended session is indexed, running a rescue reindex on a miss. That endpoint is driven by the SessionEnd hook `hooks/session-end.mjs`.
 
 (History: from v0.3.0 to v0.4.x this endpoint also harvested a rule-scored candidate into a `session_journal` review queue. The queue recorded zero promotions in its entire history, and post-session extraction made it redundant — v0.5.0 removed the whole pipeline. The "Trust grade" section below keeps the epitaph.)
 
