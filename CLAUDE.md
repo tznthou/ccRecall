@@ -37,26 +37,22 @@
   MCP recall_query/context ─────── WAL 直接開檔 ─────────────────────────────┐ │
                                                                             ↓ ↓
 寫（產生記憶）                                            SQLite + FTS5 ├── memories
-  ccrecall-extract wrapper → Haiku → MCP recall_save ──→                ├── memory_topics
+  ccrecall-extract wrapper → claude -p → MCP recall_save ──→            ├── memory_topics
   手動 recall_save ────────────────────────────────→                    ├── knowledge_map
                                                                         ├── injection_log
 索引（唯讀來源）                                                        └── sessions/messages
   ~/.claude/**/*.jsonl → watcher → scanner → parser → summarizer → indexer ↑
 ```
 
-⚠️ **摘要引擎（summarizer）是規則式零成本，但記憶抽取（extraction）走 Haiku**——
-兩件事，別混為一談。SessionEnd hook 只標記結束，不抽取；抽取只在 `ccrecall-extract`
-（zsh alias `ccdm`）收尾時跑。
+⚠️ **摘要引擎（summarizer）是規則式零成本，但記憶抽取（extraction）走 LLM**（`claude -p`，
+模型與 effort 以 `scripts/post-session-extract.sh` 為準）——兩件事，別混為一談。SessionEnd
+hook 只標記結束，不抽取；抽取只在 `ccrecall-extract`（zsh alias `ccdm`）收尾時跑。
 
 ## 測試誠信
 
 - 測試紅了先修程式，禁止為通過測試而改斷言
 - 先寫測試、後寫實作
 - 測試不碰生產資料：使用 mkdtemp 隔離，不操作真實 `~/.claude/`
-
-## 接續
-
-- 新 session 開始前，先讀取 `.claude/RESUME.md`
 
 ## 相關專案
 
@@ -75,16 +71,11 @@
 
 六個模組全部就位，`src/core/` 是唯一權威版本；不要回頭去 ccRewind 找。
 
-| 模組 | 現在的位置 | LOC | 測試 |
-|------|-----------|-----|------|
-| types | `src/core/types.ts` | 280 | — |
-| parser | `src/core/parser.ts` | 241 | `tests/parser.test.ts` |
-| scanner | `src/core/scanner.ts` | 132 | `tests/scanner.test.ts` |
-| summarizer | `src/core/summarizer.ts` | 476 | `tests/summarizer.test.ts` |
-| database | `src/core/database.ts` | 2601 | `tests/database.test.ts` |
-| indexer | `src/core/indexer.ts` | 271 | `tests/indexer.test.ts` |
-
-抽取後 ccRecall 自己長出來的：`memory-service` / `compression` / `token-budget` /
-`topic-extractor` / `watcher` / `integrity-monitor` / `maintenance-coordinator` /
-`recall-telemetry` / `project-id` / `log-safe`。零 Electron 依賴，外部依賴只有
-better-sqlite3。
+| 模組 | 現在的位置 | 測試 |
+|------|-----------|------|
+| types | `src/core/types.ts` | — |
+| parser | `src/core/parser.ts` | `tests/parser.test.ts` |
+| scanner | `src/core/scanner.ts` | `tests/scanner.test.ts` |
+| summarizer | `src/core/summarizer.ts` | `tests/summarizer.test.ts` |
+| database | `src/core/database.ts` | `tests/database.test.ts` |
+| indexer | `src/core/indexer.ts` | `tests/indexer.test.ts` |
