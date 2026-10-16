@@ -266,7 +266,7 @@ more like an iteration counter than a strict SemVer major).
 ### Added
 
 - **Extraction retries once when it produced nothing usable.** The silent-miss
-  marker shipped in 0.7.x could see the failure but did nothing about it, so a
+  marker shipped in 0.6.0 could see the failure but did nothing about it, so a
   run that printed `recall_save(...)` as text instead of invoking the tool left
   its memories outside the database until somebody read the terminal. Re-running
   one such session against the **same model** produced four memories on the
@@ -297,8 +297,8 @@ more like an iteration counter than a strict SemVer major).
   above catches both of those cases anyway.
 
   It costs 2.9× the wall time (927s → 2712s over 11 transcripts) and 2× the
-  per-token price. Extraction runs after the session ends, in the background,
-  with nobody waiting on it.
+  per-token price. Extraction runs after the session ends, in the foreground
+  of the same terminal, which stays occupied until it finishes.
 
   Worth recording honestly: a first batch of 4 transcripts showed 44% vs 90%,
   and a second independent batch showed 65% vs 79% — not significant on its own
