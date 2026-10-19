@@ -18,25 +18,26 @@ more like an iteration counter than a strict SemVer major).
 - **Skill files no longer crowd your conversation out of extraction.** When a
   skill loads, by slash command or by Claude's own Skill tool call, Claude Code
   writes the whole skill file into the transcript as a message flagged
-  `isMeta`, and extraction read it as you speaking. Over 29 extractions from
-  October 14 to 19, these bodies were 20–86% of the transcript, 48% at the
-  median. In one four-hour session a single 290 KB skill body filled 96% of the
-  200 KB that extraction reads, so the model saw the first 4% of the
-  conversation and saved a setting that had been tried and withdrawn later that
-  day. Flagged records now stay out, and so do Claude Code's other flagged
-  notices: local-command caveats, image sizes, classifier and usage-limit
-  notices. What you type after a slash command is recorded on its own and is
-  still read, as are messages from another Claude session, which Claude Code
-  flags the same way. `ccmem-backfill` uses the same filter.
+  `isMeta`, and extraction read it as you speaking. How much of the transcript
+  that takes depends on how many skills a session loads. In the maintainer's 29
+  extractions from October 14 to 19, skill bodies were 20–86% of it, 48% at the
+  median; in one of the maintainer's four-hour sessions a single 290 KB skill
+  body filled 96% of the 200 KB that extraction reads, so the model saw the
+  first 4% of the conversation and saved a setting that had been tried and
+  withdrawn later that day. Flagged records now stay out, and so do Claude
+  Code's other flagged notices: local-command caveats, image sizes, classifier
+  and usage-limit notices. What you type after a slash command is recorded on
+  its own and is still read, as are messages from another Claude session, which
+  Claude Code flags the same way. `ccmem-backfill` uses the same filter.
 
   The wrapper is sourced when a shell starts, so the change reaches a terminal
   only once it is reopened or the wrapper is sourced again. Nothing in the
   daemon or the MCP server changed, so neither needs a restart; the daemon
   reports the version it started with until it next restarts.
 
-  Each extraction now sends less text, so a run costs less with an
-  `ANTHROPIC_API_KEY` and uses less of a subscription's quota. We have not
-  measured by how much.
+  If your sessions load skills, each extraction now sends less text, so a run
+  costs less with an `ANTHROPIC_API_KEY` and uses less of a subscription's
+  quota. We have not measured by how much.
 
   Sessions extracted before you upgrade keep the memories they got. To read one
   again with the new filter, run `ccmem-backfill --force <session-id>` while its
