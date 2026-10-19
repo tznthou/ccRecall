@@ -11,7 +11,7 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
-## [Unreleased]
+## [0.10.1] — 2026-10-19
 
 ### Fixed
 
@@ -30,7 +30,21 @@ more like an iteration counter than a strict SemVer major).
   flags the same way. `ccmem-backfill` uses the same filter.
 
   The wrapper is sourced when a shell starts, so the change reaches a terminal
-  only once it is reopened or the wrapper is sourced again.
+  only once it is reopened or the wrapper is sourced again. Nothing in the
+  daemon or the MCP server changed, so neither needs a restart; the daemon
+  reports the version it started with until it next restarts.
+
+  Each extraction now sends less text, so a run costs less with an
+  `ANTHROPIC_API_KEY` and uses less of a subscription's quota. We have not
+  measured by how much.
+
+  Sessions extracted before you upgrade keep the memories they got. To read one
+  again with the new filter, run `ccmem-backfill --force <session-id>` while its
+  transcript still exists (Claude Code deletes transcripts after 30 days by
+  default); some of the memories it saves may repeat ones the session already
+  has. In the maintainer's transcripts from the last 30 days, 8 of 183 sessions
+  were longer than the 200 KB that extraction reads; with the new filter, none
+  are.
 
 ## [0.10.0] — 2026-10-16
 
