@@ -468,4 +468,32 @@ describe('backfill-extract.sh', () => {
     expect(sent).toContain('--- human [aaaaaaaa-bbbb-cccc-dddd-000000000002] ---\nsent while busy')
     expect(sent).toContain('--- side-agent note [aaaaaaaa-bbbb-cccc-dddd-000000000003] ---')
   })
+
+  it('leaves skill bodies out and keeps what the user typed with the command, as the wrapper does', async () => {
+    // Same end-to-end check for the isMeta exclusion added 2026-10-19.
+    await writeTranscript([
+      msg('first turn', runFrom),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'aaaaaaaa-bbbb-cccc-dddd-000000000004',
+        origin: { kind: 'human' },
+        message: {
+          content: '<command-message>example-skill</command-message>\n<command-name>/example-skill</command-name>\n<command-args>only the parser</command-args>',
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'aaaaaaaa-bbbb-cccc-dddd-000000000005',
+        isMeta: true,
+        message: { content: [{ type: 'text', text: 'Base directory for this skill: /tmp/skills/example-skill\n\n# Example Skill\n\nSKILL BODY LINE' }] },
+      }),
+    ])
+
+    const r = runScript([SESSION_ID], isolatedEnv())
+    expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0)
+
+    const sent = await readFile(path.join(stubOut, 'stdin.txt'), 'utf8')
+    expect(sent).toContain('<command-args>only the parser</command-args>')
+    expect(sent).not.toContain('SKILL BODY LINE')
+  })
 })

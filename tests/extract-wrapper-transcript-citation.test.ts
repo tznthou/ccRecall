@@ -390,3 +390,122 @@ describe('extract wrapper: messages that arrive while Claude is working', () => 
     expect(fallback![1]).toContain('peer session')
   })
 })
+
+// 2026-10-19 — records Claude Code flags `isMeta`.
+//
+// Loading a skill, by slash command or by the model's own Skill tool call,
+// writes the whole skill file into the transcript as a `user` record flagged
+// `isMeta`, and the filter read it as the user speaking. Over the 29
+// extractions of 10/14–10/19 those bodies were 20–86% of the transcript
+// (median 48%). One body of 290 KB filled 96% of the 200 KB window of a
+// four-hour session: the model saw the first 4% of the conversation and saved
+// a setting that was tried and withdrawn after the cut.
+//
+// What the user typed after a slash command is in a separate, unflagged
+// record (`<command-args>`), so it stays. Messages from another Claude session
+// are flagged `isMeta` too (12 of 12 on disk that day) and keep their header.
+
+const ARGS = 'only touch the parser'
+
+/** The record a slash command leaves: what the user typed, not flagged. */
+function commandLine(uuid: string, name: string, args: string): string {
+  return JSON.stringify({
+    type: 'user',
+    uuid,
+    origin: { kind: 'human' },
+    message: {
+      content: `<command-message>${name}</command-message>\n<command-name>/${name}</command-name>\n<command-args>${args}</command-args>`,
+    },
+  })
+}
+
+function metaLine(uuid: string, content: unknown, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({ type: 'user', uuid, isMeta: true, message: { content }, ...extra })
+}
+
+describe('extract wrapper: skill bodies and other records flagged isMeta', () => {
+  let dir: string
+  let filter: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'ccrecall-meta-'))
+    filter = await extractFilter()
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  async function fixture(lines: string[]): Promise<string> {
+    const p = path.join(dir, 'session.jsonl')
+    await writeFile(p, lines.join('\n') + '\n', 'utf8')
+    return p
+  }
+
+  const headers = (out: string) => out.split('\n').filter(l => l.startsWith('--- '))
+
+  it('leaves out the skill body a slash command loads, and keeps what the user typed with it', async () => {
+    const out = runFilter(filter, await fixture([
+      commandLine(UUID, 'example-skill', ARGS),
+      metaLine(UUID2, [{
+        type: 'text',
+        text: 'Base directory for this skill: /tmp/skills/example-skill\n\n# Example Skill\n\n' +
+          `Step 1: read the plan before touching code.\n\n\nARGUMENTS: ${ARGS}`,
+      }]),
+      assistantLine(UUID3, 'reading the plan first'),
+    ]))
+    expect(headers(out)).toEqual([`--- human [${UUID}] ---`, `--- assistant [${UUID3}] ---`])
+    expect(out).toContain(`<command-args>${ARGS}</command-args>`)
+    expect(out).not.toContain('Base directory for this skill')
+    expect(out).not.toContain('Step 1: read the plan')
+    // Once, not twice: the body repeats the arguments after `ARGUMENTS:`.
+    expect(out.split(ARGS)).toHaveLength(2)
+  })
+
+  it('leaves out a skill body the model loads through the Skill tool', async () => {
+    // Claude Code's built-in skills have no "Base directory" line, so the flag,
+    // not the wording, has to decide.
+    const out = runFilter(filter, await fixture([
+      JSON.stringify({
+        type: 'assistant',
+        uuid: UUID,
+        message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Skill', input: { skill: 'example' } }] },
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: UUID2,
+        message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Launching skill: example' }] },
+      }),
+      metaLine(UUID3, [{ type: 'text', text: '# Example Config Skill\n\nChange settings by editing the settings file.' }], {
+        sourceToolUseID: 'toolu_1',
+      }),
+    ]))
+    expect(out.trim()).toBe('')
+  })
+
+  it("leaves out Claude Code's other flagged notices and keeps the turns around them", async () => {
+    const out = runFilter(filter, await fixture([
+      metaLine(UUID, '<local-command-caveat>The command below was run directly in Claude Code.</local-command-caveat>'),
+      metaLine(UUID2, '[Image: original 2400x3230, displayed at 1486x2000. Multiply coordinates by 1.62 to map to original image.]'),
+      metaLine(UUID3, 'Your response above was stopped by a safety classifier — this is not a tool or API error.', {
+        refusedMessageId: 'msg_1',
+      }),
+      JSON.stringify({ type: 'user', uuid: UUID4, isMeta: false, message: { content: 'an ordinary turn' } }),
+    ]))
+    expect(headers(out)).toEqual([`--- human [${UUID4}] ---`])
+    expect(out).toContain('an ordinary turn')
+  })
+
+  it('still includes a message from another Claude session, which Claude Code flags isMeta', async () => {
+    // Taking the flag at its word would drop these along with the skill
+    // bodies, and with them the peer header added on 2026-10-15.
+    const out = runFilter(filter, await fixture([
+      metaLine(UUID, 'Another Claude session sent a message:\n<agent-message from="abc123">\nport 8765 is free again\n</agent-message>', {
+        promptSource: 'system',
+        origin: { kind: 'peer', from: 'abc123', name: 'general-purpose' },
+      }),
+    ]))
+    expect(headers(out)).toEqual([`--- peer session [${UUID}] ---`])
+    expect(out).toContain('port 8765 is free again')
+  })
+})
