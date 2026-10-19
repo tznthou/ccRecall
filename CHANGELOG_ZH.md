@@ -14,10 +14,11 @@ ccRecall 的重要版本變更記錄在這裡。
 
 - **skill 本文不再把對話擠出抽取範圍。** 載入 skill 時，不論是打 slash command 還是
   Claude 自己呼叫 Skill tool，Claude Code 都會把整份 skill 檔寫進 transcript，標成
-  `isMeta`，抽取卻把它當成你說的話。10/14 到 10/19 的 29 次抽取裡，這些本文佔了
-  transcript 的 20–86%，中位數 48%。有一場四小時的 session，單一份 290 KB 的 skill 本文
-  就佔掉抽取能讀的 200 KB 的 96%，模型只看到對話的前 4%，存下的設定其實當天稍晚就試過又
-  撤回了。現在標了 `isMeta` 的紀錄不再送進抽取，Claude Code 其他同樣標記的通知也一樣：
+  `isMeta`，抽取卻把它當成你說的話。佔多少要看一場載入了幾個 skill：維護者 10/14 到
+  10/19 的 29 次抽取裡，這些本文佔了 transcript 的 20–86%，中位數 48%；
+  維護者有一場四小時的 session，單一份 290 KB 的 skill 本文就佔掉抽取能讀的 200 KB 的
+  96%，模型只看到對話的前 4%，存下的設定其實當天稍晚就試過又撤回了。
+  現在標了 `isMeta` 的紀錄不再送進抽取，Claude Code 其他同樣標記的通知也一樣：
   本機指令的 caveat、圖片尺寸、分類器和用量上限的通知。你在 slash command 後面打的內容
   另外記成一筆，照樣會讀；別的 Claude session 傳來的訊息也被標成 `isMeta`，同樣照讀。
   `ccmem-backfill` 用的是同一個 filter。
@@ -25,8 +26,8 @@ ccRecall 的重要版本變更記錄在這裡。
   wrapper 是開 shell 時 source 進來的，要重開終端機或重新 source 才會生效。daemon 和
   MCP server 都沒有改，不用重啟；只是 daemon 重啟之前，回報的仍是它啟動時的版號。
 
-  每次抽取送出的文字變少了：用 `ANTHROPIC_API_KEY` 付費的，每次花費會降低；用訂閱方案
-  的，額度用得比較少。實際少多少，我們沒有量。
+  如果你的 session 會載入 skill，每次抽取送出的文字就會變少：用 `ANTHROPIC_API_KEY`
+  付費的，每次花費會降低；用訂閱方案的，額度用得比較少。實際少多少，我們沒有量。
 
   升級前已經抽取過的 session，記憶維持原樣。想用新的 filter 重讀某一場，可以趁 transcript
   還在的時候跑 `ccmem-backfill --force <session-id>`（Claude Code 預設 30 天後刪除
