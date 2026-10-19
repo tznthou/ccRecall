@@ -394,13 +394,26 @@ ccrecall-extract() {
       # "human" like the user's own words, so it is recognised by the sentence
       # Claude Code opens every note with (118 of 118 that day); if that wording
       # changes, notes fall back to the human header and only the label is lost.
+      #
+      # 2026-10-19: a `user` record flagged isMeta is not the user speaking.
+      # Loading a skill, by slash command or by the model's Skill tool call,
+      # writes the whole skill file as one: over the 29 extractions of
+      # 10/14-10/19 those bodies were 20-86% of the transcript (median 48%), and
+      # one 290 KB body filled 96% of the 200 KB cap below, so that run saw the
+      # first 4% of a four-hour session. The rest of the flagged records are
+      # notices: local-command caveats, image sizes, classifier and usage-limit
+      # notices. What the user typed after a slash command is a separate,
+      # unflagged record (<command-args>) and stays. Messages from another
+      # Claude session are flagged too (12 of 12 on disk that day), so a peer
+      # origin outranks the flag.
       session_transcript=$(jq -R -r '
         fromjson? // empty |
         (((.uuid | strings) // "") | gsub("[^A-Za-z0-9-]"; "")) as $u |
         (if $u == "" then "" else " [" + $u + "]" end) as $cite |
         if .type == "assistant" then
           ["assistant", (.message | objects | .content | arrays)]
-        elif .type == "user" then
+        elif .type == "user"
+             and (.isMeta != true or ((.origin | objects | .kind) // "") == "peer") then
           [(if ((.origin | objects | .kind) // "") == "peer" then "peer session" else "human" end),
            (.message | objects | .content)]
         elif .type == "attachment"

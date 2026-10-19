@@ -8,6 +8,22 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [Unreleased]
+
+### 修正
+
+- **skill 本文不再把對話擠出抽取範圍。** 載入 skill 時，不論是打 slash command 還是
+  Claude 自己呼叫 Skill tool，Claude Code 都會把整份 skill 檔寫進 transcript，標成
+  `isMeta`，抽取卻把它當成你說的話。10/14 到 10/19 的 29 次抽取裡，這些本文佔了
+  transcript 的 20–86%，中位數 48%。有一場四小時的 session，單一份 290 KB 的 skill 本文
+  就佔掉抽取能讀的 200 KB 的 96%，模型只看到對話的前 4%，存下的設定其實當天稍晚就試過又
+  撤回了。現在標了 `isMeta` 的紀錄不再送進抽取，Claude Code 其他同樣標記的通知也一樣：
+  本機指令的 caveat、圖片尺寸、分類器和用量上限的通知。你在 slash command 後面打的內容
+  另外記成一筆，照樣會讀；別的 Claude session 傳來的訊息也被標成 `isMeta`，同樣照讀。
+  `ccmem-backfill` 用的是同一個 filter。
+
+  wrapper 是開 shell 時 source 進來的，要重開終端機或重新 source 才會生效。
+
 ## [0.10.0] — 2026-10-16
 
 ### 新增
