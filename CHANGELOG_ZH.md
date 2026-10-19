@@ -8,7 +8,7 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
-## [Unreleased]
+## [0.10.1] — 2026-10-19
 
 ### 修正
 
@@ -22,7 +22,16 @@ ccRecall 的重要版本變更記錄在這裡。
   另外記成一筆，照樣會讀；別的 Claude session 傳來的訊息也被標成 `isMeta`，同樣照讀。
   `ccmem-backfill` 用的是同一個 filter。
 
-  wrapper 是開 shell 時 source 進來的，要重開終端機或重新 source 才會生效。
+  wrapper 是開 shell 時 source 進來的，要重開終端機或重新 source 才會生效。daemon 和
+  MCP server 都沒有改，不用重啟；只是 daemon 重啟之前，回報的仍是它啟動時的版號。
+
+  每次抽取送出的文字變少了：用 `ANTHROPIC_API_KEY` 付費的，每次花費會降低；用訂閱方案
+  的，額度用得比較少。實際少多少，我們沒有量。
+
+  升級前已經抽取過的 session，記憶維持原樣。想用新的 filter 重讀某一場，可以趁 transcript
+  還在的時候跑 `ccmem-backfill --force <session-id>`（Claude Code 預設 30 天後刪除
+  transcript），不過存下的記憶可能跟那場原有的重複。以維護者近 30 天的 transcript 來說，
+  183 場裡有 8 場超過抽取讀得到的 200 KB；換成新的 filter 之後，一場都沒有。
 
 ## [0.10.0] — 2026-10-16
 
