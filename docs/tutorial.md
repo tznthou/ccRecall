@@ -18,7 +18,7 @@ This tutorial assumes you have:
 
 - **Claude Code CLI** installed ([official guide](https://docs.anthropic.com/claude-code) if not)
 - **macOS** for auto-start (Linux / Windows for the daemon itself is cross-platform; auto-start is planned for a future release)
-- **Node.js 22 or 24** (`node --version` to check)
+- **Node.js 22, or 24.22 or later** (`node --version` to check)
 - Basic terminal comfort
 
 You don't need to know SQLite, FTS5, or MCP internals — they'll come up as needed.

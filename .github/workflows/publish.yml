@@ -33,18 +33,21 @@ jobs:
         with:
           version: 10
 
-      # Build and test on the version in .node-version, the one development
-      # runs on and one of the two lines ci.yml tests. Until 2026-10 this step
-      # was held on 22: on the Node 24 of the time the v0.7.2 run died before
-      # reporting any test result — better-sqlite3's cleanup hook fired
-      # against a torn-down environment as tinypool recycled workers
+      # Build and test on the latest patch of the line in .node-version, the
+      # one development runs on and one of the two lines ci.yml tests. Until
+      # 2026-10 this step was held on 22: v0.7.2's run died on the runner's
+      # cached Node 24.19.0 before reporting any test result
       # (node::RemoveEnvironmentCleanupHook, hooks.cc:142, "Assertion failed:
-      # (env) != nullptr"), on two consecutive runs. ci.yml now runs the full
-      # suite on Node 24 on Linux and macOS for every pull request, so a
-      # recurrence shows up there before a tag ever reaches this job.
+      # (env) != nullptr"), while v0.7.1 had passed on 24.18.0. 24.19.0 added
+      # cleanup hooks to node::ObjectWrap without the registry that tracks
+      # them, so better-sqlite3 aborts when a statement is garbage-collected
+      # (nodejs/node#65446); 24.22.0 added the registry. check-latest keeps
+      # this step off a cached patch from that range, and engines starts the
+      # 24 line at 24.22.0.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.node-version'
+          check-latest: true
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile

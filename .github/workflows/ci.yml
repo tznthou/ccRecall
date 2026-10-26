@@ -40,9 +40,16 @@ jobs:
         with:
           version: 10
 
+      # check-latest: without it setup-node takes whatever patch the runner
+      # image cached. In 2026-10 that was 24.21.0, one of the 24.19.0–24.21.x
+      # releases that abort better-sqlite3 during garbage collection
+      # (nodejs/node#65446, fixed in 24.22.0), so the Node 24 legs crashed on
+      # a runtime outside the engines range. Testing the newest patch of each
+      # line is also testing the one with the latest security fixes.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
+          check-latest: true
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile

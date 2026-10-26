@@ -28,7 +28,7 @@
     "eval:demo": "tsx evaluation/demo.ts"
   },
   "engines": {
-    "node": "^22.0.0 || ^24.0.0"
+    "node": "^22.0.0 || ^24.22.0"
   },
   "keywords": [
     "claude-code",
