@@ -8,7 +8,7 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
-## [Unreleased]
+## [0.11.0] — 2026-10-26
 
 ### 安全
 
@@ -28,6 +28,9 @@ ccRecall 的重要版本變更記錄在這裡。
   Node 重新編譯，後者讓 daemon 用新版重啟。沒有重編的話，daemon 和 MCP server 都載不進
   這個模組，會悄悄停掉：記憶不再注入，每場 session 結束時的抽取也會跳過。維護者自己為了
   資安升到 Node.js 24 之後，daemon 就這樣停了兩天。
+
+  這版沒有 migration，daemon、MCP server、hooks 和 wrapper 都沒有改，都不用重啟；只是
+  daemon 重啟之前，回報的仍是它啟動時的版號。
 
 ## [0.10.1] — 2026-10-19
 
