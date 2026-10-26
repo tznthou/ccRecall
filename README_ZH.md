@@ -156,7 +156,7 @@ sequenceDiagram
 
 | 技術 | 用途 | 備註 |
 |------|------|------|
-| Node.js 20–22 + TypeScript | 執行環境 | ES modules、strict mode |
+| Node.js 22 / 24 + TypeScript | 執行環境 | ES modules、strict mode |
 | better-sqlite3 | 資料庫 | 同步 API、零外部依賴 |
 | FTS5 | 全文搜尋 | SQLite 內建、trigram tokenizer，短 token / 中英混合查詢透過 LIKE fallback 補齊 |
 | 原生 `http` | HTTP 伺服器 | 不用 Express——最小表面積、僅 localhost |
@@ -172,7 +172,7 @@ sequenceDiagram
 
 ### 環境需求
 
-- Node.js `>=20.0.0,<23.0.0`
+- Node.js 22 或 24（`^22.0.0 || ^24.0.0`），兩條都是還有安全更新的 LTS
 - pnpm
 
 ### 安裝

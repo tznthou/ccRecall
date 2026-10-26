@@ -15,17 +15,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Ubuntu covers Node engine range (20/22). macOS adds coverage for the
-        # darwin-only install-daemon / plist paths; ubuntu skips those via
-        # `if (process.platform !== 'darwin') return` inside the tests.
+        # Ubuntu covers the Node engine range (22/24), both LTS lines that still
+        # get security fixes. Node 20 left with its end-of-life on 2026-04-30.
+        # macOS adds coverage for the darwin-only install-daemon / plist paths;
+        # ubuntu skips those via `if (process.platform !== 'darwin') return`
+        # inside the tests. It runs 24, the version in .node-version.
         # Keep only one macOS leg to limit spend — macos runners bill ~10x.
+        # Ubuntu is pinned to 24.04, not ubuntu-latest, so a runner image
+        # switch arrives as a reviewed change instead of a red build that no
+        # code change caused.
         include:
-          - os: ubuntu-latest
-            node: '20'
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             node: '22'
+          - os: ubuntu-24.04
+            node: '24'
           - os: macos-latest
-            node: '22'
+            node: '24'
     name: ${{ matrix.os }} / Node ${{ matrix.node }}
 
     steps:
@@ -52,7 +57,7 @@ jobs:
 
       # The #99 regression tests run the wrapper's deletion lines in a real
       # interactive zsh and skip when it is absent. macOS ships zsh;
-      # ubuntu-latest does not, and without this step the Linux legs report
+      # ubuntu-24.04 does not, and without this step the Linux legs report
       # green while silently skipping that suite.
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh
