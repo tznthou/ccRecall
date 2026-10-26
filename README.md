@@ -174,7 +174,7 @@ The `notBefore` gate keeps a stale session from being extracted twice; the subag
 
 ### Prerequisites
 
-- Node.js 22 or 24 (`^22.0.0 || ^24.0.0`), both LTS lines that still get security fixes
+- Node.js 22, or 24.22 or later (`^22.0.0 || ^24.22.0`), both LTS lines that still get security fixes. Avoid 24.19–24.21: a Node.js regression there crashes the SQLite driver ([nodejs/node#65446](https://github.com/nodejs/node/issues/65446))
 - pnpm
 
 ### Installation

@@ -20,8 +20,13 @@ more like an iteration counter than a strict SemVer major).
   reached end-of-life on 2026-04-30 and no longer gets security fixes, yet it
   was still in that range and in CI. Node.js 24 gets security fixes until
   April 2028 but sat outside the range, so upgrading for those fixes left you
-  on a version ccRecall did not declare. The range is now `^22.0.0 || ^24.0.0`:
-  two LTS lines that still get security fixes, and the two that CI tests.
+  on a version ccRecall did not declare. The range is now
+  `^22.0.0 || ^24.22.0`: two LTS lines that still get security fixes, and the
+  two that CI tests, each on its newest patch. The 24 line starts at 24.22.0
+  because 24.19.0 through 24.21.x carry a Node.js regression that aborts
+  better-sqlite3 when a statement is garbage-collected
+  ([nodejs/node#65446](https://github.com/nodejs/node/issues/65446)); 24.22.0
+  fixed it. If you are on one of those releases, update to the latest 24.x.
   Node.js 26 becomes LTS on 2026-10-28 and will be added once CI runs on it.
 
   After moving to a new major version of Node.js, run `npm rebuild -g`, then

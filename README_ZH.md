@@ -172,7 +172,7 @@ sequenceDiagram
 
 ### 環境需求
 
-- Node.js 22 或 24（`^22.0.0 || ^24.0.0`），兩條都是還有安全更新的 LTS
+- Node.js 22，或 24.22 以上（`^22.0.0 || ^24.22.0`），兩條都是還有安全更新的 LTS。請避開 24.19 到 24.21：這幾版有個 Node.js 本身的退化，會讓 SQLite driver 當掉（[nodejs/node#65446](https://github.com/nodejs/node/issues/65446)）
 - pnpm
 
 ### 安裝
