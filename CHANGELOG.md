@@ -11,7 +11,7 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
-## [Unreleased]
+## [0.11.0] — 2026-10-26
 
 ### Security
 
@@ -37,6 +37,10 @@ more like an iteration counter than a strict SemVer major).
   stop quietly: memories are no longer injected, and extraction is skipped at
   the end of every session. That is how the maintainer's own daemon stayed
   down for two days after a security upgrade to Node.js 24.
+
+  There is no migration, and nothing in the daemon, the MCP server, the hooks
+  or the wrapper changed, so none of them needs a restart; the daemon reports
+  the version it started with until it next restarts.
 
 ## [0.10.1] — 2026-10-19
 
