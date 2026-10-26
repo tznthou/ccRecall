@@ -158,7 +158,7 @@ The `notBefore` gate keeps a stale session from being extracted twice; the subag
 
 | Technology | Purpose | Notes |
 |------------|---------|-------|
-| Node.js 20–22 + TypeScript | Runtime | ES modules, strict mode |
+| Node.js 22 / 24 + TypeScript | Runtime | ES modules, strict mode |
 | better-sqlite3 | Database | Synchronous API, zero external deps |
 | FTS5 | Full-text search | Built into SQLite, trigram tokenizer with LIKE fallback for short CJK / mixed-script queries |
 | Native `http` | HTTP server | No Express — minimal surface, localhost only |
@@ -174,7 +174,7 @@ The `notBefore` gate keeps a stale session from being extracted twice; the subag
 
 ### Prerequisites
 
-- Node.js `>=20.0.0,<23.0.0`
+- Node.js 22 or 24 (`^22.0.0 || ^24.0.0`), both LTS lines that still get security fixes
 - pnpm
 
 ### Installation

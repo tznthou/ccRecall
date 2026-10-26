@@ -11,6 +11,28 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Security
+
+- **Node.js 24 is supported, and the end-of-life Node.js 20 is dropped.** The
+  declared range was `>=20.0.0 <23.0.0`, which meant 20 and 22. Node.js 20
+  reached end-of-life on 2026-04-30 and no longer gets security fixes, yet it
+  was still in that range and in CI. Node.js 24 gets security fixes until
+  April 2028 but sat outside the range, so upgrading for those fixes left you
+  on a version ccRecall did not declare. The range is now `^22.0.0 || ^24.0.0`:
+  two LTS lines that still get security fixes, and the two that CI tests.
+  Node.js 26 becomes LTS on 2026-10-28 and will be added once CI runs on it.
+
+  After moving to a new major version of Node.js, run `npm rebuild -g`, then
+  `ccmem install-daemon` (macOS; elsewhere, restart the daemon the way you
+  started it). The rebuild recompiles ccRecall's native database module for
+  the new Node, and `install-daemon` restarts the daemon on it. Skip the
+  rebuild and both the daemon and the MCP server fail to load that module and
+  stop quietly: memories are no longer injected, and extraction is skipped at
+  the end of every session. That is how the maintainer's own daemon stayed
+  down for two days after a security upgrade to Node.js 24.
+
 ## [0.10.1] — 2026-10-19
 
 ### Fixed
