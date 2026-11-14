@@ -160,6 +160,8 @@ alias ccdm='ccrecall-extract'
 
 **調整萃取的 effort：** 在 shell 設定檔加上 `export CCRECALL_EXTRACT_EFFORT=medium`（可選 `low`、`medium`、`high`、`xhigh`、`max`，預設 `high`）。等級越低跑得越快，我們量測時存下的記憶也比較少。
 
+**調整 session 的權限模式：** wrapper 預設用 `--dangerously-skip-permissions` 開互動 session；在 shell 設定檔加上 `export CCRECALL_PERMISSION_MODE=auto`（可選 `default`、`acceptEdits`、`plan`、`auto`、`dontAsk`、`bypassPermissions`）之後，改用 `--permission-mode` 帶這個模式開。設了不在清單裡的值，會印出警告並退回 `--dangerously-skip-permissions`。不管怎麼設，萃取那一步都維持自己受限的權限。
+
 **萃取的花費：** 每次萃取都是一場簡短的 Sonnet session。用 Claude 訂閱方案的話，跟其他 session 一樣算進方案用量；用 `ANTHROPIC_API_KEY` 則會實際計費，每次另有 `CCRECALL_EXTRACT_MAX_BUDGET_USD` 這道費用上限（預設 `0.50` 美元）。我們量到的每次花費是 `high` 0.21–0.39 美元、`max` 0.64–0.97 美元，所以選 `max` 之前請先調高上限。
 
 **不裝這步的話**，記憶只在你 session 中手動呼叫 `recall_save` 時才會增長。Extraction wrapper 是讓記憶層自動成長的關鍵。
