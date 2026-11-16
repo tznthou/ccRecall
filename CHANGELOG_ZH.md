@@ -8,6 +8,30 @@ ccRecall 的重要版本變更記錄在這裡。
 
 ---
 
+## [Unreleased]
+
+### 新增
+
+- **用 `CCRECALL_PERMISSION_MODE` 決定 session 用哪個權限模式開。** 以前
+  `ccrecall-extract` 一律用 `--dangerously-skip-permissions` 開互動 session，想透過它用
+  auto mode 或其他模式都沒辦法。現在在 shell 設定檔裡把這個變數 export 成 `default`、
+  `acceptEdits`、`plan`、`auto`、`dontAsk` 或 `bypassPermissions`，session 就會帶著
+  `--permission-mode` 開在那個模式。沒設的話一切照舊。設了不是模式的值，不會原樣交給
+  Claude Code：session 照舊用 `--dangerously-skip-permissions` 開，並印出警告（警告裡不
+  會出現你設的值）。這樣打錯字什麼都不會變，不會突然冒出一堆權限確認。不管你選哪個模式，
+  抽取那一段都維持自己的受限權限。shell 是在啟動時載入 wrapper 的，要開新的終端機才會生
+  效。（#156）
+
+### 修正
+
+- **已經 trusted 的工作區，不會再跳「workspace is not trusted」警告。** 原本的檢查只在
+  `~/.claude.json` 裡找目前這個資料夾。但 Claude Code 的 trust 會涵蓋子資料夾：放在
+  trusted 資料夾底下的專案，永遠不會跳出自己的 trust 確認，它自己那筆紀錄就一直是
+  `false`。結果在這種專案裡，每次執行都會看到警告，叫你去接受一個根本不會出現的確認。現
+  在只要任何一層父資料夾是 trusted 就算數；資料夾裡沒有 `.claude/settings.json` 也不會警
+  告，因為就算沒被 trust，那裡也沒有設定會被忽略。讀不到 `~/.claude.json` 時什麼都不印。
+  要開新的終端機才會生效。（#155）
+
 ## [0.11.0] — 2026-10-26
 
 ### 安全

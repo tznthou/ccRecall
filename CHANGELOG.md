@@ -11,6 +11,36 @@ more like an iteration counter than a strict SemVer major).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`CCRECALL_PERMISSION_MODE` picks the permission mode your session starts
+  in.** `ccrecall-extract` always started the interactive session with
+  `--dangerously-skip-permissions`, so auto mode, or any other mode, was out of
+  reach through it. Export the variable from your shell profile as `default`,
+  `acceptEdits`, `plan`, `auto`, `dontAsk` or `bypassPermissions`, and the
+  session starts with `--permission-mode` set to that mode. Leave it unset and
+  nothing changes. A value that is not a mode is never passed on: the session
+  starts with `--dangerously-skip-permissions` as before, with a warning that
+  leaves the value out, so a typo changes nothing rather than flooding the
+  session with permission prompts. The extraction run keeps its own restricted
+  permissions whatever you pick. Open a new terminal to pick this up: your
+  shell loads the wrapper when it starts. (#156)
+
+### Fixed
+
+- **The "workspace is not trusted" warning no longer fires in a trusted
+  workspace.** The check looked up only the current directory in
+  `~/.claude.json`. Claude Code's trust covers subdirectories, so a project
+  inside a trusted folder never gets a trust prompt of its own and its own
+  entry stays `false`. There the warning showed on every run and asked you to
+  accept a prompt that never appears. A trusted parent at any level now
+  counts, and a directory with no `.claude/settings.json` gets no warning,
+  since an untrusted workspace there has nothing to lose. If `~/.claude.json`
+  can't be read, nothing is printed. Open a new terminal to pick this up.
+  (#155)
+
 ## [0.11.0] — 2026-10-26
 
 ### Security
