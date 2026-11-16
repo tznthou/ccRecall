@@ -26,7 +26,9 @@
 // extraction uses, under dontAsk: anything else is refused, not prompted for.
 //
 // The interactive session before extraction is deliberately untouched — the
-// user chose its effort and its permissions — and so is the caller's shell,
+// user chose its effort and its permissions, the latter through
+// CCRECALL_PERMISSION_MODE (unset, it keeps --dangerously-skip-permissions) —
+// and so is the caller's shell,
 // which this file is SOURCED into: an exported effort would follow the user
 // into every later session started from that terminal.
 //
@@ -51,6 +53,10 @@ const ALLOWED_TOOLS = 'mcp__ccrecall__recall_save,mcp__ccrecall__recall_query'
 const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** Where the warning for a value that is not a level starts. */
 const NOT_A_LEVEL = 'CCRECALL_EXTRACT_EFFORT must be one of '
+/** The modes --permission-mode accepts, per the Claude Code docs. */
+const MODES = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions']
+/** Where the warning for a value that is not a mode starts. */
+const NOT_A_MODE = 'CCRECALL_PERMISSION_MODE must be one of '
 
 const HAS_ZSH = spawnSync('sh', ['-c', 'command -v zsh'], { encoding: 'utf8' }).status === 0
 /** zsh is what users source this into; bash is what it is written against. */
@@ -347,6 +353,42 @@ describe('extract wrapper: effort and permissions of the extraction run', () => 
       runExtract(shell)
       expect(await argvSeen('interactive')).toContain('--dangerously-skip-permissions')
     })
+
+    it('opens the interactive session in the mode CCRECALL_PERMISSION_MODE names', async () => {
+      const r = runExtract(shell, 'export CCRECALL_PERMISSION_MODE=auto')
+      const argv = await argvSeen('interactive')
+      expect(valueAfter(argv, '--permission-mode')).toBe('auto')
+      expect(argv).not.toContain('--dangerously-skip-permissions')
+      expect(r.stderr).not.toContain(NOT_A_MODE)
+      // The extraction run keeps its own least-privilege shape whatever the
+      // user picked for the session before it.
+      expectLeastPrivilege(await argvSeen('extract'))
+    })
+
+    it('falls back to the old flag, and says so, when CCRECALL_PERMISSION_MODE is not a mode', async () => {
+      // A typo changes nothing: it gets what an unset variable gets, rather
+      // than reaching Claude Code as a flag value.
+      const r = runExtract(shell, 'set -o errexit\nexport CCRECALL_PERMISSION_MODE=atuo')
+      const argv = await argvSeen('interactive')
+      expect(argv).toContain('--dangerously-skip-permissions')
+      expect(argv).not.toContain('--permission-mode')
+      expect(r.stderr).toContain(NOT_A_MODE)
+      expect(r.stderr).not.toContain('atuo')
+      expectLeastPrivilege(await argvSeen('extract'))
+    })
+
+    it('opens the interactive session with the old flag under nounset and the variable unset', async () => {
+      const r = runExtract(shell, 'set -o nounset')
+      expect(await argvSeen('interactive')).toContain('--dangerously-skip-permissions')
+      expect(r.stderr).not.toMatch(/unbound variable|parameter not set/)
+      expect(r.stderr).not.toContain(NOT_A_MODE)
+    })
+  })
+
+  it.each(MODES)('passes CCRECALL_PERMISSION_MODE=%s through to the interactive session', async (mode) => {
+    const r = runExtract('bash', `export CCRECALL_PERMISSION_MODE=${mode}`)
+    expect(valueAfter(await argvSeen('interactive'), '--permission-mode')).toBe(mode)
+    expect(r.stderr).not.toContain(NOT_A_MODE)
   })
 
   it.each(LEVELS)('passes CCRECALL_EXTRACT_EFFORT=%s through to the run', async (level) => {

@@ -459,11 +459,17 @@ describe('extract wrapper: the guard cannot be bypassed or removed', () => {
     // reason. It reads one variable and prints a level, plus a warning on
     // stderr; it opens no file. What it prints, and that it holds up under
     // errexit and nounset callers, is asserted in extract-wrapper-run-config.test.ts.
+    //
+    // 2026-11-14, `_ccrecall_permission_mode`: NOT covered either, for the
+    // same reason as `_ccrecall_extract_effort`: one variable in, a mode or
+    // nothing out, a warning on stderr, no file opened. Asserted in
+    // extract-wrapper-run-config.test.ts.
     expect(definedFunctions(dir)).toEqual([
       '_ccrecall_count_extracted',
       '_ccrecall_extract_effort',
       '_ccrecall_extract_mcp_config',
       '_ccrecall_log_append',
+      '_ccrecall_permission_mode',
       '_ccrecall_secure_log',
       '_ccrecall_should_retry',
       '_ccrecall_sqlite_ro',

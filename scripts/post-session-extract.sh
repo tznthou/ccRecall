@@ -18,6 +18,11 @@
 #                             when ANTHROPIC_API_KEY is set (default 0.50).
 #                             Measured runs at max cost 0.64-0.97, so raise it
 #                             along with the effort.
+#   CCRECALL_PERMISSION_MODE — permission mode for the interactive session:
+#                             default, acceptEdits, plan, auto, dontAsk or
+#                             bypassPermissions. Unset, it starts with
+#                             --dangerously-skip-permissions as it always has.
+#                             The extraction run ignores it.
 
 CCRECALL_PORT="${CCRECALL_PORT:-7749}"
 CCRECALL_EXTRACT_LOG="${CCRECALL_EXTRACT_LOG:-$HOME/.ccrecall/extract.log.jsonl}"
@@ -245,6 +250,34 @@ _ccrecall_extract_effort() {
   esac
 }
 
+# The permission mode the interactive session starts in: the mode
+# CCRECALL_PERMISSION_MODE names, or nothing when it names none, which the
+# caller reads as "start with --dangerously-skip-permissions", the behaviour
+# every install had before this variable existed.
+#
+# Checked against the modes Claude Code documents for --permission-mode rather
+# than passed on as given, for the same reason the effort is: a typo should not
+# reach Claude Code as a flag value. Anything else falls back to the old
+# behaviour, with a warning that leaves the value out (see
+# _ccrecall_extract_effort). Falling back to bypass rather than to a stricter
+# mode is deliberate: it is what an unset variable already gets, so a typo
+# changes nothing instead of flooding the session with prompts.
+#
+# Only the interactive session reads this. The extraction run keeps its own
+# least-privilege flags, whatever the user picked here.
+#
+# Always returns 0, for the errexit reason given above.
+_ccrecall_permission_mode() {
+  case "${CCRECALL_PERMISSION_MODE:-}" in
+    default|acceptEdits|plan|auto|dontAsk|bypassPermissions) builtin printf '%s' "$CCRECALL_PERMISSION_MODE" ;;
+    '') ;;
+    *)
+      builtin printf '\n⚠️  ccRecall: CCRECALL_PERMISSION_MODE must be one of default, acceptEdits, plan, auto, dontAsk, bypassPermissions — starting with --dangerously-skip-permissions.\n' >&2
+      ;;
+  esac
+  return 0
+}
+
 # Succeeds (status 0) only when the trust warning is worth printing for $PWD:
 # the directory has a .claude/settings.json for Claude Code to ignore, and
 # neither it nor any directory above it has hasTrustDialogAccepted: true in
@@ -292,7 +325,8 @@ ccrecall-extract() {
   local project_id=""
 
   # ── Trust pre-flight ──
-  # ccrecall-extract always launches claude with --dangerously-skip-permissions, which
+  # ccrecall-extract launches claude with --dangerously-skip-permissions unless
+  # CCRECALL_PERMISSION_MODE names another mode. That flag
   # bypasses the tool-permission layer but never triggers the workspace trust dialog.
   # A project only ever opened via this wrapper therefore stays hasTrustDialogAccepted:false forever, and
   # Claude Code silently ignores that project's .claude/settings.json permissions.allow
@@ -314,7 +348,13 @@ ccrecall-extract() {
   # endedAt < launch_ts marks it stale instead of being extracted again.
   local launch_ts
   launch_ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  CCRECALL_SESSION_START_STRATEGY=startup-v1 claude --dangerously-skip-permissions "$@"
+  local permission_mode
+  permission_mode=$(_ccrecall_permission_mode)
+  if [ -n "$permission_mode" ]; then
+    CCRECALL_SESSION_START_STRATEGY=startup-v1 claude --permission-mode "$permission_mode" "$@"
+  else
+    CCRECALL_SESSION_START_STRATEGY=startup-v1 claude --dangerously-skip-permissions "$@"
+  fi
   local claude_exit=$?
 
   # ── Phase 2: Post-session memory extraction ──
