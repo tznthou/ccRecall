@@ -245,6 +245,37 @@ _ccrecall_extract_effort() {
   esac
 }
 
+# Succeeds (status 0) only when the trust warning is worth printing for $PWD:
+# the directory has a .claude/settings.json for Claude Code to ignore, and
+# neither it nor any directory above it has hasTrustDialogAccepted: true in
+# ~/.claude.json.
+#
+# Parents count because Claude Code's trust covers subdirectories: under a
+# trusted ~/Documents, plain `claude` in ~/Documents/foo shows no trust prompt,
+# so foo's own entry stays false forever. Checking only the exact $PWD key
+# told the user to accept a prompt that never appears, on every run.
+#
+# Without a settings file there is nothing for an untrusted workspace to lose,
+# so there is nothing to warn about.
+#
+# Any failure to read (no jq, no ~/.claude.json, malformed JSON) prints
+# nothing and counts as "do not warn": this is advice, and a false alarm on
+# every run is how the old check got ignored.
+_ccrecall_workspace_untrusted() {
+  [[ -f "$PWD/.claude/settings.json" ]] || return 1
+  local any_trusted
+  # Ancestors are built inside jq: for "/a/b" that is "/", "/a", "/a/b".
+  # Compare with `== true`, never `//`, which treats false as missing.
+  any_trusted=$(command jq -r --arg p "$PWD" '
+    (.projects // {}) as $P
+    | ($p | split("/")) as $parts
+    | [range(1; ($parts | length) + 1)
+       | $parts[:.] | join("/") | if . == "" then "/" else . end]
+    | any(.[]; $P[.].hasTrustDialogAccepted == true)
+  ' "$HOME/.claude.json" 2>/dev/null)
+  [[ "$any_trusted" == "false" ]]
+}
+
 ccrecall-extract() {
   # #89: this used to derive project_id here with `sed 's|/|-|g'`, which
   # diverged from Claude Code's char-wise [^A-Za-z0-9] encoding for any cwd
@@ -269,9 +300,8 @@ ccrecall-extract() {
   # ccRecall stays read-only toward Claude Code's state, and silently trusting whatever
   # directory the user enters would defeat the trust gate's purpose. So we only surface
   # the condition and let the user accept the dialog once via plain `claude`.
-  # Read the raw value (no `// empty`): jq's `//` treats the boolean false itself as a
-  # fallback trigger and would swallow the exact case we want to catch.
-  if [[ "$(jq -r --arg k "$PWD" '.projects[$k].hasTrustDialogAccepted' "$HOME/.claude.json" 2>/dev/null)" == "false" ]]; then
+  # The test itself lives in _ccrecall_workspace_untrusted.
+  if _ccrecall_workspace_untrusted; then
     printf '\n⚠️  ccRecall: this workspace is not trusted. Claude Code will ignore its\n'
     printf '    .claude/settings.json permissions (you may see "Ignoring ... permissions"\n'
     printf '    warnings below). To fix, run plain `claude` here once — without this wrapper —\n'
