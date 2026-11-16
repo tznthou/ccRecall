@@ -467,6 +467,7 @@ describe('extract wrapper: the guard cannot be bypassed or removed', () => {
       '_ccrecall_secure_log',
       '_ccrecall_should_retry',
       '_ccrecall_sqlite_ro',
+      '_ccrecall_workspace_untrusted',
       'ccrecall-extract',
     ])
   })
