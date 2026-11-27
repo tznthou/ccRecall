@@ -208,6 +208,70 @@ describe('session-less memories in rebuildKnowledgeMap', () => {
   })
 })
 
+describe('memory half of rebuildKnowledgeMap: which project a memory counts toward', () => {
+  beforeEach(() => {
+    db.upsertProject('proj-a', 'Project A')
+    db.upsertProject('proj-b', 'Project B')
+  })
+
+  it("a session-backed memory counts toward the session's project, not its own project_id", () => {
+    db.indexSession(sessionParams({ sessionId: 'sess-b1', projectId: 'proj-b' }))
+    const m = db.saveMemory({ sessionId: 'sess-b1', messageId: null, content: 'x', type: 'decision', projectId: 'proj-a' })
+    db.saveMemoryTopics(m, 'proj-a', ['moved'])
+
+    db.rebuildKnowledgeMap('proj-a')
+    db.rebuildKnowledgeMap('proj-b')
+    expect(knowledgeMapRows('proj-a').find(t => t.topicKey === 'moved')).toBeUndefined()
+    expect(knowledgeMapRows('proj-b').find(t => t.topicKey === 'moved')?.mentionCount).toBe(1)
+  })
+
+  it('a memory whose session row is gone falls back to its own project_id', () => {
+    const m = db.saveMemory({ sessionId: null, messageId: null, content: 'x', type: 'decision', projectId: 'proj-a' })
+    db.rawExec(`UPDATE memories SET session_id = 'no-such-session' WHERE id = ${m}`)
+    db.saveMemoryTopics(m, 'proj-a', ['orphan'])
+
+    db.rebuildKnowledgeMap('proj-a')
+    expect(knowledgeMapRows('proj-a').find(t => t.topicKey === 'orphan')?.mentionCount).toBe(1)
+  })
+
+  it('a memory written in a subagent session is left out', () => {
+    db.indexSession(sessionParams({ sessionId: 'main-1', projectId: 'proj-a' }))
+    db.indexSession(sessionParams({ sessionId: 'sub-1', projectId: 'proj-a' }))
+    db.rawExec(`INSERT INTO subagent_sessions (id, parent_session_id, file_path) VALUES ('sub-1', 'main-1', '/tmp/sub-1.jsonl')`)
+    const m = db.saveMemory({ sessionId: 'sub-1', messageId: null, content: 'x', type: 'decision' })
+    db.saveMemoryTopics(m, 'proj-a', ['from-subagent'])
+
+    db.rebuildKnowledgeMap('proj-a')
+    expect(knowledgeMapRows('proj-a').find(t => t.topicKey === 'from-subagent')).toBeUndefined()
+  })
+
+  it('a global memory (no session, no project) counts toward no project', () => {
+    const m = db.saveMemory({ sessionId: null, messageId: null, content: 'x', type: 'decision', projectId: null })
+    db.saveMemoryTopics(m, '', ['global-only']) // recall_save stores a global memory's topics under ''
+
+    db.rebuildKnowledgeMap('proj-a')
+    expect(knowledgeMapRows('proj-a').find(t => t.topicKey === 'global-only')).toBeUndefined()
+  })
+
+  it("last_touched takes the memory's created_at", () => {
+    const m = db.saveMemory({ sessionId: null, messageId: null, content: 'x', type: 'decision', projectId: 'proj-a' })
+    db.rawExec(`UPDATE memories SET created_at = '2026-03-01 12:00:00' WHERE id = ${m}`)
+    db.saveMemoryTopics(m, 'proj-a', ['dated'])
+
+    db.rebuildKnowledgeMap('proj-a')
+    expect(knowledgeMapRows('proj-a').find(t => t.topicKey === 'dated')?.lastTouched).toBe('2026-03-01 12:00:00')
+  })
+
+  it('does not scan the whole memory_topics table for each project', () => {
+    // The indexer rebuilds every project on every batch; a full memory_topics scan
+    // per project made one batch cost ~4 s on a 177k-row table (2026-11-28).
+    const plan = db.rawAll<{ detail: string }>(
+      `EXPLAIN QUERY PLAN ${Database.REBUILD_KNOWLEDGE_MAP_SQL.replace(/\?/g, "'proj-a'")}`,
+    ).map(r => r.detail)
+    expect(plan.filter(d => /^SCAN mt\b/.test(d))).toEqual([])
+  })
+})
+
 describe('subagent exclusion', () => {
   it('knowledge_map ignores topics from subagent sessions', () => {
     db.upsertProject('proj-a', 'Project A')

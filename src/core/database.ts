@@ -2724,10 +2724,15 @@ export class Database {
   /** Full rebuild of knowledge_map for a project. Uses LEFT JOIN for the
       memory_topics branch so session-less memories (e.g. recall_save) are included
       — their project_id comes from the denormalized column on memories. */
-  rebuildKnowledgeMap(projectId: string): void {
-    const run = this.db.transaction(() => {
-      this.db.prepare('DELETE FROM knowledge_map WHERE project_id = ?').run(projectId)
-      this.db.prepare(`
+  /** Rebuild query for one project's knowledge_map; both `?` bind the project id.
+   *  Public so tests can EXPLAIN it.
+   *
+   *  The memory half's filter, COALESCE(s.project_id, m.project_id), can't use an
+   *  index, so it must run over the small table: walk memories, then look topics up
+   *  by memory_id (memory_topics' primary key). CROSS JOIN pins that order; left to
+   *  itself the planner scanned all of memory_topics once per project, and the
+   *  indexer rebuilds every project per batch (~4 s at 177k rows, 2026-11-28). */
+  static readonly REBUILD_KNOWLEDGE_MAP_SQL = `
         INSERT INTO knowledge_map (topic_key, project_id, mention_count, last_touched)
         SELECT topic_key, project_id, COUNT(*) AS mention_count, MAX(touched_at) AS last_touched
         FROM (
@@ -2740,14 +2745,19 @@ export class Database {
           UNION ALL
           SELECT mt.topic_key, COALESCE(s.project_id, m.project_id) AS project_id,
                  COALESCE(m.created_at, datetime('now')) AS touched_at
-          FROM memory_topics mt
-          JOIN memories m ON m.id = mt.memory_id
+          FROM memories m
           LEFT JOIN sessions s ON s.id = m.session_id
+          CROSS JOIN memory_topics mt ON mt.memory_id = m.id
           WHERE COALESCE(s.project_id, m.project_id) = ?
             AND (s.id IS NULL OR s.id ${Database.EXCLUDE_SUBAGENTS})
         )
         GROUP BY topic_key, project_id
-      `).run(projectId, projectId)
+      `
+
+  rebuildKnowledgeMap(projectId: string): void {
+    const run = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM knowledge_map WHERE project_id = ?').run(projectId)
+      this.db.prepare(Database.REBUILD_KNOWLEDGE_MAP_SQL).run(projectId, projectId)
     })
     run()
   }
