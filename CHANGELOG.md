@@ -40,6 +40,18 @@ more like an iteration counter than a strict SemVer major).
   since an untrusted workspace there has nothing to lose. If `~/.claude.json`
   can't be read, nothing is printed. Open a new terminal to pick this up.
   (#155)
+- **The daemon no longer stalls for seconds while your sessions are
+  active.** After any transcript changes, the indexer rebuilds every
+  project's topic map, and one query in that rebuild read the whole
+  memory-topic table once for each project. While a session was writing, the
+  daemon sat near full CPU, and requests waited for each pass to finish. The
+  prompt hook gives up after 300 ms, so a prompt that arrived during a pass
+  got no memory, with nothing to say why. The query now reads only the
+  memories it needs. The topic map comes out exactly the same: on the
+  maintainer's database (177k topic rows, 115 projects), rebuilding with the
+  old and new query gave byte-identical results, and one indexer pass went
+  from about 3.9 s to about 1.1 s. Most of the second that remains is
+  rebuilding projects that didn't change (#159). (#158)
 
 ## [0.11.0] — 2026-10-26
 
