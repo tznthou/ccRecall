@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { Database, hash64 } from '../src/core/database'
-import { runIndexer, deduplicateTokensByRequestId, type ProgressCallback } from '../src/core/indexer'
+import { runIndexer, deduplicateTokensByRequestId, type IndexerTimings, type ProgressCallback } from '../src/core/indexer'
 import type { IndexerStatus, ParsedLine } from '../src/core/types'
 
 let tmpDir: string
@@ -166,6 +166,31 @@ describe('runIndexer', () => {
     if (indexingStatuses.length > 0) {
       expect(indexingStatuses[0].total).toBe(1) // 只有 sess-003 需處理
     }
+  })
+
+  it('timings → every step gets a duration and the counts match what was indexed', async () => {
+    const baseDir = path.join(tmpDir, 'projects')
+    await createProject(baseDir, '-Users-test-proj1', { 'sess-001': sampleSession1 })
+    await createProject(baseDir, '-Users-test-proj2', { 'sess-002': sampleSession2 })
+
+    const first: IndexerTimings = {}
+    await runIndexer(db, undefined, baseDir, first)
+
+    const steps = ['1_scan', '1_upsertProjects', '2_diff', '3a_parse', '3b_dedupe', '3c_summarize',
+      '3d_dbWrite', '4_subagents', '5a_projectStats', '5b_knowledgeMap', '6_checkpoint']
+    for (const k of steps) expect(first[k], k).toBeGreaterThanOrEqual(0)
+    expect(first.n_projects).toBe(2)
+    expect(first.n_sessionsScanned).toBe(2)
+    expect(first.n_sessionsToIndex).toBe(2)
+    expect(first.n_linesParsed).toBe(5) // 2 + 3, the messageCounts asserted in firstRun
+
+    // Nothing changed on disk: the per-session steps never run, so their keys stay absent.
+    const second: IndexerTimings = {}
+    await runIndexer(db, undefined, baseDir, second)
+    expect(second.n_sessionsToIndex).toBe(0)
+    expect(second['3a_parse']).toBeUndefined()
+    expect(second['3d_dbWrite']).toBeUndefined()
+    expect(second['5b_knowledgeMap']).toBeGreaterThanOrEqual(0)
   })
 
   it('emptyProject → project exists with sessionCount=0, no error', async () => {

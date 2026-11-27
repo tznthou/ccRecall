@@ -10,6 +10,9 @@ import { extractFromSession } from './topic-extractor.js'
 
 export type ProgressCallback = (status: IndexerStatus) => void
 
+/** Milliseconds spent per runIndexer step, accumulated across sessions; plus counts. */
+export type IndexerTimings = Record<string, number>
+
 /**
  * 同一 requestId 的 assistant entries 只保留最後一個的 token 值，其他清零為 null。
  * 修正 Claude Code JSONL 將單次 API response 拆成多個 entries 造成的 token 重複計算。
@@ -63,15 +66,29 @@ export async function runIndexer(
   db: Database,
   onProgress?: ProgressCallback,
   baseDir?: string,
+  timings?: IndexerTimings,
 ): Promise<void> {
+  let t0 = 0
+  const start = (): void => { if (timings) t0 = performance.now() }
+  const lap = (key: string): void => {
+    if (timings) timings[key] = (timings[key] ?? 0) + performance.now() - t0
+  }
+  const count = (key: string, n = 1): void => {
+    if (timings) timings[key] = (timings[key] ?? 0) + n
+  }
+
   // 1. SCANNING
   onProgress?.({ phase: 'scanning', progress: 0, total: 0, current: 0 })
+  start()
   const projects = await scanProjects(baseDir)
+  lap('1_scan')
 
   // 確保所有 project 都寫入 DB（含空 project）
+  start()
   for (const project of projects) {
     db.upsertProject(project.projectId, project.displayName)
   }
+  lap('1_upsertProjects')
 
   // 2. DIFFING — 批次取得所有已索引 mtime，避免 N+1 query
   interface SessionToIndex {
@@ -83,6 +100,7 @@ export async function runIndexer(
     projectDisplayName: string
   }
 
+  start()
   const existingMtimes = db.getAllSessionMtimes()
   const sessionsToIndex: SessionToIndex[] = []
   const scannedSessionIds = new Set<string>()
@@ -104,6 +122,9 @@ export async function runIndexer(
 
   // 標記 DB 中存在但掃描不到的 session 為 archived
   db.archiveStaleSessionsExcept(scannedSessionIds)
+  lap('2_diff')
+  count('n_sessionsScanned', scannedSessionIds.size)
+  count('n_sessionsToIndex', sessionsToIndex.length)
 
   // 3. INDEXING — 按 fileMtime 升冪排序，確保舊 session 先索引（UUID 去重依賴此順序）
   sessionsToIndex.sort((a, b) => a.fileMtime.localeCompare(b.fileMtime))
@@ -121,12 +142,17 @@ export async function runIndexer(
 
     // 解析 JSONL — 讀取失敗跳過，不中斷
     let parsed: ParsedSession
+    start()
     try {
       parsed = await parseSession(s.filePath, s.sessionId)
     } catch {
       continue
     }
+    lap('3a_parse')
+    count('n_bytesParsed', s.fileSize)
+    count('n_linesParsed', parsed.messages.length)
 
+    start()
     // requestId token 去重：同一 API response 的多個 entries 只保留最後一個的 token
     const dedupedLines = deduplicateTokensByRequestId(parsed.messages)
 
@@ -136,7 +162,7 @@ export async function runIndexer(
     const messages = dedupedLines.filter(m => !(m.uuid && existingUuids.has(m.uuid)))
 
     // 純 replay session（所有 messages 都被去重）→ 跳過，不寫入 DB
-    if (messages.length === 0 && parsed.messages.length > 0) continue
+    if (messages.length === 0 && parsed.messages.length > 0) { lap('3b_dedupe'); continue }
 
     // 去重後的時間範圍
     let startedAt = parsed.startedAt
@@ -149,12 +175,17 @@ export async function runIndexer(
       }
     }
 
+    lap('3b_dedupe')
+
     // 用去重後的 messages 產生 session 摘要 + session_files
+    start()
     const { summary, sessionFiles } = summarizeSession(messages, startedAt, endedAt)
 
     // DB 寫入 + topic 抽取在同一 transaction，避免 session row 已更新但 session_topics 未寫
     // 導致 file_mtime 匹配下次 indexer 會跳過此 session（sticky 空 topic 狀態）
     const topics = extractFromSession({ tags: summary.tags, filesTouched: summary.filesTouched })
+    lap('3c_summarize')
+    start()
     db.runTransaction(() => {
       db.indexSession({
         sessionId: s.sessionId,
@@ -182,9 +213,11 @@ export async function runIndexer(
       })
       db.saveSessionTopics(s.sessionId, s.projectId, topics)
     })
+    lap('3d_dbWrite')
   }
 
   // 4. SUBAGENT SCANNING — 對有變動的 session，掃描 subagents/
+  start()
   const existingSubMtimes = db.getAllSubagentMtimes()
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -211,6 +244,7 @@ export async function runIndexer(
         // 增量比對：mtime 沒變就跳過
         const existingMtime = existingSubMtimes.get(sub.subagentId)
         if (existingMtime && existingMtime === sub.fileMtime) continue
+        count('n_subagentsToIndex')
 
         // 解析 subagent JSONL
         let parsed: ParsedSession
@@ -252,17 +286,26 @@ export async function runIndexer(
     }
   }
 
+  lap('4_subagents')
+
   // 5. FINALIZE — 更新所有 project 統計（stale cleanup 可能影響任何 project）
   for (const project of projects) {
+    start()
     db.updateProjectStats(project.projectId)
+    lap('5a_projectStats')
+    start()
     db.rebuildKnowledgeMap(project.projectId)
+    lap('5b_knowledgeMap')
   }
+  count('n_projects', projects.length)
 
   // 6. CHECKPOINT — batch end is the safe stall point (no concurrent indexer
   // writes, HTTP reads are ms-scale). Without this, WAL drifts up to ~624 MB
   // after 8h uptime (issue #11). busy=1 means a reader held a snapshot past
   // busy_timeout — TRUNCATE is a no-op and the next batch retries.
+  start()
   const cp = db.checkpointTruncate()
+  lap('6_checkpoint')
   if (cp.busy !== 0) {
     console.warn('[indexer] WAL checkpoint busy — readers held snapshot; deferred to next batch')
   }
